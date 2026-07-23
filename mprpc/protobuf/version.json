@@ -1,0 +1,18 @@
+{
+    "main": {
+        "protoc_version": "36-dev",
+        "lts": false,
+        "date": "2026-04-15",
+        "languages": {
+            "cpp": "7.36-dev",
+            "csharp": "3.36-dev",
+            "java": "4.36-dev",
+            "javascript": "3.36-dev",
+            "objectivec": "5.36-dev",
+            "php": "5.36-dev",
+            "python": "7.36-dev",
+            "ruby": "4.36-dev",
+            "rust": "4.36-dev"
+        }
+    }
+}
