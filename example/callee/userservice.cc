@@ -1,4 +1,5 @@
 #include<string>
+#include<cstdlib>
 #include"../user.pb.h"
 #include"mprpcapplication.h"
 #include"rpcprovider.h"
@@ -75,7 +76,11 @@ int main(int argc,char** argv)
 #endif
 
     // 调用框架的初始化操作 provider -i config.conf
-    MprpcApplication::Init(argc,argv);
+    if (!MprpcApplication::Init(argc,argv))
+    {
+        wevix_muduo::AsyncLogger::GetInstance().stop();
+        return EXIT_FAILURE;
+    }
 
     // 把UserService对象发布到rpc节点上
     // provider是一个rpc网络服务对象，把UserService对象发布到rpc节点上

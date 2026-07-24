@@ -1,4 +1,5 @@
 #include<csignal>
+#include<cstdlib>
 #include"mprpcapplication.h"
 #include"user.pb.h"
 #include"mprpcchannel.h"
@@ -18,7 +19,11 @@ int main(int argc, char **argv)
     signal(SIGPIPE, SIG_IGN);
 
     // 程序启动以后，想使用mprpc框架来享受rpc服务调用，需要先调用框架的初始化函数(初始化一次即可)
-    MprpcApplication::Init(argc,argv);
+    if (!MprpcApplication::Init(argc,argv))
+    {
+        wevix_muduo::AsyncLogger::GetInstance().stop();
+        return EXIT_FAILURE;
+    }
 
     // 创建连接通道对象
     fixbug::UserServiceRpc_Stub stub(new MprpcChannel());

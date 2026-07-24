@@ -1,4 +1,5 @@
 #include<csignal>
+#include<cstdlib>
 #include"mprpcapplication.h"
 #include"friend.pb.h"
 #include"wevix_muduo/AsyncLogger.h"
@@ -16,7 +17,11 @@ int main(int argc, char **argv)
 #endif
 
     signal(SIGPIPE, SIG_IGN);
-    MprpcApplication::Init(argc,argv);
+    if (!MprpcApplication::Init(argc,argv))
+    {
+        wevix_muduo::AsyncLogger::GetInstance().stop();
+        return EXIT_FAILURE;
+    }
 
     fixbug::FriendServiceRpc_Stub stub(new MprpcChannel());
 

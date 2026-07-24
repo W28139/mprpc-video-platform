@@ -6,6 +6,7 @@
 #include <sys/syscall.h>
 #include <unistd.h>
 #include <sys/socket.h>
+#include <errno.h>
 
 namespace wevix_muduo
 {
@@ -22,10 +23,6 @@ Connection::Connection(EventLoop* loop, std::unique_ptr<Socket> clientSock)
     channel_->setWriteCallback(std::bind(&Connection::handleWrite, this));
     channel_->setCloseCallback(std::bind(&Connection::handleClose, this));
     channel_->setErrorCallback(std::bind(&Connection::handleError, this));
-
-    // 使用 ET 模式并开启监听
-    channel_->useET();
-    channel_->enableReading();
 
     LOG_DEBUG("Connection created, fd=%d", socket_->fd());
 }
@@ -53,16 +50,41 @@ uint16_t Connection::port() const
 void Connection::handleRead()
 {
     int savedErrno = 0;
-    // 从 fd 中读取数据到输入缓冲区
-    ssize_t n = inputBuffer_.readFd(fd(), &savedErrno);
+    ssize_t totalRead = 0;
+    bool peerClosed = false;
 
-    if (n > 0)
+    while (true)
     {
-        // 更新最后活跃时间
+        ssize_t n = inputBuffer_.readFd(fd(), &savedErrno);
+        if (n > 0)
+        {
+            totalRead += n;
+            continue;
+        }
+        if (n == 0)
+        {
+            peerClosed = true;
+            break;
+        }
+        if (savedErrno == EINTR)
+        {
+            continue;
+        }
+        if (savedErrno == EAGAIN || savedErrno == EWOULDBLOCK)
+        {
+            break;
+        }
+
+        errno = savedErrno;
+        LOG_WARN("handleRead fd=%d error, errno=%d", fd(), savedErrno);
+        handleError();
+        return;
+    }
+
+    if (totalRead > 0)
+    {
         lastActiveTime_ = Timestamp::now();
-
-        LOG_DEBUG("handleRead fd=%d, bytes_read=%zd", fd(), n);
-
+        LOG_DEBUG("handleRead fd=%d, bytes_read=%zd", fd(), totalRead);
         if (messageCodec_)
         {
             // 有帧编解码器：循环提取完整帧，每帧回调一次 onMessage
@@ -86,17 +108,11 @@ void Connection::handleRead()
             }
         }
     }
-    else if (n == 0)
+
+    if (peerClosed)
     {
-        // 读到 0，表示对端关闭
         LOG_DEBUG("handleRead fd=%d: peer closed", fd());
         handleClose();
-    }
-    else
-    {
-        errno = savedErrno;
-        LOG_WARN("handleRead fd=%d error, errno=%d", fd(), savedErrno);
-        handleError();
     }
 }
 
@@ -133,7 +149,7 @@ void Connection::handleClose()
 
     disconnected_ = true;
 
-    LOG_INFO("Connection::handleClose fd=%d, %s:%u", fd(), ip().c_str(), port());
+    LOG_DEBUG("Connection::handleClose fd=%d, %s:%u", fd(), ip().c_str(), port());
 
     ConnectionPtr self(shared_from_this());
 
@@ -142,6 +158,7 @@ void Connection::handleClose()
         {
             self->channel_->disableAll();
             self->channel_->remove();
+            self->loop_->removeConnection(self->fd());
 
             if(self->closeCallback_)
             {
@@ -159,6 +176,7 @@ void Connection::handleError()
         disconnected_ = true;
         channel_->disableAll();
         channel_->remove();
+        loop_->removeConnection(fd());
 
         if (errorCallback_)
         {
@@ -229,6 +247,12 @@ void Connection::sendInLoop(const std::string& data)
             channel_->enableWriting();
         }
     }
+
+    // 如果发生致命错误（对端关闭连接），主动清理本端连接
+    if (faultError)
+    {
+        handleClose();
+    }
 }
 
 void Connection::shutdown()
@@ -242,6 +266,25 @@ void Connection::shutdown()
 bool Connection::isTimeout(time_t now, int seconds) const
 {
     return (now - lastActiveTime_.toSeconds()) > seconds;
+}
+
+void Connection::connectEstablished()
+{
+    ConnectionPtr self(shared_from_this());
+    loop_->runInLoop([self]()
+    {
+        self->channel_->useET();
+        self->channel_->enableReading();
+    });
+}
+
+void Connection::forceClose()
+{
+    ConnectionPtr self(shared_from_this());
+    loop_->runInLoop([self]()
+    {
+        self->handleClose();
+    });
 }
 
 } // namespace wevix_muduo

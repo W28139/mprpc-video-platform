@@ -27,7 +27,10 @@ Channel::~Channel()
 void Channel::useET()
 {
     events_ |= EPOLLET;
-    update();
+    if (inEpoll_)
+    {
+        update();
+    }
 }
 
 void Channel::enableReading()

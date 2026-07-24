@@ -111,13 +111,15 @@ void TcpServer::handleNewConnection(std::unique_ptr<Socket> clientSock)
         connectionCallback_(conn);
     }
 
-    LOG_INFO("New connection from %s:%u, fd=%d, assigned to subLoop[%d]",
+    conn->connectEstablished();
+
+    LOG_DEBUG("New connection from %s:%u, fd=%d, assigned to subLoop[%d]",
              conn->ip().c_str(), conn->port(), fd, idx);
 }
 
 void TcpServer::handleClose(const ConnectionPtr& conn)
 {
-    LOG_INFO("Connection closed: %s:%u, fd=%d", conn->ip().c_str(), conn->port(), conn->fd());
+    LOG_DEBUG("Connection closed: %s:%u, fd=%d", conn->ip().c_str(), conn->port(), conn->fd());
 
     if (closeCallback_)
     {

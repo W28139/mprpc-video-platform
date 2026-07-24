@@ -58,11 +58,17 @@ public:
     // 超时判断
     bool isTimeout(time_t now, int seconds) const;
 
+    // 回调设置完成后再注册读事件，避免新连接刚分配到 IO 线程就抢先读包
+    void connectEstablished();
+
     // 状态管理
     bool connected() const { return !disconnected_; }
 
     // 主动关闭写端（发送 FIN），用于短连接场景（如 RPC 响应后断开）
     void shutdown();
+
+    // 在所属 EventLoop 中强制关闭连接
+    void forceClose();
 
 private:
     // Channel 的事件分发回调

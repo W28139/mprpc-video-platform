@@ -51,6 +51,7 @@ public:
 
     // 连接管理（针对超时处理）
     void newConnection(ConnectionPtr conn);
+    void removeConnection(int fd);
     
     // 设置回调
     void setEpollTimeoutCallback(std::function<void(EventLoop*)> cb) 
@@ -75,7 +76,7 @@ private:
     using ChannelList = std::vector<Channel*>;
 
     std::atomic_bool stop_;
-    const pid_t threadId_; // 记录该循环所属线程的 ID
+    std::atomic<pid_t> threadId_; // 记录该循环所属线程的 ID
 
     std::unique_ptr<Epoll> epoll_;
     

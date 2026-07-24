@@ -29,6 +29,7 @@
 #include <google/protobuf/message.h>
 #include <google/protobuf/repeated_field.h>  // IWYU pragma: export
 #include <google/protobuf/extension_set.h>  // IWYU pragma: export
+#include <google/protobuf/generated_enum_reflection.h>
 #include <google/protobuf/unknown_field_set.h>
 // @@protoc_insertion_point(includes)
 #include <google/protobuf/port_def.inc>
@@ -48,12 +49,54 @@ namespace mprpc {
 class RpcHeader;
 struct RpcHeaderDefaultTypeInternal;
 extern RpcHeaderDefaultTypeInternal _RpcHeader_default_instance_;
+class RpcResponseHeader;
+struct RpcResponseHeaderDefaultTypeInternal;
+extern RpcResponseHeaderDefaultTypeInternal _RpcResponseHeader_default_instance_;
 }  // namespace mprpc
 PROTOBUF_NAMESPACE_OPEN
 template<> ::mprpc::RpcHeader* Arena::CreateMaybeMessage<::mprpc::RpcHeader>(Arena*);
+template<> ::mprpc::RpcResponseHeader* Arena::CreateMaybeMessage<::mprpc::RpcResponseHeader>(Arena*);
 PROTOBUF_NAMESPACE_CLOSE
 namespace mprpc {
 
+enum RpcErrorCode : int {
+  RPC_SUCCESS = 0,
+  RPC_BAD_REQUEST = 1,
+  RPC_HEADER_PARSE_FAILED = 2,
+  RPC_SERVICE_NOT_FOUND = 3,
+  RPC_METHOD_NOT_FOUND = 4,
+  RPC_REQUEST_PARSE_FAILED = 5,
+  RPC_RESPONSE_SERIALIZE_FAILED = 6,
+  RPC_CONNECT_FAILED = 7,
+  RPC_SEND_FAILED = 8,
+  RPC_RECV_FAILED = 9,
+  RPC_RESPONSE_PARSE_FAILED = 10,
+  RPC_TIMEOUT = 11,
+  RPC_FRAME_TOO_LARGE = 12,
+  RPC_INVALID_RESPONSE = 13,
+  RPC_SERVICE_DISCOVERY_FAILED = 14,
+  RpcErrorCode_INT_MIN_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::min(),
+  RpcErrorCode_INT_MAX_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::max()
+};
+bool RpcErrorCode_IsValid(int value);
+constexpr RpcErrorCode RpcErrorCode_MIN = RPC_SUCCESS;
+constexpr RpcErrorCode RpcErrorCode_MAX = RPC_SERVICE_DISCOVERY_FAILED;
+constexpr int RpcErrorCode_ARRAYSIZE = RpcErrorCode_MAX + 1;
+
+const ::PROTOBUF_NAMESPACE_ID::EnumDescriptor* RpcErrorCode_descriptor();
+template<typename T>
+inline const std::string& RpcErrorCode_Name(T enum_t_value) {
+  static_assert(::std::is_same<T, RpcErrorCode>::value ||
+    ::std::is_integral<T>::value,
+    "Incorrect type passed to function RpcErrorCode_Name.");
+  return ::PROTOBUF_NAMESPACE_ID::internal::NameOfEnum(
+    RpcErrorCode_descriptor(), enum_t_value);
+}
+inline bool RpcErrorCode_Parse(
+    ::PROTOBUF_NAMESPACE_ID::ConstStringParam name, RpcErrorCode* value) {
+  return ::PROTOBUF_NAMESPACE_ID::internal::ParseNamedEnum<RpcErrorCode>(
+    RpcErrorCode_descriptor(), name, value);
+}
 // ===================================================================
 
 class RpcHeader final :
@@ -179,6 +222,9 @@ class RpcHeader final :
   enum : int {
     kServiceNameFieldNumber = 1,
     kMethodNameFieldNumber = 2,
+    kTraceIdFieldNumber = 5,
+    kRequestIdFieldNumber = 4,
+    kDeadlineMsFieldNumber = 6,
     kArgsSizeFieldNumber = 3,
   };
   // bytes service_name = 1;
@@ -209,6 +255,38 @@ class RpcHeader final :
   std::string* _internal_mutable_method_name();
   public:
 
+  // bytes trace_id = 5;
+  void clear_trace_id();
+  const std::string& trace_id() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_trace_id(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_trace_id();
+  PROTOBUF_NODISCARD std::string* release_trace_id();
+  void set_allocated_trace_id(std::string* trace_id);
+  private:
+  const std::string& _internal_trace_id() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_trace_id(const std::string& value);
+  std::string* _internal_mutable_trace_id();
+  public:
+
+  // uint64 request_id = 4;
+  void clear_request_id();
+  uint64_t request_id() const;
+  void set_request_id(uint64_t value);
+  private:
+  uint64_t _internal_request_id() const;
+  void _internal_set_request_id(uint64_t value);
+  public:
+
+  // uint64 deadline_ms = 6;
+  void clear_deadline_ms();
+  uint64_t deadline_ms() const;
+  void set_deadline_ms(uint64_t value);
+  private:
+  uint64_t _internal_deadline_ms() const;
+  void _internal_set_deadline_ms(uint64_t value);
+  public:
+
   // uint32 args_size = 3;
   void clear_args_size();
   uint32_t args_size() const;
@@ -228,7 +306,196 @@ class RpcHeader final :
   struct Impl_ {
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr service_name_;
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr method_name_;
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr trace_id_;
+    uint64_t request_id_;
+    uint64_t deadline_ms_;
     uint32_t args_size_;
+    mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
+  };
+  union { Impl_ _impl_; };
+  friend struct ::TableStruct_rpcheader_2eproto;
+};
+// -------------------------------------------------------------------
+
+class RpcResponseHeader final :
+    public ::PROTOBUF_NAMESPACE_ID::Message /* @@protoc_insertion_point(class_definition:mprpc.RpcResponseHeader) */ {
+ public:
+  inline RpcResponseHeader() : RpcResponseHeader(nullptr) {}
+  ~RpcResponseHeader() override;
+  explicit PROTOBUF_CONSTEXPR RpcResponseHeader(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized);
+
+  RpcResponseHeader(const RpcResponseHeader& from);
+  RpcResponseHeader(RpcResponseHeader&& from) noexcept
+    : RpcResponseHeader() {
+    *this = ::std::move(from);
+  }
+
+  inline RpcResponseHeader& operator=(const RpcResponseHeader& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline RpcResponseHeader& operator=(RpcResponseHeader&& from) noexcept {
+    if (this == &from) return *this;
+    if (GetOwningArena() == from.GetOwningArena()
+  #ifdef PROTOBUF_FORCE_COPY_IN_MOVE
+        && GetOwningArena() != nullptr
+  #endif  // !PROTOBUF_FORCE_COPY_IN_MOVE
+    ) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* descriptor() {
+    return GetDescriptor();
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Reflection* GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const RpcResponseHeader& default_instance() {
+    return *internal_default_instance();
+  }
+  static inline const RpcResponseHeader* internal_default_instance() {
+    return reinterpret_cast<const RpcResponseHeader*>(
+               &_RpcResponseHeader_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages =
+    1;
+
+  friend void swap(RpcResponseHeader& a, RpcResponseHeader& b) {
+    a.Swap(&b);
+  }
+  inline void Swap(RpcResponseHeader* other) {
+    if (other == this) return;
+  #ifdef PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() != nullptr &&
+        GetOwningArena() == other->GetOwningArena()) {
+   #else  // PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() == other->GetOwningArena()) {
+  #endif  // !PROTOBUF_FORCE_COPY_IN_SWAP
+      InternalSwap(other);
+    } else {
+      ::PROTOBUF_NAMESPACE_ID::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(RpcResponseHeader* other) {
+    if (other == this) return;
+    GOOGLE_DCHECK(GetOwningArena() == other->GetOwningArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  RpcResponseHeader* New(::PROTOBUF_NAMESPACE_ID::Arena* arena = nullptr) const final {
+    return CreateMaybeMessage<RpcResponseHeader>(arena);
+  }
+  using ::PROTOBUF_NAMESPACE_ID::Message::CopyFrom;
+  void CopyFrom(const RpcResponseHeader& from);
+  using ::PROTOBUF_NAMESPACE_ID::Message::MergeFrom;
+  void MergeFrom( const RpcResponseHeader& from) {
+    RpcResponseHeader::MergeImpl(*this, from);
+  }
+  private:
+  static void MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROTOBUF_NAMESPACE_ID::Message& from_msg);
+  public:
+  PROTOBUF_ATTRIBUTE_REINITIALIZES void Clear() final;
+  bool IsInitialized() const final;
+
+  size_t ByteSizeLong() const final;
+  const char* _InternalParse(const char* ptr, ::PROTOBUF_NAMESPACE_ID::internal::ParseContext* ctx) final;
+  uint8_t* _InternalSerialize(
+      uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const final;
+  int GetCachedSize() const final { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::PROTOBUF_NAMESPACE_ID::Arena* arena, bool is_message_owned);
+  void SharedDtor();
+  void SetCachedSize(int size) const final;
+  void InternalSwap(RpcResponseHeader* other);
+
+  private:
+  friend class ::PROTOBUF_NAMESPACE_ID::internal::AnyMetadata;
+  static ::PROTOBUF_NAMESPACE_ID::StringPiece FullMessageName() {
+    return "mprpc.RpcResponseHeader";
+  }
+  protected:
+  explicit RpcResponseHeader(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+                       bool is_message_owned = false);
+  public:
+
+  static const ClassData _class_data_;
+  const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*GetClassData() const final;
+
+  ::PROTOBUF_NAMESPACE_ID::Metadata GetMetadata() const final;
+
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+
+  enum : int {
+    kErrorMsgFieldNumber = 3,
+    kRequestIdFieldNumber = 1,
+    kErrorCodeFieldNumber = 2,
+    kResponseSizeFieldNumber = 4,
+  };
+  // bytes error_msg = 3;
+  void clear_error_msg();
+  const std::string& error_msg() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_error_msg(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_error_msg();
+  PROTOBUF_NODISCARD std::string* release_error_msg();
+  void set_allocated_error_msg(std::string* error_msg);
+  private:
+  const std::string& _internal_error_msg() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_error_msg(const std::string& value);
+  std::string* _internal_mutable_error_msg();
+  public:
+
+  // uint64 request_id = 1;
+  void clear_request_id();
+  uint64_t request_id() const;
+  void set_request_id(uint64_t value);
+  private:
+  uint64_t _internal_request_id() const;
+  void _internal_set_request_id(uint64_t value);
+  public:
+
+  // .mprpc.RpcErrorCode error_code = 2;
+  void clear_error_code();
+  ::mprpc::RpcErrorCode error_code() const;
+  void set_error_code(::mprpc::RpcErrorCode value);
+  private:
+  ::mprpc::RpcErrorCode _internal_error_code() const;
+  void _internal_set_error_code(::mprpc::RpcErrorCode value);
+  public:
+
+  // uint32 response_size = 4;
+  void clear_response_size();
+  uint32_t response_size() const;
+  void set_response_size(uint32_t value);
+  private:
+  uint32_t _internal_response_size() const;
+  void _internal_set_response_size(uint32_t value);
+  public:
+
+  // @@protoc_insertion_point(class_scope:mprpc.RpcResponseHeader)
+ private:
+  class _Internal;
+
+  template <typename T> friend class ::PROTOBUF_NAMESPACE_ID::Arena::InternalHelper;
+  typedef void InternalArenaConstructable_;
+  typedef void DestructorSkippable_;
+  struct Impl_ {
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr error_msg_;
+    uint64_t request_id_;
+    int error_code_;
+    uint32_t response_size_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -365,13 +632,229 @@ inline void RpcHeader::set_args_size(uint32_t value) {
   // @@protoc_insertion_point(field_set:mprpc.RpcHeader.args_size)
 }
 
+// uint64 request_id = 4;
+inline void RpcHeader::clear_request_id() {
+  _impl_.request_id_ = uint64_t{0u};
+}
+inline uint64_t RpcHeader::_internal_request_id() const {
+  return _impl_.request_id_;
+}
+inline uint64_t RpcHeader::request_id() const {
+  // @@protoc_insertion_point(field_get:mprpc.RpcHeader.request_id)
+  return _internal_request_id();
+}
+inline void RpcHeader::_internal_set_request_id(uint64_t value) {
+  
+  _impl_.request_id_ = value;
+}
+inline void RpcHeader::set_request_id(uint64_t value) {
+  _internal_set_request_id(value);
+  // @@protoc_insertion_point(field_set:mprpc.RpcHeader.request_id)
+}
+
+// bytes trace_id = 5;
+inline void RpcHeader::clear_trace_id() {
+  _impl_.trace_id_.ClearToEmpty();
+}
+inline const std::string& RpcHeader::trace_id() const {
+  // @@protoc_insertion_point(field_get:mprpc.RpcHeader.trace_id)
+  return _internal_trace_id();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void RpcHeader::set_trace_id(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.trace_id_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:mprpc.RpcHeader.trace_id)
+}
+inline std::string* RpcHeader::mutable_trace_id() {
+  std::string* _s = _internal_mutable_trace_id();
+  // @@protoc_insertion_point(field_mutable:mprpc.RpcHeader.trace_id)
+  return _s;
+}
+inline const std::string& RpcHeader::_internal_trace_id() const {
+  return _impl_.trace_id_.Get();
+}
+inline void RpcHeader::_internal_set_trace_id(const std::string& value) {
+  
+  _impl_.trace_id_.Set(value, GetArenaForAllocation());
+}
+inline std::string* RpcHeader::_internal_mutable_trace_id() {
+  
+  return _impl_.trace_id_.Mutable(GetArenaForAllocation());
+}
+inline std::string* RpcHeader::release_trace_id() {
+  // @@protoc_insertion_point(field_release:mprpc.RpcHeader.trace_id)
+  return _impl_.trace_id_.Release();
+}
+inline void RpcHeader::set_allocated_trace_id(std::string* trace_id) {
+  if (trace_id != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.trace_id_.SetAllocated(trace_id, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.trace_id_.IsDefault()) {
+    _impl_.trace_id_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:mprpc.RpcHeader.trace_id)
+}
+
+// uint64 deadline_ms = 6;
+inline void RpcHeader::clear_deadline_ms() {
+  _impl_.deadline_ms_ = uint64_t{0u};
+}
+inline uint64_t RpcHeader::_internal_deadline_ms() const {
+  return _impl_.deadline_ms_;
+}
+inline uint64_t RpcHeader::deadline_ms() const {
+  // @@protoc_insertion_point(field_get:mprpc.RpcHeader.deadline_ms)
+  return _internal_deadline_ms();
+}
+inline void RpcHeader::_internal_set_deadline_ms(uint64_t value) {
+  
+  _impl_.deadline_ms_ = value;
+}
+inline void RpcHeader::set_deadline_ms(uint64_t value) {
+  _internal_set_deadline_ms(value);
+  // @@protoc_insertion_point(field_set:mprpc.RpcHeader.deadline_ms)
+}
+
+// -------------------------------------------------------------------
+
+// RpcResponseHeader
+
+// uint64 request_id = 1;
+inline void RpcResponseHeader::clear_request_id() {
+  _impl_.request_id_ = uint64_t{0u};
+}
+inline uint64_t RpcResponseHeader::_internal_request_id() const {
+  return _impl_.request_id_;
+}
+inline uint64_t RpcResponseHeader::request_id() const {
+  // @@protoc_insertion_point(field_get:mprpc.RpcResponseHeader.request_id)
+  return _internal_request_id();
+}
+inline void RpcResponseHeader::_internal_set_request_id(uint64_t value) {
+  
+  _impl_.request_id_ = value;
+}
+inline void RpcResponseHeader::set_request_id(uint64_t value) {
+  _internal_set_request_id(value);
+  // @@protoc_insertion_point(field_set:mprpc.RpcResponseHeader.request_id)
+}
+
+// .mprpc.RpcErrorCode error_code = 2;
+inline void RpcResponseHeader::clear_error_code() {
+  _impl_.error_code_ = 0;
+}
+inline ::mprpc::RpcErrorCode RpcResponseHeader::_internal_error_code() const {
+  return static_cast< ::mprpc::RpcErrorCode >(_impl_.error_code_);
+}
+inline ::mprpc::RpcErrorCode RpcResponseHeader::error_code() const {
+  // @@protoc_insertion_point(field_get:mprpc.RpcResponseHeader.error_code)
+  return _internal_error_code();
+}
+inline void RpcResponseHeader::_internal_set_error_code(::mprpc::RpcErrorCode value) {
+  
+  _impl_.error_code_ = value;
+}
+inline void RpcResponseHeader::set_error_code(::mprpc::RpcErrorCode value) {
+  _internal_set_error_code(value);
+  // @@protoc_insertion_point(field_set:mprpc.RpcResponseHeader.error_code)
+}
+
+// bytes error_msg = 3;
+inline void RpcResponseHeader::clear_error_msg() {
+  _impl_.error_msg_.ClearToEmpty();
+}
+inline const std::string& RpcResponseHeader::error_msg() const {
+  // @@protoc_insertion_point(field_get:mprpc.RpcResponseHeader.error_msg)
+  return _internal_error_msg();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void RpcResponseHeader::set_error_msg(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.error_msg_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:mprpc.RpcResponseHeader.error_msg)
+}
+inline std::string* RpcResponseHeader::mutable_error_msg() {
+  std::string* _s = _internal_mutable_error_msg();
+  // @@protoc_insertion_point(field_mutable:mprpc.RpcResponseHeader.error_msg)
+  return _s;
+}
+inline const std::string& RpcResponseHeader::_internal_error_msg() const {
+  return _impl_.error_msg_.Get();
+}
+inline void RpcResponseHeader::_internal_set_error_msg(const std::string& value) {
+  
+  _impl_.error_msg_.Set(value, GetArenaForAllocation());
+}
+inline std::string* RpcResponseHeader::_internal_mutable_error_msg() {
+  
+  return _impl_.error_msg_.Mutable(GetArenaForAllocation());
+}
+inline std::string* RpcResponseHeader::release_error_msg() {
+  // @@protoc_insertion_point(field_release:mprpc.RpcResponseHeader.error_msg)
+  return _impl_.error_msg_.Release();
+}
+inline void RpcResponseHeader::set_allocated_error_msg(std::string* error_msg) {
+  if (error_msg != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.error_msg_.SetAllocated(error_msg, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.error_msg_.IsDefault()) {
+    _impl_.error_msg_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:mprpc.RpcResponseHeader.error_msg)
+}
+
+// uint32 response_size = 4;
+inline void RpcResponseHeader::clear_response_size() {
+  _impl_.response_size_ = 0u;
+}
+inline uint32_t RpcResponseHeader::_internal_response_size() const {
+  return _impl_.response_size_;
+}
+inline uint32_t RpcResponseHeader::response_size() const {
+  // @@protoc_insertion_point(field_get:mprpc.RpcResponseHeader.response_size)
+  return _internal_response_size();
+}
+inline void RpcResponseHeader::_internal_set_response_size(uint32_t value) {
+  
+  _impl_.response_size_ = value;
+}
+inline void RpcResponseHeader::set_response_size(uint32_t value) {
+  _internal_set_response_size(value);
+  // @@protoc_insertion_point(field_set:mprpc.RpcResponseHeader.response_size)
+}
+
 #ifdef __GNUC__
   #pragma GCC diagnostic pop
 #endif  // __GNUC__
+// -------------------------------------------------------------------
+
 
 // @@protoc_insertion_point(namespace_scope)
 
 }  // namespace mprpc
+
+PROTOBUF_NAMESPACE_OPEN
+
+template <> struct is_proto_enum< ::mprpc::RpcErrorCode> : ::std::true_type {};
+template <>
+inline const EnumDescriptor* GetEnumDescriptor< ::mprpc::RpcErrorCode>() {
+  return ::mprpc::RpcErrorCode_descriptor();
+}
+
+PROTOBUF_NAMESPACE_CLOSE
 
 // @@protoc_insertion_point(global_scope)
 

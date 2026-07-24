@@ -30,7 +30,7 @@ public:
     void removeChannel(Channel* ch);
 
 private:
-    static const int kMaxEvents = 100;
+    static const int kMaxEvents = 4096;
 
     int epollfd_;
     struct epoll_event events_[kMaxEvents];

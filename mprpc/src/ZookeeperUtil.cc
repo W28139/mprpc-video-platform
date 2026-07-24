@@ -2,6 +2,10 @@
 #include "mprpcapplication.h"
 #include "wevix_muduo/AsyncLogger.h"
 #include <semaphore.h>
+#include <errno.h>
+#include <mutex>
+#include <ctime>
+#include <vector>
 
 /**
  * 全局的 Watcher 观察器回调函数
@@ -24,8 +28,11 @@ void global_watcher(zhandle_t *zh, int type,
         {
             // 从句柄中取出我们在 Start 函数里设置的信号量
             sem_t *sem = (sem_t*)zoo_get_context(zh);
-            // 给信号量资源 +1，唤醒正在阻塞等待连接的 Start 线程
-            sem_post(sem);
+            if (sem != nullptr)
+            {
+                // 给信号量资源 +1，唤醒正在阻塞等待连接的 Start 线程
+                sem_post(sem);
+            }
         }
     }
 }
@@ -48,12 +55,36 @@ ZkClient::~ZkClient()
 /**
  * 启动并连接 Zookeeper 服务器
  */
-void ZkClient::Start()
+bool ZkClient::Start()
 {
+    if (m_zhandle != nullptr)
+    {
+        return true;
+    }
+
+    static std::once_flag zkLogOnce;
+    std::call_once(zkLogOnce, []()
+    {
+        zoo_set_debug_level(ZOO_LOG_LEVEL_ERROR);
+    });
+
     // 从配置文件中读取 Zookeeper 的 IP 和 端口
     std::string host = MprpcApplication::GetInstance().GetConfig().Load("zookeeperip");
     std::string port = MprpcApplication::GetInstance().GetConfig().Load("zookeeperport");
+    if (host.empty() || port.empty())
+    {
+        LOG_ERROR("zookeeper config is invalid, host=%s, port=%s",
+                  host.c_str(), port.c_str());
+        return false;
+    }
     std::string connstr = host + ":" + port;
+
+    // --- 同步等待连接成功 ---
+    // 因为 zookeeper_init 调用完立刻返回，并不代表连接已经建立。
+    // 信号量必须在 zookeeper_init 前准备好，并通过 context 传入，避免连接事件先于
+    // zoo_set_context 到达导致永久阻塞。
+    sem_t sem;
+    sem_init(&sem, 0, 0);
 
     /*
      * zookeeper_init 是异步启动的。
@@ -62,23 +93,36 @@ void ZkClient::Start()
      * 2. 网络 I/O 线程：负责发送请求、心跳以及接收响应（基于 poll/select）
      * 3. Watcher 回调线程：负责执行像 global_watcher 这样的回调函数
      */
-    m_zhandle = zookeeper_init(connstr.c_str(), global_watcher, 30000, nullptr, nullptr, 0);
+    m_zhandle = zookeeper_init(connstr.c_str(), global_watcher, 30000, nullptr, &sem, 0);
     
     if (nullptr == m_zhandle)
     {
         LOG_ERROR("zookeeper_init error!");
-        exit(EXIT_FAILURE);
+        sem_destroy(&sem);
+        return false;
     }
 
-    // --- 同步等待连接成功 ---
-    // 因为 zookeeper_init 调用完立刻返回，并不代表连接已经建立。
-    // 我们需要使用信号量来等待 global_watcher 收到 CONNECTED_STATE 信号。
-    sem_t sem;
-    sem_init(&sem, 0, 0); // 初始化信号量为 0
-    zoo_set_context(m_zhandle, &sem); // 将信号量地址存入句柄上下文，方便回调函数取出
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += 5;
+    int waitRet = 0;
+    while ((waitRet = sem_timedwait(&sem, &ts)) == -1 && errno == EINTR)
+    {
+    }
 
-    sem_wait(&sem); // 阻塞在此，等待回调线程执行 sem_post
+    if (waitRet == -1)
+    {
+        LOG_ERROR("zookeeper connect failed, errno=%d, connstr=%s", errno, connstr.c_str());
+        zookeeper_close(m_zhandle);
+        m_zhandle = nullptr;
+        sem_destroy(&sem);
+        return false;
+    }
+
+    zoo_set_context(m_zhandle, nullptr);
+    sem_destroy(&sem);
     LOG_INFO("zookeeper_init success!");
+    return true;
 }
 
 /**
@@ -88,13 +132,38 @@ void ZkClient::Start()
  * @param datalen 数据长度
  * @param state 节点类型：0 为永久节点，ZOO_EPHEMERAL 为临时节点
  */
-void ZkClient::Create(const char *path, const char *data, int datalen, int state)
+bool ZkClient::Create(const char *path, const char *data, int datalen,
+                      int state, std::string* actualPath)
 {
+    if (m_zhandle == nullptr)
+    {
+        LOG_ERROR("zookeeper handle is null, create path:%s", path);
+        return false;
+    }
+
     char path_buffer[128];
     int bufferlen = sizeof(path_buffer);
     int flag;
 
-    // 先检查该节点是否存在，避免重复创建
+    if (state & ZOO_SEQUENCE)
+    {
+        flag = zoo_create(m_zhandle, path, data, datalen,
+                          &ZOO_OPEN_ACL_UNSAFE, state, path_buffer, bufferlen);
+        if (flag == ZOK)
+        {
+            if (actualPath != nullptr)
+            {
+                *actualPath = path_buffer;
+            }
+            LOG_INFO("znode sequence create success, path:%s", path_buffer);
+            return true;
+        }
+
+        LOG_ERROR("znode sequence create error, flag:%d, path:%s", flag, path);
+        return false;
+    }
+
+    // 先检查该节点是否存在
     flag = zoo_exists(m_zhandle, path, 0, nullptr);
     if (ZNONODE == flag) // 如果节点不存在
     {
@@ -104,14 +173,54 @@ void ZkClient::Create(const char *path, const char *data, int datalen, int state
                           &ZOO_OPEN_ACL_UNSAFE, state, path_buffer, bufferlen);
         if (flag == ZOK)
         {
+            if (actualPath != nullptr)
+            {
+                *actualPath = path_buffer;
+            }
             LOG_INFO("znode create success, path:%s", path);
+            return true;
         }
         else
         {
             LOG_ERROR("znode create error, flag:%d, path:%s", flag, path);
-            exit(EXIT_FAILURE);
+            return false;
         }
     }
+    else if (flag == ZOK && state == ZOO_EPHEMERAL)
+    {
+        // 临时节点已存在（可能是上一个服务实例的 session 残留，ZK 30s 超时未到）
+        // 删除旧节点后用当前 session 重建，确保节点绑定到当前会话
+        LOG_INFO("ephemeral znode exists (stale session), recreating: %s", path);
+        zoo_delete(m_zhandle, path, -1);  // -1 表示不检查版本号
+        flag = zoo_create(m_zhandle, path, data, datalen,
+                          &ZOO_OPEN_ACL_UNSAFE, state, path_buffer, bufferlen);
+        if (flag == ZOK)
+        {
+            if (actualPath != nullptr)
+            {
+                *actualPath = path_buffer;
+            }
+            LOG_INFO("znode recreate success, path:%s", path);
+            return true;
+        }
+        else
+        {
+            LOG_ERROR("znode recreate error, flag:%d, path:%s", flag, path);
+            return false;
+        }
+    }
+
+    if (flag == ZOK)
+    {
+        if (actualPath != nullptr)
+        {
+            *actualPath = path;
+        }
+        return true;
+    }
+
+    LOG_ERROR("znode exists check error, flag:%d, path:%s", flag, path);
+    return false;
 }
 
 /**
@@ -121,6 +230,12 @@ void ZkClient::Create(const char *path, const char *data, int datalen, int state
  */
 std::string ZkClient::GetData(const char *path)
 {
+    if (m_zhandle == nullptr)
+    {
+        LOG_ERROR("zookeeper handle is null, get path:%s", path);
+        return "";
+    }
+
     char buffer[128];
     int bufferlen = sizeof(buffer);
     
@@ -138,4 +253,35 @@ std::string ZkClient::GetData(const char *path)
         // 将获取到的二进制缓冲区转为 std::string 返回
         return std::string(buffer, bufferlen);
     }
+}
+
+std::vector<std::string> ZkClient::GetChildren(const char *path)
+{
+    std::vector<std::string> children;
+    if (m_zhandle == nullptr)
+    {
+        LOG_ERROR("zookeeper handle is null, get children path:%s", path);
+        return children;
+    }
+
+    struct String_vector strings;
+    int flag = zoo_get_children(m_zhandle, path, 0, &strings);
+    if (flag != ZOK)
+    {
+        LOG_WARN("get znode children error, flag:%d, path:%s", flag, path);
+        return children;
+    }
+
+    children.reserve(strings.count);
+    for (int i = 0; i < strings.count; ++i)
+    {
+        children.emplace_back(strings.data[i]);
+    }
+    deallocate_String_vector(&strings);
+    return children;
+}
+
+bool ZkClient::IsStarted() const
+{
+    return m_zhandle != nullptr;
 }

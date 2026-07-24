@@ -1,0 +1,75 @@
+# 分布式视频处理与资源调度平台
+
+## 项目定位
+
+本项目定位为：
+
+> 基于自研 `wevix_muduo` 网络库和 `mprpc` RPC 框架的分布式视频处理与资源调度平台。
+
+项目重点不是研究音视频编解码算法，而是构建一个能够管理多个计算节点、调度视频处理任务、处理节点故障、收集执行结果和输出任务进度的分布式基础设施。
+
+FFmpeg 或 mock executor 只作为 Worker 的任务执行器。真正要展示的是：
+
+- 自研网络库如何支撑高并发节点通信
+- 自研 RPC 框架如何支撑服务间调用
+- 调度器如何做任务拆分、资源匹配、失败重试
+- Worker 如何注册、心跳、上报负载、执行任务
+- 系统如何保证任务状态一致、可恢复、可观测
+
+## 为什么选择这个项目
+
+这个方向适合你的当前基础：
+
+- C++ 使用合理：视频处理、任务执行器、网络通信、资源调度都适合 C++。
+- 业务不烂大街：比 IM、商城、普通风控更有辨识度。
+- 可以自然使用自研框架：调度器、Worker、结果收集、服务发现都需要 RPC。
+- 可渐进开发：第一版可以 mock 执行，第二版再接 FFmpeg。
+- 面试可讲点多：任务切片、资源调度、Worker 故障、重试、幂等、监控、压测。
+
+## 文档结构
+
+- [01_required_knowledge.md](./01_required_knowledge.md)：需要具备的技术知识和学习周期
+- [02_framework_improvements.md](./02_framework_improvements.md)：当前框架还需要补哪些能力
+- [03_system_design.md](./03_system_design.md)：系统架构、服务拆分、核心流程和数据模型
+- [04_development_roadmap.md](./04_development_roadmap.md)：从零到完整项目的开发阶段
+- [05_acceptance_and_resume.md](./05_acceptance_and_resume.md)：验收标准、压测目标、简历表达和面试讲法
+
+## 最终系统形态
+
+系统由这些模块组成：
+
+- `Client/CLI`：提交视频处理任务、查询任务状态
+- `JobService`：接收任务、维护任务元信息
+- `SchedulerService`：任务切片、资源匹配、调度 shard
+- `WorkerManagerService`：Worker 注册、心跳、负载和健康状态管理
+- `TranscodeWorker`：执行 mock 或 FFmpeg 任务
+- `ResultCollectorService`：收集 shard 结果、聚合任务状态
+- `MetadataStore`：保存任务、分片、Worker、结果等状态
+- `MessageQueue`：承载任务事件、结果事件和异步通知
+- `MonitorService`：采集 QPS、P99、失败率、队列长度、Worker 负载
+
+## 核心业务链路
+
+1. 用户提交视频处理任务。
+2. `JobService` 创建任务记录。
+3. `SchedulerService` 根据视频时长、目标规格和资源需求切分 shard。
+4. `WorkerManagerService` 提供可用 Worker 和资源状态。
+5. `SchedulerService` 将 shard 分配给 Worker。
+6. Worker 执行任务并上报进度。
+7. Worker 失败或超时，调度器重新分配未完成 shard。
+8. 所有 shard 完成后，`ResultCollectorService` 聚合结果。
+9. 任务状态变为 `SUCCESS` 或 `FAILED`。
+
+## 推荐开发原则
+
+不要一开始就接完整 FFmpeg 和真实文件系统。
+
+推荐顺序：
+
+1. 先把 RPC 框架补到能支撑业务。
+2. 先做 mock executor，跑通调度闭环。
+3. 再接简单 FFmpeg 命令。
+4. 最后补资源调度、故障恢复、监控和压测。
+
+项目真正的价值在分布式系统能力，不在你是否深入理解 H.264 编码器。
+

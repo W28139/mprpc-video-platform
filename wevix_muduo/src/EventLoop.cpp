@@ -45,7 +45,7 @@ int createTimerFd(int sec)
 
 EventLoop::EventLoop(bool isMainLoop, int timerInterval, int timeout)
     : stop_(false)
-    , threadId_(getTid())
+    , threadId_(0)
     , epoll_(new Epoll())
     , wakeupFd_(::eventfd(0, EFD_NONBLOCK | EFD_CLOEXEC))
     , wakeChannel_(new Channel(this, wakeupFd_))
@@ -81,7 +81,9 @@ EventLoop::~EventLoop()
 
 void EventLoop::run()
 {
-    LOG_DEBUG("EventLoop started, tid=%d, isMainLoop=%d", threadId_, isMainLoop_);
+    threadId_.store(getTid(), std::memory_order_relaxed);
+    LOG_DEBUG("EventLoop started, tid=%d, isMainLoop=%d",
+              threadId_.load(std::memory_order_relaxed), isMainLoop_);
 
     while (!stop_)
     {
@@ -189,29 +191,26 @@ void EventLoop::handleTimer()
     if (!isMainLoop_)
     {
         time_t now = ::time(nullptr);
-        std::vector<int> toDelete;
+        std::vector<ConnectionPtr> expired;
 
         // 检查超时连接
         {
             std::lock_guard<std::mutex> lock(connsMutex_);
-            for (auto it = conns_.begin(); it != conns_.end(); )
+            for (auto& entry : conns_)
             {
-                if (it->second->isTimeout(now, timeout_))
+                if (entry.second->isTimeout(now, timeout_))
                 {
-                    toDelete.push_back(it->first);
-                    it = conns_.erase(it);
-                }
-                else
-                {
-                    ++it;
+                    expired.push_back(entry.second);
                 }
             }
         }
 
         // 统一处理超时回调
-        for (int fd : toDelete)
+        for (const auto& conn : expired)
         {
+            int fd = conn->fd();
             LOG_INFO("EventLoop::handleTimer: connection timeout, removing fd=%d", fd);
+            conn->forceClose();
             if (timerCallback_)
             {
                 timerCallback_(fd);
@@ -226,9 +225,15 @@ void EventLoop::newConnection(ConnectionPtr conn)
     conns_[conn->fd()] = conn;
 }
 
+void EventLoop::removeConnection(int fd)
+{
+    std::lock_guard<std::mutex> lock(connsMutex_);
+    conns_.erase(fd);
+}
+
 bool EventLoop::isInLoopThread() const
 {
-    return threadId_ == getTid();
+    return threadId_.load(std::memory_order_relaxed) == getTid();
 }
 
 void EventLoop::updateChannel(Channel* ch)

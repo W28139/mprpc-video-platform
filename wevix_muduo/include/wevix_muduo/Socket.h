@@ -37,7 +37,7 @@ public:
 
     // 服务端操作
     void bind(const InetAddress& serverAddr);
-    void listen(int backlog = 128);
+    void listen(int backlog = 4096);
     int accept(InetAddress& clientAddr);
 
     // 静态工具函数：创建非阻塞套接字

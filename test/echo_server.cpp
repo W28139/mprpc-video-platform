@@ -29,7 +29,7 @@ int main()
     signal(SIGINT, OnSignal);
     signal(SIGTERM, OnSignal);
 
-    wevix_muduo::TcpServer server("0.0.0.0", 8888, 4);
+    wevix_muduo::TcpServer server("0.0.0.0", 8888, 16);
     server.setOnMessageCallback(OnMessage);
     LOG_INFO("Echo Server listening on 0.0.0.0:8888");
     server.start();

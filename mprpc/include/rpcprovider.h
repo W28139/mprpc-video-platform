@@ -20,6 +20,10 @@ public:
     // 启动rpc服务节点，开始提供rpc远程网络调用服务
     void Run();
 private:
+    // protobuf::NewCallback 当前版本最多方便绑定两个参数。
+    // 这里用上下文结构把 conn、response、requestId 合到一个参数里传给回包回调。
+    struct RpcResponseContext;
+
     // 服务类型信息
     struct ServiceInfo
     {
@@ -36,6 +40,6 @@ private:
     // 连接关闭回调
     void OnClose(const wevix_muduo::TcpServer::ConnectionPtr& conn);
 
-    // Closure的回调操作，用于序列化rpc的响应和网络发送
-    void SendRpcResponse(const wevix_muduo::TcpServer::ConnectionPtr& conn, google::protobuf::Message* message);
+    // Closure 的回调操作：序列化业务 response，并封装 RpcResponseHeader 后发送。
+    void SendRpcResponse(RpcResponseContext* context);
 };

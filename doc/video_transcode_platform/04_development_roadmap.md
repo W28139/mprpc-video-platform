@@ -1,0 +1,364 @@
+# 04. 开发路线
+
+## 总体阶段
+
+建议分 8 个阶段推进：
+
+1. 框架 P0 能力补齐
+2. 项目骨架和 proto 设计
+3. Worker 注册与心跳
+4. mock 任务调度闭环
+5. 失败重试和故障恢复
+6. 接入 FFmpeg 执行器
+7. 资源感知调度和监控
+8. 压测、故障测试和文档整理
+
+不要一开始就写完整业务。每个阶段都要有可运行结果。
+
+---
+
+## 阶段 1：框架 P0 能力补齐
+
+### 目标
+
+让 `mprpc` 能支撑真实业务调用。
+
+### 开发内容
+
+- RPC 增加 `request_id`
+- RPC 增加 `error_code/error_msg`
+- Controller 增加 timeout/deadline
+- 客户端增加长连接池
+- 服务发现增加本地缓存
+- RPC 调用日志带 trace_id/request_id
+- 最大包大小限制
+
+### 验收标准
+
+- 能调用一个 RPC 方法并打印 request_id
+- 服务端返回业务错误时客户端能拿到 error_code
+- 服务端不响应时客户端能超时返回
+- 100 并发长连接 RPC 0 失败
+- ZK 不进入每次调用热路径
+
+### 建议测试
+
+```bash
+./bin/rpc_echo_server -i test/rpc_test.conf
+./bin/bench_rpc_stress --direct --keepalive -c 100 -m 1000
+```
+
+---
+
+## 阶段 2：项目骨架和 proto 设计
+
+### 目标
+
+建立视频平台基本服务目录和 protobuf 协议。
+
+### 建议目录
+
+```text
+video_platform/
+  proto/
+    job.proto
+    scheduler.proto
+    worker.proto
+    result.proto
+  include/
+  src/
+    job_service/
+    scheduler_service/
+    worker_manager/
+    transcode_worker/
+    result_collector/
+  test/
+  conf/
+```
+
+### 核心 proto
+
+先定义：
+
+- `SubmitJobRequest/Response`
+- `QueryJobRequest/Response`
+- `RegisterWorkerRequest/Response`
+- `HeartbeatRequest/Response`
+- `AssignShardRequest/Response`
+- `ReportShardProgressRequest/Response`
+- `ReportShardResultRequest/Response`
+
+### 验收标准
+
+- 所有 proto 能生成 C++ 代码
+- 每个服务能启动
+- 每个服务能注册到 ZooKeeper
+- Client 能调用 `SubmitJob`
+
+---
+
+## 阶段 3：Worker 注册与心跳
+
+### 目标
+
+实现 Worker 生命周期管理。
+
+### 开发内容
+
+- Worker 启动后调用 `RegisterWorker`
+- Worker 周期性调用 `Heartbeat`
+- WorkerManager 维护 Worker 表
+- Worker 心跳超时后标记 OFFLINE
+- Scheduler 能查询 ONLINE Worker
+
+### Worker 上报信息
+
+```text
+worker_id
+ip
+port
+cpu_cores
+memory_mb
+max_running_shards
+current_running_shards
+status
+```
+
+### 验收标准
+
+- 启动 3 个 Worker，WorkerManager 能看到 3 个 ONLINE
+- 停掉 1 个 Worker，10 秒内状态变 OFFLINE
+- Worker 重启后能重新注册
+
+---
+
+## 阶段 4：mock 任务调度闭环
+
+### 目标
+
+先不接 FFmpeg，用 mock executor 跑完整任务链路。
+
+### 开发内容
+
+- Client 提交 job
+- JobService 创建 job
+- Scheduler 将 job 切成 shard
+- Scheduler 分配 shard 给 Worker
+- Worker sleep 模拟执行
+- Worker 上报进度和结果
+- ResultCollector 聚合 shard
+- Job 状态最终变 SUCCESS
+
+### mock executor
+
+```text
+输入：shard_id, duration_ms
+行为：每隔 1 秒上报一次 progress
+完成：写一个 result 文件或 result 字符串
+```
+
+### 验收标准
+
+- 提交一个 job，可以拆成 N 个 shard
+- 多个 Worker 并行执行 shard
+- 能查询 job 进度
+- 所有 shard 完成后 job 变 SUCCESS
+
+---
+
+## 阶段 5：失败重试和故障恢复
+
+### 目标
+
+让系统在 Worker 失败时能恢复。
+
+### 开发内容
+
+- shard 增加 retry_count
+- shard 增加 attempt_id
+- Worker 执行失败后上报 FAILED
+- Scheduler 重新调度 FAILED shard
+- Worker 心跳超时后重新调度 RUNNING shard
+- ResultCollector 做幂等处理
+
+### 故障场景
+
+- Worker 执行 shard 时返回失败
+- Worker 执行 shard 时进程退出
+- Worker 上报结果超时
+- ResultCollector 重复收到结果
+- Scheduler 重启后恢复未完成任务
+
+### 验收标准
+
+- 杀掉一个正在执行任务的 Worker，任务最终仍能完成
+- 同一个 shard 重复上报 SUCCESS，不影响最终结果
+- 超过最大重试次数后 job 变 FAILED
+
+---
+
+## 阶段 6：接入 FFmpeg 执行器
+
+### 目标
+
+让 Worker 可以执行真实视频处理命令。
+
+### 开发内容
+
+- 实现 `FfmpegExecutor`
+- 支持视频信息探测
+- 支持按时间切片
+- 支持 shard 转码
+- 支持截图
+- 支持结果合并
+- 捕获 FFmpeg 返回码
+- 失败时记录 stderr 或错误摘要
+
+### 第一版命令
+
+探测：
+
+```bash
+ffprobe input.mp4
+```
+
+切片：
+
+```bash
+ffmpeg -i input.mp4 -ss START -t DURATION part_N.mp4
+```
+
+转码：
+
+```bash
+ffmpeg -i part_N.mp4 -s 1280x720 output_N.mp4
+```
+
+合并：
+
+```bash
+ffmpeg -f concat -safe 0 -i filelist.txt -c copy output.mp4
+```
+
+### 验收标准
+
+- 能提交一个真实 mp4 文件
+- 能生成多个 shard 输出
+- 能合并最终结果
+- 某个 shard 转码失败时能重试
+
+### 注意
+
+第一版不需要追求完美音视频切片。切片不精确或合并有瑕疵可以接受，重点是分布式任务链路。
+
+---
+
+## 阶段 7：资源感知调度和监控
+
+### 目标
+
+让调度器不再简单轮询，而是根据 Worker 资源状态分配任务。
+
+### 开发内容
+
+- Worker 上报 CPU、内存、running shard
+- Scheduler 维护 Worker 资源快照
+- 实现资源匹配策略
+- 实现优先级队列
+- 实现 Worker 过载保护
+- 输出 metrics
+
+### 简单调度策略
+
+```text
+available_slots = max_running_shards - current_running_shards
+score = available_slots * 10 - cpu_usage * 0.5 - memory_usage * 0.2
+```
+
+### 指标
+
+- job_success_total
+- job_failed_total
+- shard_running
+- shard_pending
+- shard_retry_total
+- worker_online
+- worker_offline
+- scheduler_queue_size
+- rpc_latency_p99
+
+### 验收标准
+
+- 高负载 Worker 不再被继续分配任务
+- 低负载 Worker 会获得更多 shard
+- 可以看到任务队列长度和 Worker 负载
+
+---
+
+## 阶段 8：压测、故障测试和文档整理
+
+### 目标
+
+把项目做成能展示的完整工程，而不是只能跑通的 demo。
+
+### 压测内容
+
+- 100 个 job
+- 1000 个 shard
+- 10 个 Worker
+- Worker 随机失败
+- Scheduler 高并发提交
+- ResultCollector 高并发上报
+
+### 故障测试
+
+- 杀 Worker
+- 杀 Scheduler
+- 重启 ZooKeeper
+- 模拟 Worker 卡死
+- 模拟 FFmpeg 返回失败
+- 模拟重复上报结果
+
+### 输出文档
+
+- 架构图
+- 核心流程图
+- 状态机图
+- RPC 协议说明
+- 调度策略说明
+- 故障恢复说明
+- 压测报告
+- 已知问题
+
+## 推荐开发顺序总结
+
+```text
+框架 P0
+  -> proto
+  -> Worker 注册/心跳
+  -> mock 调度闭环
+  -> 失败重试
+  -> FFmpeg executor
+  -> 资源调度
+  -> metrics
+  -> 压测和文档
+```
+
+## 不建议的开发顺序
+
+不要这样做：
+
+```text
+先学很深音视频
+  -> 先接复杂 FFmpeg
+  -> 再想调度怎么写
+  -> 最后发现框架不支持 timeout/连接池/重试
+```
+
+正确方式是：
+
+```text
+先完成分布式调度闭环
+  -> 再把执行器从 mock 替换成 FFmpeg
+```
+

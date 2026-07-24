@@ -1,0 +1,21 @@
+syntax = "proto3";
+
+package rpc_test;
+
+option cc_generic_services = true;
+
+// Echo 压测消息 —— 简单 payload 往返，方便与 raw TCP echo 对比
+message EchoRequest
+{
+    bytes payload = 1;
+}
+
+message EchoResponse
+{
+    bytes payload = 1;
+}
+
+service EchoService
+{
+    rpc Echo(EchoRequest) returns (EchoResponse);
+}

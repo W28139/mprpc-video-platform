@@ -104,10 +104,6 @@ int Socket::accept(InetAddress& clientAddr)
     {
         clientAddr.setSockAddr(addr);
     }
-    else
-    {
-        LOG_ERROR("accept failed, errno=%d", errno);
-    }
     return connFd;
 }
 

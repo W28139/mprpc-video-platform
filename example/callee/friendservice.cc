@@ -1,5 +1,6 @@
 #include<string>
 #include<csignal>
+#include<cstdlib>
 #include"friend.pb.h"
 #include"mprpcapplication.h"
 #include"rpcprovider.h"
@@ -55,7 +56,11 @@ int main(int argc,char** argv)
     LOG_INFO("first log message!");
     LOG_ERR("%s:%s:%d",__FILE__,__FUNCTION__,__LINE__);
 
-    MprpcApplication::Init(argc,argv);
+    if (!MprpcApplication::Init(argc,argv))
+    {
+        wevix_muduo::AsyncLogger::GetInstance().stop();
+        return EXIT_FAILURE;
+    }
 
     RpcProvider provider;
     provider.NotifyService(new FriendService());
