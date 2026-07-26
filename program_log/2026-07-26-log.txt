@@ -1,0 +1,644 @@
+[2026-07-26 14:10:54.377][T259251][INFO ][mprpcapplication.cc:79] Init() - MprpcApplication init success, config_file=video_platform/conf/transcode_worker.conf
+[2026-07-26 14:10:54.377][T259249][INFO ][mprpcapplication.cc:79] Init() - MprpcApplication init success, config_file=video_platform/conf/scheduler.conf
+[2026-07-26 14:10:54.377][T259248][INFO ][mprpcapplication.cc:79] Init() - MprpcApplication init success, config_file=video_platform/conf/job_service.conf
+[2026-07-26 14:10:54.377][T259249][INFO ][rpcprovider.cc:134] NotifyService() - Register service: SchedulerService, methods=2
+[2026-07-26 14:10:54.377][T259249][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: ScheduleJob
+[2026-07-26 14:10:54.377][T259249][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: RescheduleShard
+[2026-07-26 14:10:54.377][T259251][INFO ][rpcprovider.cc:134] NotifyService() - Register service: WorkerService, methods=3
+[2026-07-26 14:10:54.377][T259251][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: AssignShard
+[2026-07-26 14:10:54.377][T259251][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: CancelShard
+[2026-07-26 14:10:54.377][T259251][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: QueryShard
+[2026-07-26 14:10:54.377][T259248][INFO ][rpcprovider.cc:134] NotifyService() - Register service: JobService, methods=3
+[2026-07-26 14:10:54.377][T259248][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: SubmitJob
+[2026-07-26 14:10:54.377][T259248][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: QueryJob
+[2026-07-26 14:10:54.377][T259248][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: CancelJob
+[2026-07-26 14:10:54.377][T259250][INFO ][mprpcapplication.cc:79] Init() - MprpcApplication init success, config_file=video_platform/conf/worker_manager.conf
+[2026-07-26 14:10:54.377][T259250][INFO ][rpcprovider.cc:134] NotifyService() - Register service: WorkerManagerService, methods=3
+[2026-07-26 14:10:54.377][T259250][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: RegisterWorker
+[2026-07-26 14:10:54.377][T259250][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: Heartbeat
+[2026-07-26 14:10:54.377][T259250][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: ListWorkers
+[2026-07-26 14:10:54.377][T259252][INFO ][mprpcapplication.cc:79] Init() - MprpcApplication init success, config_file=video_platform/conf/result_collector.conf
+[2026-07-26 14:10:54.377][T259252][INFO ][rpcprovider.cc:134] NotifyService() - Register service: ResultCollectorService, methods=2
+[2026-07-26 14:10:54.377][T259252][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: ReportShardProgress
+[2026-07-26 14:10:54.377][T259252][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: ReportShardResult
+[2026-07-26 14:10:54.379][T259251][INFO ][ThreadPool.cpp:58] start() - ThreadPool [IO_LOOP] starting, initThreadSize=16
+[2026-07-26 14:10:54.379][T259249][INFO ][ThreadPool.cpp:58] start() - ThreadPool [IO_LOOP] starting, initThreadSize=16
+[2026-07-26 14:10:54.379][T259252][INFO ][ThreadPool.cpp:58] start() - ThreadPool [IO_LOOP] starting, initThreadSize=16
+[2026-07-26 14:10:54.379][T259250][INFO ][ThreadPool.cpp:58] start() - ThreadPool [IO_LOOP] starting, initThreadSize=16
+[2026-07-26 14:10:54.379][T259261][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-0] started.
+[2026-07-26 14:10:54.379][T259262][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-0] started.
+[2026-07-26 14:10:54.379][T259248][INFO ][ThreadPool.cpp:58] start() - ThreadPool [IO_LOOP] starting, initThreadSize=16
+[2026-07-26 14:10:54.379][T259263][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-0] started.
+[2026-07-26 14:10:54.379][T259265][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-1] started.
+[2026-07-26 14:10:54.379][T259266][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-0] started.
+[2026-07-26 14:10:54.379][T259264][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-1] started.
+[2026-07-26 14:10:54.379][T259267][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-1] started.
+[2026-07-26 14:10:54.379][T259271][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-2] started.
+[2026-07-26 14:10:54.379][T259270][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-1] started.
+[2026-07-26 14:10:54.379][T259268][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-0] started.
+[2026-07-26 14:10:54.379][T259269][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-2] started.
+[2026-07-26 14:10:54.379][T259272][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-2] started.
+[2026-07-26 14:10:54.379][T259273][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-2] started.
+[2026-07-26 14:10:54.379][T259274][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-3] started.
+[2026-07-26 14:10:54.380][T259278][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-4] started.
+[2026-07-26 14:10:54.380][T259277][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-3] started.
+[2026-07-26 14:10:54.380][T259279][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-3] started.
+[2026-07-26 14:10:54.380][T259275][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-3] started.
+[2026-07-26 14:10:54.380][T259276][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-1] started.
+[2026-07-26 14:10:54.380][T259280][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-2] started.
+[2026-07-26 14:10:54.380][T259281][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-4] started.
+[2026-07-26 14:10:54.380][T259282][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-4] started.
+[2026-07-26 14:10:54.380][T259284][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-3] started.
+[2026-07-26 14:10:54.380][T259283][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-5] started.
+[2026-07-26 14:10:54.380][T259285][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-5] started.
+[2026-07-26 14:10:54.381][T259286][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-4] started.
+[2026-07-26 14:10:54.381][T259287][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-5] started.
+[2026-07-26 14:10:54.381][T259288][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-4] started.
+[2026-07-26 14:10:54.381][T259289][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-6] started.
+[2026-07-26 14:10:54.381][T259290][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-6] started.
+[2026-07-26 14:10:54.381][T259291][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-5] started.
+[2026-07-26 14:10:54.381][T259292][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-7] started.
+[2026-07-26 14:10:54.381][T259293][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-6] started.
+[2026-07-26 14:10:54.381][T259294][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-7] started.
+[2026-07-26 14:10:54.381][T259295][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-5] started.
+[2026-07-26 14:10:54.381][T259296][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-6] started.
+[2026-07-26 14:10:54.381][T259297][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-8] started.
+[2026-07-26 14:10:54.381][T259298][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-8] started.
+[2026-07-26 14:10:54.382][T259299][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-9] started.
+[2026-07-26 14:10:54.382][T259300][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-7] started.
+[2026-07-26 14:10:54.382][T259301][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-6] started.
+[2026-07-26 14:10:54.382][T259302][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-9] started.
+[2026-07-26 14:10:54.382][T259303][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-7] started.
+[2026-07-26 14:10:54.382][T259304][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-10] started.
+[2026-07-26 14:10:54.382][T259305][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-7] started.
+[2026-07-26 14:10:54.382][T259306][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-8] started.
+[2026-07-26 14:10:54.382][T259307][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-8] started.
+[2026-07-26 14:10:54.382][T259309][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-11] started.
+[2026-07-26 14:10:54.382][T259308][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-10] started.
+[2026-07-26 14:10:54.383][T259312][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-12] started.
+[2026-07-26 14:10:54.383][T259310][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-9] started.
+[2026-07-26 14:10:54.383][T259314][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-9] started.
+[2026-07-26 14:10:54.383][T259313][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-11] started.
+[2026-07-26 14:10:54.383][T259311][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-8] started.
+[2026-07-26 14:10:54.383][T259315][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-9] started.
+[2026-07-26 14:10:54.383][T259317][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-10] started.
+[2026-07-26 14:10:54.383][T259318][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-10] started.
+[2026-07-26 14:10:54.383][T259316][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-12] started.
+[2026-07-26 14:10:54.383][T259319][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-13] started.
+[2026-07-26 14:10:54.383][T259321][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-11] started.
+[2026-07-26 14:10:54.383][T259320][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-11] started.
+[2026-07-26 14:10:54.383][T259322][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-10] started.
+[2026-07-26 14:10:54.383][T259323][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-13] started.
+[2026-07-26 14:10:54.384][T259324][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-14] started.
+[2026-07-26 14:10:54.384][T259325][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-12] started.
+[2026-07-26 14:10:54.384][T259327][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-15] started.
+[2026-07-26 14:10:54.384][T259326][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-11] started.
+[2026-07-26 14:10:54.384][T259328][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-12] started.
+[2026-07-26 14:10:54.384][T259329][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-13] started.
+[2026-07-26 14:10:54.384][T259330][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-14] started.
+[2026-07-26 14:10:54.384][T259331][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-12] started.
+[2026-07-26 14:10:54.384][T259333][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-15] started.
+[2026-07-26 14:10:54.385][T259249][INFO ][ThreadPool.cpp:58] start() - ThreadPool [WORKER] starting, initThreadSize=8
+[2026-07-26 14:10:54.385][T259332][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-13] started.
+[2026-07-26 14:10:54.385][T259250][INFO ][ThreadPool.cpp:58] start() - ThreadPool [WORKER] starting, initThreadSize=8
+[2026-07-26 14:10:54.385][T259334][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-13] started.
+[2026-07-26 14:10:54.385][T259335][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-14] started.
+[2026-07-26 14:10:54.385][T259337][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-16] started.
+[2026-07-26 14:10:54.385][T259336][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-16] started.
+[2026-07-26 14:10:54.385][T259338][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-14] started.
+[2026-07-26 14:10:54.385][T259339][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-14] started.
+[2026-07-26 14:10:54.385][T259341][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-17] started.
+[2026-07-26 14:10:54.385][T259340][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-17] started.
+[2026-07-26 14:10:54.385][T259342][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-15] started.
+[2026-07-26 14:10:54.385][T259344][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-15] started.
+[2026-07-26 14:10:54.386][T259345][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-18] started.
+[2026-07-26 14:10:54.386][T259343][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-15] started.
+[2026-07-26 14:10:54.386][T259248][INFO ][ThreadPool.cpp:58] start() - ThreadPool [WORKER] starting, initThreadSize=8
+[2026-07-26 14:10:54.386][T259346][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-18] started.
+[2026-07-26 14:10:54.386][T259252][INFO ][ThreadPool.cpp:58] start() - ThreadPool [WORKER] starting, initThreadSize=8
+[2026-07-26 14:10:54.386][T259251][INFO ][ThreadPool.cpp:58] start() - ThreadPool [WORKER] starting, initThreadSize=8
+[2026-07-26 14:10:54.386][T259347][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-19] started.
+[2026-07-26 14:10:54.386][T259348][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-16] started.
+[2026-07-26 14:10:54.386][T259349][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-19] started.
+[2026-07-26 14:10:54.386][T259350][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-20] started.
+[2026-07-26 14:10:54.386][T259351][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-17] started.
+[2026-07-26 14:10:54.386][T259352][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-16] started.
+[2026-07-26 14:10:54.387][T259355][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-20] started.
+[2026-07-26 14:10:54.387][T259353][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-16] started.
+[2026-07-26 14:10:54.387][T259354][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-21] started.
+[2026-07-26 14:10:54.387][T259356][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-18] started.
+[2026-07-26 14:10:54.387][T259357][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-22] started.
+[2026-07-26 14:10:54.387][T259358][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-21] started.
+[2026-07-26 14:10:54.387][T259359][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-19] started.
+[2026-07-26 14:10:54.387][T259360][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-17] started.
+[2026-07-26 14:10:54.387][T259249][INFO ][TcpServer.cpp:193] enableWorkPool() - WorkThreadPool start, size=8
+[2026-07-26 14:10:54.387][T259361][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-23] started.
+[2026-07-26 14:10:54.387][T259363][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-22] started.
+[2026-07-26 14:10:54.387][T259362][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-17] started.
+[2026-07-26 14:10:54.387][T259364][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-20] started.
+[2026-07-26 14:10:54.387][T259365][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-18] started.
+[2026-07-26 14:10:54.387][T259366][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-18] started.
+[2026-07-26 14:10:54.387][T259250][INFO ][TcpServer.cpp:193] enableWorkPool() - WorkThreadPool start, size=8
+[2026-07-26 14:10:54.387][T259367][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-23] started.
+[2026-07-26 14:10:54.388][T259368][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-21] started.
+[2026-07-26 14:10:54.388][T259369][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-19] started.
+[2026-07-26 14:10:54.388][T259370][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-19] started.
+[2026-07-26 14:10:54.388][T259372][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-20] started.
+[2026-07-26 14:10:54.388][T259373][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-22] started.
+[2026-07-26 14:10:54.388][T259375][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-20] started.
+[2026-07-26 14:10:54.388][T259376][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-21] started.
+[2026-07-26 14:10:54.388][T259379][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-21] started.
+[2026-07-26 14:10:54.388][T259248][INFO ][TcpServer.cpp:193] enableWorkPool() - WorkThreadPool start, size=8
+[2026-07-26 14:10:54.388][T259380][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-23] started.
+[2026-07-26 14:10:54.388][T259381][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-22] started.
+[2026-07-26 14:10:54.389][T259251][INFO ][TcpServer.cpp:193] enableWorkPool() - WorkThreadPool start, size=8
+[2026-07-26 14:10:54.389][T259382][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-22] started.
+[2026-07-26 14:10:54.389][T259383][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-23] started.
+[2026-07-26 14:10:54.389][T259252][INFO ][TcpServer.cpp:193] enableWorkPool() - WorkThreadPool start, size=8
+[2026-07-26 14:10:54.389][T259384][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-23] started.
+[2026-07-26 14:10:54.398][T259249][INFO ][ZookeeperUtil.cc:124] Start() - zookeeper_init success!
+[2026-07-26 14:10:54.401][T259250][INFO ][ZookeeperUtil.cc:124] Start() - zookeeper_init success!
+[2026-07-26 14:10:54.401][T259248][INFO ][ZookeeperUtil.cc:124] Start() - zookeeper_init success!
+[2026-07-26 14:10:54.403][T259251][INFO ][ZookeeperUtil.cc:124] Start() - zookeeper_init success!
+[2026-07-26 14:10:54.403][T259252][INFO ][ZookeeperUtil.cc:124] Start() - zookeeper_init success!
+[2026-07-26 14:10:54.419][T259249][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/SchedulerService
+[2026-07-26 14:10:54.419][T259248][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/JobService
+[2026-07-26 14:10:54.419][T259250][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/WorkerManagerService
+[2026-07-26 14:10:54.419][T259251][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/WorkerService
+[2026-07-26 14:10:54.419][T259252][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/ResultCollectorService
+[2026-07-26 14:10:54.424][T259249][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/SchedulerService/RescheduleShard
+[2026-07-26 14:10:54.424][T259248][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/JobService/CancelJob
+[2026-07-26 14:10:54.424][T259250][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/WorkerManagerService/ListWorkers
+[2026-07-26 14:10:54.425][T259251][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/WorkerService/CancelShard
+[2026-07-26 14:10:54.445][T259249][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/SchedulerService/RescheduleShard/instance-0000000000
+[2026-07-26 14:10:54.445][T259249][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/SchedulerService/RescheduleShard/instance-0000000000 -> 127.0.0.1:9002
+[2026-07-26 14:10:54.445][T259252][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/ResultCollectorService/ReportShardResult
+[2026-07-26 14:10:54.447][T259248][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/JobService/CancelJob/instance-0000000000
+[2026-07-26 14:10:54.447][T259248][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/JobService/CancelJob/instance-0000000000 -> 127.0.0.1:9001
+[2026-07-26 14:10:54.448][T259250][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/WorkerManagerService/ListWorkers/instance-0000000000
+[2026-07-26 14:10:54.448][T259250][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/WorkerManagerService/ListWorkers/instance-0000000000 -> 127.0.0.1:9003
+[2026-07-26 14:10:54.448][T259251][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/WorkerService/CancelShard/instance-0000000000
+[2026-07-26 14:10:54.448][T259251][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/WorkerService/CancelShard/instance-0000000000 -> 127.0.0.1:9004
+[2026-07-26 14:10:54.451][T259252][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/ResultCollectorService/ReportShardResult/instance-0000000000
+[2026-07-26 14:10:54.451][T259252][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/ResultCollectorService/ReportShardResult/instance-0000000000 -> 127.0.0.1:9005
+[2026-07-26 14:10:54.454][T259249][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/SchedulerService/ScheduleJob
+[2026-07-26 14:10:54.456][T259250][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/WorkerManagerService/Heartbeat
+[2026-07-26 14:10:54.456][T259248][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/JobService/QueryJob
+[2026-07-26 14:10:54.459][T259249][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/SchedulerService/ScheduleJob/instance-0000000000
+[2026-07-26 14:10:54.459][T259249][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/SchedulerService/ScheduleJob/instance-0000000000 -> 127.0.0.1:9002
+[2026-07-26 14:10:54.459][T259249][INFO ][rpcprovider.cc:248] Run() - RpcProvider start service at ip:127.0.0.1 port:9002, io_threads=16, work_threads=8
+[2026-07-26 14:10:54.459][T259271][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259271, isMainLoop=0
+[2026-07-26 14:10:54.459][T259275][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259275, isMainLoop=0
+[2026-07-26 14:10:54.459][T259281][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259281, isMainLoop=0
+[2026-07-26 14:10:54.459][T259262][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259262, isMainLoop=0
+[2026-07-26 14:10:54.459][T259252][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/ResultCollectorService/ReportShardProgress
+[2026-07-26 14:10:54.459][T259327][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259327, isMainLoop=0
+[2026-07-26 14:10:54.459][T259285][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259285, isMainLoop=0
+[2026-07-26 14:10:54.459][T259251][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/WorkerService/QueryShard
+[2026-07-26 14:10:54.459][T259299][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259299, isMainLoop=0
+[2026-07-26 14:10:54.459][T259309][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259309, isMainLoop=0
+[2026-07-26 14:10:54.459][T259324][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259324, isMainLoop=0
+[2026-07-26 14:10:54.459][T259312][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259312, isMainLoop=0
+[2026-07-26 14:10:54.460][T259297][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259297, isMainLoop=0
+[2026-07-26 14:10:54.460][T259292][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259292, isMainLoop=0
+[2026-07-26 14:10:54.460][T259319][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259319, isMainLoop=0
+[2026-07-26 14:10:54.460][T259304][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259304, isMainLoop=0
+[2026-07-26 14:10:54.460][T259289][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259289, isMainLoop=0
+[2026-07-26 14:10:54.460][T259249][INFO ][TcpServer.cpp:51] start() - TcpServer is running, MainLoop tid: 259249, IO threads: 16
+[2026-07-26 14:10:54.460][T259249][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259249, isMainLoop=1
+[2026-07-26 14:10:54.460][T259265][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259265, isMainLoop=0
+[2026-07-26 14:10:54.462][T259250][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/WorkerManagerService/Heartbeat/instance-0000000000
+[2026-07-26 14:10:54.462][T259250][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/WorkerManagerService/Heartbeat/instance-0000000000 -> 127.0.0.1:9003
+[2026-07-26 14:10:54.462][T259248][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/JobService/QueryJob/instance-0000000000
+[2026-07-26 14:10:54.462][T259248][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/JobService/QueryJob/instance-0000000000 -> 127.0.0.1:9001
+[2026-07-26 14:10:54.467][T259251][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/WorkerService/QueryShard/instance-0000000000
+[2026-07-26 14:10:54.467][T259251][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/WorkerService/QueryShard/instance-0000000000 -> 127.0.0.1:9004
+[2026-07-26 14:10:54.467][T259252][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/ResultCollectorService/ReportShardProgress/instance-0000000000
+[2026-07-26 14:10:54.467][T259252][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/ResultCollectorService/ReportShardProgress/instance-0000000000 -> 127.0.0.1:9005
+[2026-07-26 14:10:54.467][T259252][INFO ][rpcprovider.cc:248] Run() - RpcProvider start service at ip:127.0.0.1 port:9005, io_threads=16, work_threads=8
+[2026-07-26 14:10:54.467][T259301][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259301, isMainLoop=0
+[2026-07-26 14:10:54.467][T259286][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259286, isMainLoop=0
+[2026-07-26 14:10:54.467][T259295][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259295, isMainLoop=0
+[2026-07-26 14:10:54.467][T259305][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259305, isMainLoop=0
+[2026-07-26 14:10:54.467][T259326][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259326, isMainLoop=0
+[2026-07-26 14:10:54.467][T259331][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259331, isMainLoop=0
+[2026-07-26 14:10:54.467][T259263][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259263, isMainLoop=0
+[2026-07-26 14:10:54.467][T259339][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259339, isMainLoop=0
+[2026-07-26 14:10:54.467][T259334][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259334, isMainLoop=0
+[2026-07-26 14:10:54.467][T259267][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259267, isMainLoop=0
+[2026-07-26 14:10:54.467][T259322][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259322, isMainLoop=0
+[2026-07-26 14:10:54.467][T259272][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259272, isMainLoop=0
+[2026-07-26 14:10:54.467][T259344][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259344, isMainLoop=0
+[2026-07-26 14:10:54.467][T259252][INFO ][TcpServer.cpp:51] start() - TcpServer is running, MainLoop tid: 259252, IO threads: 16
+[2026-07-26 14:10:54.467][T259252][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259252, isMainLoop=1
+[2026-07-26 14:10:54.467][T259311][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259311, isMainLoop=0
+[2026-07-26 14:10:54.467][T259315][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259315, isMainLoop=0
+[2026-07-26 14:10:54.467][T259277][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259277, isMainLoop=0
+[2026-07-26 14:10:54.469][T259250][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/WorkerManagerService/RegisterWorker
+[2026-07-26 14:10:54.469][T259248][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/JobService/SubmitJob
+[2026-07-26 14:10:54.469][T259251][INFO ][ZookeeperUtil.cc:180] Create() - znode create success, path:/mprpc/services/WorkerService/AssignShard
+[2026-07-26 14:10:54.470][T259250][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/WorkerManagerService/RegisterWorker/instance-0000000000
+[2026-07-26 14:10:54.470][T259250][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/WorkerManagerService/RegisterWorker/instance-0000000000 -> 127.0.0.1:9003
+[2026-07-26 14:10:54.470][T259250][INFO ][rpcprovider.cc:248] Run() - RpcProvider start service at ip:127.0.0.1 port:9003, io_threads=16, work_threads=8
+[2026-07-26 14:10:54.470][T259266][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259266, isMainLoop=0
+[2026-07-26 14:10:54.470][T259273][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259273, isMainLoop=0
+[2026-07-26 14:10:54.470][T259279][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259279, isMainLoop=0
+[2026-07-26 14:10:54.471][T259294][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259294, isMainLoop=0
+[2026-07-26 14:10:54.471][T259298][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259298, isMainLoop=0
+[2026-07-26 14:10:54.471][T259302][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259302, isMainLoop=0
+[2026-07-26 14:10:54.471][T259308][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259308, isMainLoop=0
+[2026-07-26 14:10:54.471][T259290][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259290, isMainLoop=0
+[2026-07-26 14:10:54.471][T259282][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259282, isMainLoop=0
+[2026-07-26 14:10:54.471][T259313][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259313, isMainLoop=0
+[2026-07-26 14:10:54.471][T259270][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259270, isMainLoop=0
+[2026-07-26 14:10:54.471][T259333][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259333, isMainLoop=0
+[2026-07-26 14:10:54.471][T259250][INFO ][TcpServer.cpp:51] start() - TcpServer is running, MainLoop tid: 259250, IO threads: 16
+[2026-07-26 14:10:54.471][T259250][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259250, isMainLoop=1
+[2026-07-26 14:10:54.471][T259330][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259330, isMainLoop=0
+[2026-07-26 14:10:54.471][T259323][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259323, isMainLoop=0
+[2026-07-26 14:10:54.471][T259287][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259287, isMainLoop=0
+[2026-07-26 14:10:54.471][T259316][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259316, isMainLoop=0
+[2026-07-26 14:10:54.472][T259248][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/JobService/SubmitJob/instance-0000000000
+[2026-07-26 14:10:54.472][T259248][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/JobService/SubmitJob/instance-0000000000 -> 127.0.0.1:9001
+[2026-07-26 14:10:54.472][T259248][INFO ][rpcprovider.cc:248] Run() - RpcProvider start service at ip:127.0.0.1 port:9001, io_threads=16, work_threads=8
+[2026-07-26 14:10:54.472][T259251][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/WorkerService/AssignShard/instance-0000000000
+[2026-07-26 14:10:54.472][T259251][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/WorkerService/AssignShard/instance-0000000000 -> 127.0.0.1:9004
+[2026-07-26 14:10:54.472][T259251][INFO ][rpcprovider.cc:248] Run() - RpcProvider start service at ip:127.0.0.1 port:9004, io_threads=16, work_threads=8
+[2026-07-26 14:10:54.472][T259342][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259342, isMainLoop=0
+[2026-07-26 14:10:54.472][T259276][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259276, isMainLoop=0
+[2026-07-26 14:10:54.472][T259264][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259264, isMainLoop=0
+[2026-07-26 14:10:54.472][T259296][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259296, isMainLoop=0
+[2026-07-26 14:10:54.472][T259318][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259318, isMainLoop=0
+[2026-07-26 14:10:54.472][T259328][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259328, isMainLoop=0
+[2026-07-26 14:10:54.472][T259278][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259278, isMainLoop=0
+[2026-07-26 14:10:54.472][T259269][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259269, isMainLoop=0
+[2026-07-26 14:10:54.472][T259261][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259261, isMainLoop=0
+[2026-07-26 14:10:54.472][T259332][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259332, isMainLoop=0
+[2026-07-26 14:10:54.472][T259288][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259288, isMainLoop=0
+[2026-07-26 14:10:54.472][T259338][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259338, isMainLoop=0
+[2026-07-26 14:10:54.472][T259283][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259283, isMainLoop=0
+[2026-07-26 14:10:54.472][T259303][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259303, isMainLoop=0
+[2026-07-26 14:10:54.472][T259300][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259300, isMainLoop=0
+[2026-07-26 14:10:54.472][T259307][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259307, isMainLoop=0
+[2026-07-26 14:10:54.472][T259248][INFO ][TcpServer.cpp:51] start() - TcpServer is running, MainLoop tid: 259248, IO threads: 16
+[2026-07-26 14:10:54.472][T259280][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259280, isMainLoop=0
+[2026-07-26 14:10:54.472][T259248][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259248, isMainLoop=1
+[2026-07-26 14:10:54.472][T259268][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259268, isMainLoop=0
+[2026-07-26 14:10:54.472][T259306][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259306, isMainLoop=0
+[2026-07-26 14:10:54.472][T259291][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259291, isMainLoop=0
+[2026-07-26 14:10:54.472][T259284][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259284, isMainLoop=0
+[2026-07-26 14:10:54.472][T259310][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259310, isMainLoop=0
+[2026-07-26 14:10:54.473][T259320][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259320, isMainLoop=0
+[2026-07-26 14:10:54.473][T259325][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259325, isMainLoop=0
+[2026-07-26 14:10:54.473][T259329][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259329, isMainLoop=0
+[2026-07-26 14:10:54.473][T259317][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259317, isMainLoop=0
+[2026-07-26 14:10:54.473][T259335][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259335, isMainLoop=0
+[2026-07-26 14:10:54.473][T259321][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259321, isMainLoop=0
+[2026-07-26 14:10:54.473][T259314][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259314, isMainLoop=0
+[2026-07-26 14:10:54.473][T259274][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259274, isMainLoop=0
+[2026-07-26 14:10:54.473][T259251][INFO ][TcpServer.cpp:51] start() - TcpServer is running, MainLoop tid: 259251, IO threads: 16
+[2026-07-26 14:10:54.473][T259251][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259251, isMainLoop=1
+[2026-07-26 14:10:54.473][T259293][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259293, isMainLoop=0
+[2026-07-26 14:10:54.473][T259343][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=259343, isMainLoop=0
+[2026-07-26 14:11:16.428][T260286][INFO ][mprpcapplication.cc:79] Init() - MprpcApplication init success, config_file=video_platform/conf/job_service.conf
+[2026-07-26 14:11:16.428][T260286][INFO ][rpcprovider.cc:134] NotifyService() - Register service: JobService, methods=3
+[2026-07-26 14:11:16.428][T260286][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: SubmitJob
+[2026-07-26 14:11:16.428][T260286][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: QueryJob
+[2026-07-26 14:11:16.428][T260286][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: CancelJob
+[2026-07-26 14:11:16.430][T260286][INFO ][ThreadPool.cpp:58] start() - ThreadPool [IO_LOOP] starting, initThreadSize=16
+[2026-07-26 14:11:16.430][T260288][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-0] started.
+[2026-07-26 14:11:16.430][T260289][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-1] started.
+[2026-07-26 14:11:16.430][T260290][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-2] started.
+[2026-07-26 14:11:16.431][T260291][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-3] started.
+[2026-07-26 14:11:16.431][T260292][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-4] started.
+[2026-07-26 14:11:16.440][T260293][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-5] started.
+[2026-07-26 14:11:16.440][T260294][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-6] started.
+[2026-07-26 14:11:16.440][T260295][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-7] started.
+[2026-07-26 14:11:16.440][T260296][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-8] started.
+[2026-07-26 14:11:16.441][T260297][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-9] started.
+[2026-07-26 14:11:16.441][T260298][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-10] started.
+[2026-07-26 14:11:16.441][T260299][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-11] started.
+[2026-07-26 14:11:16.441][T260300][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-12] started.
+[2026-07-26 14:11:16.441][T260301][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-13] started.
+[2026-07-26 14:11:16.442][T260302][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-14] started.
+[2026-07-26 14:11:16.442][T260303][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-15] started.
+[2026-07-26 14:11:16.442][T260286][INFO ][ThreadPool.cpp:58] start() - ThreadPool [WORKER] starting, initThreadSize=8
+[2026-07-26 14:11:16.442][T260304][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-16] started.
+[2026-07-26 14:11:16.443][T260305][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-17] started.
+[2026-07-26 14:11:16.443][T260306][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-18] started.
+[2026-07-26 14:11:16.443][T260307][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-19] started.
+[2026-07-26 14:11:16.444][T260308][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-20] started.
+[2026-07-26 14:11:16.444][T260309][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-21] started.
+[2026-07-26 14:11:16.444][T260310][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-22] started.
+[2026-07-26 14:11:16.444][T260286][INFO ][TcpServer.cpp:193] enableWorkPool() - WorkThreadPool start, size=8
+[2026-07-26 14:11:16.444][T260311][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-23] started.
+[2026-07-26 14:11:16.449][T260286][INFO ][ZookeeperUtil.cc:124] Start() - zookeeper_init success!
+[2026-07-26 14:11:16.453][T260286][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/JobService/CancelJob/instance-0000000001
+[2026-07-26 14:11:16.453][T260286][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/JobService/CancelJob/instance-0000000001 -> 127.0.0.1:9001
+[2026-07-26 14:11:16.456][T260286][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/JobService/QueryJob/instance-0000000001
+[2026-07-26 14:11:16.456][T260286][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/JobService/QueryJob/instance-0000000001 -> 127.0.0.1:9001
+[2026-07-26 14:11:16.459][T260286][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/JobService/SubmitJob/instance-0000000001
+[2026-07-26 14:11:16.459][T260286][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/JobService/SubmitJob/instance-0000000001 -> 127.0.0.1:9001
+[2026-07-26 14:11:16.459][T260286][INFO ][rpcprovider.cc:248] Run() - RpcProvider start service at ip:127.0.0.1 port:9001, io_threads=16, work_threads=8
+[2026-07-26 14:11:16.459][T260289][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260289, isMainLoop=0
+[2026-07-26 14:11:16.459][T260303][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260303, isMainLoop=0
+[2026-07-26 14:11:16.459][T260288][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260288, isMainLoop=0
+[2026-07-26 14:11:16.459][T260293][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260293, isMainLoop=0
+[2026-07-26 14:11:16.459][T260294][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260294, isMainLoop=0
+[2026-07-26 14:11:16.459][T260295][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260295, isMainLoop=0
+[2026-07-26 14:11:16.459][T260292][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260292, isMainLoop=0
+[2026-07-26 14:11:16.459][T260298][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260298, isMainLoop=0
+[2026-07-26 14:11:16.459][T260299][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260299, isMainLoop=0
+[2026-07-26 14:11:16.459][T260300][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260300, isMainLoop=0
+[2026-07-26 14:11:16.459][T260296][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260296, isMainLoop=0
+[2026-07-26 14:11:16.459][T260297][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260297, isMainLoop=0
+[2026-07-26 14:11:16.459][T260301][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260301, isMainLoop=0
+[2026-07-26 14:11:16.459][T260286][INFO ][TcpServer.cpp:51] start() - TcpServer is running, MainLoop tid: 260286, IO threads: 16
+[2026-07-26 14:11:16.459][T260291][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260291, isMainLoop=0
+[2026-07-26 14:11:16.459][T260302][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260302, isMainLoop=0
+[2026-07-26 14:11:16.459][T260286][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260286, isMainLoop=1
+[2026-07-26 14:11:16.459][T260290][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260290, isMainLoop=0
+[2026-07-26 14:11:37.988][T260479][INFO ][mprpcapplication.cc:79] Init() - MprpcApplication init success, config_file=video_platform/conf/job_service.conf
+[2026-07-26 14:11:37.988][T260479][INFO ][rpcprovider.cc:134] NotifyService() - Register service: JobService, methods=3
+[2026-07-26 14:11:37.988][T260479][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: SubmitJob
+[2026-07-26 14:11:37.988][T260479][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: QueryJob
+[2026-07-26 14:11:37.988][T260479][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: CancelJob
+[2026-07-26 14:11:37.990][T260479][INFO ][ThreadPool.cpp:58] start() - ThreadPool [IO_LOOP] starting, initThreadSize=16
+[2026-07-26 14:11:37.990][T260481][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-0] started.
+[2026-07-26 14:11:37.990][T260482][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-1] started.
+[2026-07-26 14:11:37.990][T260483][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-2] started.
+[2026-07-26 14:11:37.991][T260484][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-3] started.
+[2026-07-26 14:11:37.991][T260485][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-4] started.
+[2026-07-26 14:11:37.991][T260486][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-5] started.
+[2026-07-26 14:11:37.991][T260487][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-6] started.
+[2026-07-26 14:11:37.991][T260488][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-7] started.
+[2026-07-26 14:11:37.991][T260489][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-8] started.
+[2026-07-26 14:11:37.992][T260490][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-9] started.
+[2026-07-26 14:11:37.992][T260491][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-10] started.
+[2026-07-26 14:11:37.992][T260492][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-11] started.
+[2026-07-26 14:11:37.992][T260493][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-12] started.
+[2026-07-26 14:11:37.992][T260494][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-13] started.
+[2026-07-26 14:11:37.993][T260495][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-14] started.
+[2026-07-26 14:11:37.993][T260496][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-15] started.
+[2026-07-26 14:11:38.001][T260479][INFO ][ThreadPool.cpp:58] start() - ThreadPool [WORKER] starting, initThreadSize=8
+[2026-07-26 14:11:38.001][T260497][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-16] started.
+[2026-07-26 14:11:38.001][T260498][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-17] started.
+[2026-07-26 14:11:38.002][T260499][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-18] started.
+[2026-07-26 14:11:38.002][T260501][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-20] started.
+[2026-07-26 14:11:38.002][T260502][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-21] started.
+[2026-07-26 14:11:38.003][T260503][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-22] started.
+[2026-07-26 14:11:38.003][T260479][INFO ][TcpServer.cpp:193] enableWorkPool() - WorkThreadPool start, size=8
+[2026-07-26 14:11:38.003][T260504][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-23] started.
+[2026-07-26 14:11:38.004][T260500][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-19] started.
+[2026-07-26 14:11:38.008][T260479][INFO ][ZookeeperUtil.cc:124] Start() - zookeeper_init success!
+[2026-07-26 14:11:38.013][T260479][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/JobService/CancelJob/instance-0000000002
+[2026-07-26 14:11:38.013][T260479][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/JobService/CancelJob/instance-0000000002 -> 127.0.0.1:9001
+[2026-07-26 14:11:38.017][T260479][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/JobService/QueryJob/instance-0000000002
+[2026-07-26 14:11:38.017][T260479][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/JobService/QueryJob/instance-0000000002 -> 127.0.0.1:9001
+[2026-07-26 14:11:38.020][T260479][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/JobService/SubmitJob/instance-0000000002
+[2026-07-26 14:11:38.020][T260479][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/JobService/SubmitJob/instance-0000000002 -> 127.0.0.1:9001
+[2026-07-26 14:11:38.020][T260479][INFO ][rpcprovider.cc:248] Run() - RpcProvider start service at ip:127.0.0.1 port:9001, io_threads=16, work_threads=8
+[2026-07-26 14:11:38.021][T260482][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260482, isMainLoop=0
+[2026-07-26 14:11:38.021][T260496][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260496, isMainLoop=0
+[2026-07-26 14:11:38.021][T260483][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260483, isMainLoop=0
+[2026-07-26 14:11:38.021][T260484][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260484, isMainLoop=0
+[2026-07-26 14:11:38.021][T260485][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260485, isMainLoop=0
+[2026-07-26 14:11:38.021][T260486][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260486, isMainLoop=0
+[2026-07-26 14:11:38.021][T260487][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260487, isMainLoop=0
+[2026-07-26 14:11:38.021][T260488][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260488, isMainLoop=0
+[2026-07-26 14:11:38.021][T260490][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260490, isMainLoop=0
+[2026-07-26 14:11:38.021][T260489][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260489, isMainLoop=0
+[2026-07-26 14:11:38.021][T260493][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260493, isMainLoop=0
+[2026-07-26 14:11:38.021][T260494][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260494, isMainLoop=0
+[2026-07-26 14:11:38.021][T260481][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260481, isMainLoop=0
+[2026-07-26 14:11:38.021][T260479][INFO ][TcpServer.cpp:51] start() - TcpServer is running, MainLoop tid: 260479, IO threads: 16
+[2026-07-26 14:11:38.021][T260479][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260479, isMainLoop=1
+[2026-07-26 14:11:38.021][T260495][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260495, isMainLoop=0
+[2026-07-26 14:11:38.021][T260492][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260492, isMainLoop=0
+[2026-07-26 14:11:38.021][T260491][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260491, isMainLoop=0
+[2026-07-26 14:12:44.395][T260765][INFO ][mprpcapplication.cc:79] Init() - MprpcApplication init success, config_file=video_platform/conf/scheduler.conf
+[2026-07-26 14:12:44.395][T260765][INFO ][rpcprovider.cc:134] NotifyService() - Register service: SchedulerService, methods=2
+[2026-07-26 14:12:44.395][T260765][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: ScheduleJob
+[2026-07-26 14:12:44.395][T260765][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: RescheduleShard
+[2026-07-26 14:12:44.397][T260765][INFO ][ThreadPool.cpp:58] start() - ThreadPool [IO_LOOP] starting, initThreadSize=16
+[2026-07-26 14:12:44.397][T260767][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-0] started.
+[2026-07-26 14:12:44.397][T260768][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-1] started.
+[2026-07-26 14:12:44.397][T260769][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-2] started.
+[2026-07-26 14:12:44.397][T260770][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-3] started.
+[2026-07-26 14:12:44.398][T260771][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-4] started.
+[2026-07-26 14:12:44.398][T260772][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-5] started.
+[2026-07-26 14:12:44.398][T260773][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-6] started.
+[2026-07-26 14:12:44.398][T260774][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-7] started.
+[2026-07-26 14:12:44.399][T260775][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-8] started.
+[2026-07-26 14:12:44.399][T260776][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-9] started.
+[2026-07-26 14:12:44.399][T260777][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-10] started.
+[2026-07-26 14:12:44.399][T260778][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-11] started.
+[2026-07-26 14:12:44.399][T260779][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-12] started.
+[2026-07-26 14:12:44.400][T260780][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-13] started.
+[2026-07-26 14:12:44.400][T260781][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-14] started.
+[2026-07-26 14:12:44.400][T260782][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-15] started.
+[2026-07-26 14:12:44.400][T260765][INFO ][ThreadPool.cpp:58] start() - ThreadPool [WORKER] starting, initThreadSize=8
+[2026-07-26 14:12:44.400][T260783][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-16] started.
+[2026-07-26 14:12:44.401][T260784][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-17] started.
+[2026-07-26 14:12:44.401][T260785][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-18] started.
+[2026-07-26 14:12:44.401][T260786][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-19] started.
+[2026-07-26 14:12:44.401][T260787][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-20] started.
+[2026-07-26 14:12:44.401][T260788][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-21] started.
+[2026-07-26 14:12:44.402][T260765][INFO ][TcpServer.cpp:193] enableWorkPool() - WorkThreadPool start, size=8
+[2026-07-26 14:12:44.402][T260790][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-23] started.
+[2026-07-26 14:12:44.402][T260789][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-22] started.
+[2026-07-26 14:12:44.408][T260765][INFO ][ZookeeperUtil.cc:124] Start() - zookeeper_init success!
+[2026-07-26 14:12:44.413][T260765][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/SchedulerService/RescheduleShard/instance-0000000001
+[2026-07-26 14:12:44.413][T260765][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/SchedulerService/RescheduleShard/instance-0000000001 -> 127.0.0.1:9002
+[2026-07-26 14:12:44.416][T260765][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/SchedulerService/ScheduleJob/instance-0000000001
+[2026-07-26 14:12:44.416][T260765][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/SchedulerService/ScheduleJob/instance-0000000001 -> 127.0.0.1:9002
+[2026-07-26 14:12:44.416][T260765][INFO ][rpcprovider.cc:248] Run() - RpcProvider start service at ip:127.0.0.1 port:9002, io_threads=16, work_threads=8
+[2026-07-26 14:12:44.416][T260767][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260767, isMainLoop=0
+[2026-07-26 14:12:44.416][T260771][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260771, isMainLoop=0
+[2026-07-26 14:12:44.416][T260772][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260772, isMainLoop=0
+[2026-07-26 14:12:44.416][T260768][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260768, isMainLoop=0
+[2026-07-26 14:12:44.416][T260782][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260782, isMainLoop=0
+[2026-07-26 14:12:44.416][T260774][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260774, isMainLoop=0
+[2026-07-26 14:12:44.416][T260777][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260777, isMainLoop=0
+[2026-07-26 14:12:44.416][T260770][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260770, isMainLoop=0
+[2026-07-26 14:12:44.416][T260778][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260778, isMainLoop=0
+[2026-07-26 14:12:44.416][T260776][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260776, isMainLoop=0
+[2026-07-26 14:12:44.416][T260780][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260780, isMainLoop=0
+[2026-07-26 14:12:44.416][T260779][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260779, isMainLoop=0
+[2026-07-26 14:12:44.416][T260765][INFO ][TcpServer.cpp:51] start() - TcpServer is running, MainLoop tid: 260765, IO threads: 16
+[2026-07-26 14:12:44.416][T260769][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260769, isMainLoop=0
+[2026-07-26 14:12:44.416][T260765][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260765, isMainLoop=1
+[2026-07-26 14:12:44.416][T260773][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260773, isMainLoop=0
+[2026-07-26 14:12:44.416][T260781][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260781, isMainLoop=0
+[2026-07-26 14:12:44.416][T260775][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260775, isMainLoop=0
+[2026-07-26 14:12:50.207][T260848][INFO ][mprpcapplication.cc:79] Init() - MprpcApplication init success, config_file=video_platform/conf/worker_manager.conf
+[2026-07-26 14:12:50.207][T260848][INFO ][rpcprovider.cc:134] NotifyService() - Register service: WorkerManagerService, methods=3
+[2026-07-26 14:12:50.207][T260848][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: RegisterWorker
+[2026-07-26 14:12:50.207][T260848][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: Heartbeat
+[2026-07-26 14:12:50.207][T260848][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: ListWorkers
+[2026-07-26 14:12:50.208][T260848][INFO ][ThreadPool.cpp:58] start() - ThreadPool [IO_LOOP] starting, initThreadSize=16
+[2026-07-26 14:12:50.208][T260850][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-0] started.
+[2026-07-26 14:12:50.208][T260851][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-1] started.
+[2026-07-26 14:12:50.209][T260852][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-2] started.
+[2026-07-26 14:12:50.209][T260853][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-3] started.
+[2026-07-26 14:12:50.209][T260854][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-4] started.
+[2026-07-26 14:12:50.209][T260855][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-5] started.
+[2026-07-26 14:12:50.209][T260856][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-6] started.
+[2026-07-26 14:12:50.210][T260857][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-7] started.
+[2026-07-26 14:12:50.210][T260858][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-8] started.
+[2026-07-26 14:12:50.210][T260859][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-9] started.
+[2026-07-26 14:12:50.210][T260860][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-10] started.
+[2026-07-26 14:12:50.210][T260861][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-11] started.
+[2026-07-26 14:12:50.210][T260862][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-12] started.
+[2026-07-26 14:12:50.211][T260864][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-14] started.
+[2026-07-26 14:12:50.211][T260865][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-15] started.
+[2026-07-26 14:12:50.211][T260848][INFO ][ThreadPool.cpp:58] start() - ThreadPool [WORKER] starting, initThreadSize=8
+[2026-07-26 14:12:50.211][T260866][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-16] started.
+[2026-07-26 14:12:50.212][T260863][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-13] started.
+[2026-07-26 14:12:50.212][T260867][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-17] started.
+[2026-07-26 14:12:50.212][T260868][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-18] started.
+[2026-07-26 14:12:50.212][T260869][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-19] started.
+[2026-07-26 14:12:50.212][T260870][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-20] started.
+[2026-07-26 14:12:50.212][T260871][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-21] started.
+[2026-07-26 14:12:50.213][T260872][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-22] started.
+[2026-07-26 14:12:50.213][T260848][INFO ][TcpServer.cpp:193] enableWorkPool() - WorkThreadPool start, size=8
+[2026-07-26 14:12:50.213][T260873][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-23] started.
+[2026-07-26 14:12:50.219][T260848][INFO ][ZookeeperUtil.cc:124] Start() - zookeeper_init success!
+[2026-07-26 14:12:50.222][T260848][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/WorkerManagerService/ListWorkers/instance-0000000001
+[2026-07-26 14:12:50.222][T260848][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/WorkerManagerService/ListWorkers/instance-0000000001 -> 127.0.0.1:9003
+[2026-07-26 14:12:50.226][T260848][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/WorkerManagerService/Heartbeat/instance-0000000001
+[2026-07-26 14:12:50.226][T260848][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/WorkerManagerService/Heartbeat/instance-0000000001 -> 127.0.0.1:9003
+[2026-07-26 14:12:50.228][T260848][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/WorkerManagerService/RegisterWorker/instance-0000000001
+[2026-07-26 14:12:50.228][T260848][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/WorkerManagerService/RegisterWorker/instance-0000000001 -> 127.0.0.1:9003
+[2026-07-26 14:12:50.228][T260848][INFO ][rpcprovider.cc:248] Run() - RpcProvider start service at ip:127.0.0.1 port:9003, io_threads=16, work_threads=8
+[2026-07-26 14:12:50.228][T260854][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260854, isMainLoop=0
+[2026-07-26 14:12:50.229][T260856][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260856, isMainLoop=0
+[2026-07-26 14:12:50.229][T260852][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260852, isMainLoop=0
+[2026-07-26 14:12:50.229][T260858][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260858, isMainLoop=0
+[2026-07-26 14:12:50.229][T260859][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260859, isMainLoop=0
+[2026-07-26 14:12:50.229][T260853][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260853, isMainLoop=0
+[2026-07-26 14:12:50.229][T260851][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260851, isMainLoop=0
+[2026-07-26 14:12:50.229][T260862][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260862, isMainLoop=0
+[2026-07-26 14:12:50.229][T260860][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260860, isMainLoop=0
+[2026-07-26 14:12:50.229][T260863][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260863, isMainLoop=0
+[2026-07-26 14:12:50.229][T260848][INFO ][TcpServer.cpp:51] start() - TcpServer is running, MainLoop tid: 260848, IO threads: 16
+[2026-07-26 14:12:50.229][T260857][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260857, isMainLoop=0
+[2026-07-26 14:12:50.229][T260861][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260861, isMainLoop=0
+[2026-07-26 14:12:50.229][T260848][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260848, isMainLoop=1
+[2026-07-26 14:12:50.229][T260855][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260855, isMainLoop=0
+[2026-07-26 14:12:50.229][T260850][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260850, isMainLoop=0
+[2026-07-26 14:12:50.229][T260865][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260865, isMainLoop=0
+[2026-07-26 14:12:50.229][T260864][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260864, isMainLoop=0
+[2026-07-26 14:12:54.695][T260920][INFO ][mprpcapplication.cc:79] Init() - MprpcApplication init success, config_file=video_platform/conf/transcode_worker.conf
+[2026-07-26 14:12:54.695][T260920][INFO ][rpcprovider.cc:134] NotifyService() - Register service: WorkerService, methods=3
+[2026-07-26 14:12:54.695][T260920][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: AssignShard
+[2026-07-26 14:12:54.695][T260920][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: CancelShard
+[2026-07-26 14:12:54.695][T260920][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: QueryShard
+[2026-07-26 14:12:54.696][T260920][INFO ][ThreadPool.cpp:58] start() - ThreadPool [IO_LOOP] starting, initThreadSize=16
+[2026-07-26 14:12:54.696][T260922][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-0] started.
+[2026-07-26 14:12:54.697][T260923][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-1] started.
+[2026-07-26 14:12:54.697][T260924][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-2] started.
+[2026-07-26 14:12:54.697][T260925][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-3] started.
+[2026-07-26 14:12:54.697][T260926][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-4] started.
+[2026-07-26 14:12:54.698][T260927][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-5] started.
+[2026-07-26 14:12:54.698][T260928][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-6] started.
+[2026-07-26 14:12:54.698][T260929][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-7] started.
+[2026-07-26 14:12:54.701][T260930][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-8] started.
+[2026-07-26 14:12:54.701][T260931][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-9] started.
+[2026-07-26 14:12:54.702][T260932][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-10] started.
+[2026-07-26 14:12:54.702][T260933][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-11] started.
+[2026-07-26 14:12:54.702][T260934][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-12] started.
+[2026-07-26 14:12:54.702][T260935][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-13] started.
+[2026-07-26 14:12:54.703][T260936][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-14] started.
+[2026-07-26 14:12:54.703][T260937][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-15] started.
+[2026-07-26 14:12:54.703][T260920][INFO ][ThreadPool.cpp:58] start() - ThreadPool [WORKER] starting, initThreadSize=8
+[2026-07-26 14:12:54.704][T260938][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-16] started.
+[2026-07-26 14:12:54.704][T260939][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-17] started.
+[2026-07-26 14:12:54.704][T260940][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-18] started.
+[2026-07-26 14:12:54.704][T260941][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-19] started.
+[2026-07-26 14:12:54.704][T260942][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-20] started.
+[2026-07-26 14:12:54.705][T260943][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-21] started.
+[2026-07-26 14:12:54.705][T260944][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-22] started.
+[2026-07-26 14:12:54.705][T260920][INFO ][TcpServer.cpp:193] enableWorkPool() - WorkThreadPool start, size=8
+[2026-07-26 14:12:54.705][T260945][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-23] started.
+[2026-07-26 14:12:54.712][T260920][INFO ][ZookeeperUtil.cc:124] Start() - zookeeper_init success!
+[2026-07-26 14:12:54.715][T260920][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/WorkerService/CancelShard/instance-0000000001
+[2026-07-26 14:12:54.715][T260920][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/WorkerService/CancelShard/instance-0000000001 -> 127.0.0.1:9004
+[2026-07-26 14:12:54.719][T260920][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/WorkerService/QueryShard/instance-0000000001
+[2026-07-26 14:12:54.719][T260920][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/WorkerService/QueryShard/instance-0000000001 -> 127.0.0.1:9004
+[2026-07-26 14:12:54.721][T260920][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/WorkerService/AssignShard/instance-0000000001
+[2026-07-26 14:12:54.721][T260920][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/WorkerService/AssignShard/instance-0000000001 -> 127.0.0.1:9004
+[2026-07-26 14:12:54.721][T260920][INFO ][rpcprovider.cc:248] Run() - RpcProvider start service at ip:127.0.0.1 port:9004, io_threads=16, work_threads=8
+[2026-07-26 14:12:54.721][T260924][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260924, isMainLoop=0
+[2026-07-26 14:12:54.721][T260925][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260925, isMainLoop=0
+[2026-07-26 14:12:54.721][T260927][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260927, isMainLoop=0
+[2026-07-26 14:12:54.721][T260926][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260926, isMainLoop=0
+[2026-07-26 14:12:54.721][T260928][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260928, isMainLoop=0
+[2026-07-26 14:12:54.721][T260931][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260931, isMainLoop=0
+[2026-07-26 14:12:54.721][T260932][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260932, isMainLoop=0
+[2026-07-26 14:12:54.721][T260933][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260933, isMainLoop=0
+[2026-07-26 14:12:54.721][T260935][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260935, isMainLoop=0
+[2026-07-26 14:12:54.721][T260936][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260936, isMainLoop=0
+[2026-07-26 14:12:54.721][T260930][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260930, isMainLoop=0
+[2026-07-26 14:12:54.721][T260922][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260922, isMainLoop=0
+[2026-07-26 14:12:54.721][T260929][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260929, isMainLoop=0
+[2026-07-26 14:12:54.721][T260920][INFO ][TcpServer.cpp:51] start() - TcpServer is running, MainLoop tid: 260920, IO threads: 16
+[2026-07-26 14:12:54.721][T260920][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260920, isMainLoop=1
+[2026-07-26 14:12:54.721][T260934][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260934, isMainLoop=0
+[2026-07-26 14:12:54.721][T260937][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260937, isMainLoop=0
+[2026-07-26 14:12:54.721][T260923][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=260923, isMainLoop=0
+[2026-07-26 14:13:04.922][T261036][INFO ][mprpcapplication.cc:79] Init() - MprpcApplication init success, config_file=video_platform/conf/result_collector.conf
+[2026-07-26 14:13:04.922][T261036][INFO ][rpcprovider.cc:134] NotifyService() - Register service: ResultCollectorService, methods=2
+[2026-07-26 14:13:04.922][T261036][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: ReportShardProgress
+[2026-07-26 14:13:04.922][T261036][DEBUG][rpcprovider.cc:141] NotifyService() -   - method: ReportShardResult
+[2026-07-26 14:13:04.924][T261036][INFO ][ThreadPool.cpp:58] start() - ThreadPool [IO_LOOP] starting, initThreadSize=16
+[2026-07-26 14:13:04.924][T261038][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-0] started.
+[2026-07-26 14:13:04.924][T261039][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-1] started.
+[2026-07-26 14:13:04.924][T261040][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-2] started.
+[2026-07-26 14:13:04.925][T261041][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-3] started.
+[2026-07-26 14:13:04.925][T261042][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-4] started.
+[2026-07-26 14:13:04.925][T261043][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-5] started.
+[2026-07-26 14:13:04.925][T261044][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-6] started.
+[2026-07-26 14:13:04.925][T261045][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-7] started.
+[2026-07-26 14:13:04.925][T261046][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-8] started.
+[2026-07-26 14:13:04.925][T261047][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-9] started.
+[2026-07-26 14:13:04.926][T261048][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-10] started.
+[2026-07-26 14:13:04.926][T261049][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-11] started.
+[2026-07-26 14:13:04.926][T261050][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-12] started.
+[2026-07-26 14:13:04.926][T261051][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-13] started.
+[2026-07-26 14:13:04.926][T261052][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-14] started.
+[2026-07-26 14:13:04.926][T261053][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [IO_LOOP-15] started.
+[2026-07-26 14:13:04.927][T261036][INFO ][ThreadPool.cpp:58] start() - ThreadPool [WORKER] starting, initThreadSize=8
+[2026-07-26 14:13:04.927][T261054][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-16] started.
+[2026-07-26 14:13:04.927][T261055][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-17] started.
+[2026-07-26 14:13:04.927][T261056][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-18] started.
+[2026-07-26 14:13:04.927][T261057][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-19] started.
+[2026-07-26 14:13:04.927][T261058][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-20] started.
+[2026-07-26 14:13:04.928][T261059][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-21] started.
+[2026-07-26 14:13:04.928][T261060][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-22] started.
+[2026-07-26 14:13:04.928][T261036][INFO ][TcpServer.cpp:193] enableWorkPool() - WorkThreadPool start, size=8
+[2026-07-26 14:13:04.928][T261061][DEBUG][ThreadPool.cpp:119] threadFunc() - Thread [WORKER-23] started.
+[2026-07-26 14:13:04.935][T261036][INFO ][ZookeeperUtil.cc:124] Start() - zookeeper_init success!
+[2026-07-26 14:13:04.939][T261036][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/ResultCollectorService/ReportShardResult/instance-0000000001
+[2026-07-26 14:13:04.939][T261036][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/ResultCollectorService/ReportShardResult/instance-0000000001 -> 127.0.0.1:9005
+[2026-07-26 14:13:04.942][T261036][INFO ][ZookeeperUtil.cc:158] Create() - znode sequence create success, path:/mprpc/services/ResultCollectorService/ReportShardProgress/instance-0000000001
+[2026-07-26 14:13:04.942][T261036][INFO ][rpcprovider.cc:243] Run() - Register rpc instance: /mprpc/services/ResultCollectorService/ReportShardProgress/instance-0000000001 -> 127.0.0.1:9005
+[2026-07-26 14:13:04.942][T261036][INFO ][rpcprovider.cc:248] Run() - RpcProvider start service at ip:127.0.0.1 port:9005, io_threads=16, work_threads=8
+[2026-07-26 14:13:04.942][T261040][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261040, isMainLoop=0
+[2026-07-26 14:13:04.942][T261041][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261041, isMainLoop=0
+[2026-07-26 14:13:04.942][T261042][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261042, isMainLoop=0
+[2026-07-26 14:13:04.942][T261043][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261043, isMainLoop=0
+[2026-07-26 14:13:04.942][T261045][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261045, isMainLoop=0
+[2026-07-26 14:13:04.942][T261046][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261046, isMainLoop=0
+[2026-07-26 14:13:04.942][T261047][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261047, isMainLoop=0
+[2026-07-26 14:13:04.942][T261048][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261048, isMainLoop=0
+[2026-07-26 14:13:04.943][T261049][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261049, isMainLoop=0
+[2026-07-26 14:13:04.943][T261050][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261050, isMainLoop=0
+[2026-07-26 14:13:04.943][T261051][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261051, isMainLoop=0
+[2026-07-26 14:13:04.943][T261053][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261053, isMainLoop=0
+[2026-07-26 14:13:04.943][T261039][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261039, isMainLoop=0
+[2026-07-26 14:13:04.943][T261038][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261038, isMainLoop=0
+[2026-07-26 14:13:04.943][T261044][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261044, isMainLoop=0
+[2026-07-26 14:13:04.943][T261036][INFO ][TcpServer.cpp:51] start() - TcpServer is running, MainLoop tid: 261036, IO threads: 16
+[2026-07-26 14:13:04.943][T261036][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261036, isMainLoop=1
+[2026-07-26 14:13:04.943][T261052][DEBUG][EventLoop.cpp:85] run() - EventLoop started, tid=261052, isMainLoop=0

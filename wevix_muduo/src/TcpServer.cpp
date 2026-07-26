@@ -7,11 +7,12 @@
 namespace wevix_muduo
 {
 
-TcpServer::TcpServer(const std::string& ip, uint16_t port, int threadNum)
+TcpServer::TcpServer(const std::string& ip, uint16_t port, int threadNum, int backlog)
     : mainLoop_(new EventLoop(true)) // 设置为主循环
     , threadNum_(threadNum)
     , ioThreadPool_(threadNum, "IO_LOOP")
-    , acceptor_(mainLoop_.get(), ip, port)
+    , acceptor_(mainLoop_.get(), ip, port, backlog)
+    , backlog_(backlog)
 {
     // 1. 设置 Acceptor 发现新连接时的内部回调
     acceptor_.setNewConnectionCallback(
@@ -89,12 +90,7 @@ void TcpServer::handleNewConnection(std::unique_ptr<Socket> clientSock)
     conn->setErrorCallback(std::bind(&TcpServer::handleError, this, std::placeholders::_1));
     conn->setOnMessageCallback(std::bind(&TcpServer::handleMessage, this, std::placeholders::_1, std::placeholders::_2));
     conn->setSendCompleteCallback(std::bind(&TcpServer::handleSendComplete, this, std::placeholders::_1));
-
-    // 3.5 若有帧编解码器，应用到该连接（让 Connection 自动处理粘包/拆包）
-    if (messageCodec_)
-    {
-        conn->setMessageCodec(messageCodec_);
-    }
+    if (messageCodec_) conn->setMessageCodec(messageCodec_);    // 若有帧编解码器，应用到该连接（让 Connection 自动处理粘包/拆包）
 
     // 4. 加入连接管理容器
     {

@@ -188,7 +188,7 @@ bool RecvAll(int fd, char* data, size_t len, int& savedErrno)
 // 进程级复用 ZooKeeper 客户端，避免每次 RPC 都创建/销毁 ZK 会话。
 ZkClient& SharedZkClient()
 {
-    static ZkClient client;
+    static ZkClient client; // 函数内 static，进程生命周期内唯一实例
     return client;
 }
 
@@ -196,7 +196,7 @@ bool EnsureSharedZkClientStarted()
 {
     static bool started = false;
     static std::once_flag once;
-    std::call_once(once, []()
+    std::call_once(once, []()   // 无论多少线程调用，Start() 只执行一次
     {
         started = SharedZkClient().Start();
     });
@@ -886,6 +886,5 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
         RunDone(done);
         return;
     }
-
     RunDone(done);
 }

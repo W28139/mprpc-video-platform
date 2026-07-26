@@ -1,0 +1,50 @@
+syntax = "proto3";
+
+package video_platform;
+
+import "common.proto";
+
+option cc_generic_services = true;
+
+// ============================================================================
+// ResultCollectorService — 结果收集与聚合
+// ============================================================================
+
+message ReportShardProgressRequest {
+    string shard_id    = 1;
+    string job_id      = 2;
+    string worker_id   = 3;
+    string attempt_id  = 4;
+    int32  progress    = 5;   // 0-100
+    string message     = 6;   // 附加信息
+}
+
+message ReportShardProgressResponse {
+    int32  error_code = 1;
+    string error_msg  = 2;
+    bool   recorded   = 3;
+}
+
+message ReportShardResultRequest {
+    string shard_id       = 1;
+    string job_id         = 2;
+    string worker_id      = 3;
+    string attempt_id     = 4;
+    bool   is_success     = 5;
+    int32  exit_code      = 6;   // 执行器退出码，成功时为 0
+    string error_msg      = 7;   // 失败时的错误信息
+    string output_path    = 8;   // 输出文件路径
+    int64  elapsed_ms     = 9;   // 执行耗时
+}
+
+message ReportShardResultResponse {
+    int32  error_code = 1;
+    string error_msg  = 2;
+    bool   accepted   = 3;       // 是否被接受（幂等拒绝返回 true）
+    bool   job_done   = 4;       // 该 shard 是否是 job 的最后一个
+}
+
+service ResultCollectorService {
+    rpc ReportShardProgress(ReportShardProgressRequest) returns (ReportShardProgressResponse);
+    rpc ReportShardResult(ReportShardResultRequest) returns (ReportShardResultResponse);
+}

@@ -1,0 +1,95 @@
+syntax = "proto3";
+
+package video_platform;
+
+import "common.proto";
+
+option cc_generic_services = true;
+
+// ============================================================================
+// WorkerManagerService — Worker 生命周期管理
+// ============================================================================
+
+message RegisterWorkerRequest {
+    string worker_id          = 1;
+    string ip                 = 2;
+    int32  port               = 3;
+    int32  cpu_cores          = 4;
+    int32  memory_mb          = 5;
+    int32  gpu_count          = 6;
+    int32  max_running_shards = 7;
+}
+
+message RegisterWorkerResponse {
+    int32  error_code = 1;
+    string error_msg  = 2;
+    bool   registered = 3;
+}
+
+message HeartbeatRequest {
+    WorkerLoad load = 1;
+}
+
+message HeartbeatResponse {
+    int32  error_code = 1;
+    string error_msg  = 2;
+    bool   alive      = 3;
+}
+
+message ListWorkersRequest {
+    WorkerStatus filter_status = 1;  // 按状态过滤，UNKNOWN 表示全部
+}
+
+message ListWorkersResponse {
+    int32  error_code          = 1;
+    string error_msg           = 2;
+    repeated WorkerInfo workers = 3;
+}
+
+service WorkerManagerService {
+    rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
+    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
+    rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+}
+
+// ============================================================================
+// WorkerService — Worker 端接收调度命令
+// ============================================================================
+
+message AssignShardRequest {
+    ShardInfo shard = 1;
+}
+
+message AssignShardResponse {
+    int32  error_code = 1;
+    string error_msg  = 2;
+    bool   accepted   = 3;
+}
+
+message CancelShardRequest {
+    string shard_id = 1;
+    string reason   = 2;
+}
+
+message CancelShardResponse {
+    int32  error_code = 1;
+    string error_msg  = 2;
+    bool   canceled   = 3;
+}
+
+message QueryShardRequest {
+    string shard_id = 1;
+}
+
+message QueryShardResponse {
+    int32  error_code  = 1;
+    string error_msg   = 2;
+    ShardInfo shard_info = 3;
+    int32  progress     = 4;  // 0-100 进度百分比
+}
+
+service WorkerService {
+    rpc AssignShard(AssignShardRequest) returns (AssignShardResponse);
+    rpc CancelShard(CancelShardRequest) returns (CancelShardResponse);
+    rpc QueryShard(QueryShardRequest) returns (QueryShardResponse);
+}

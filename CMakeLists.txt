@@ -23,5 +23,5 @@ endif()
 # 子项目
 add_subdirectory(wevix_muduo)
 add_subdirectory(mprpc)
-add_subdirectory(example)
+add_subdirectory(video_platform)
 add_subdirectory(test)

@@ -21,7 +21,7 @@ class Acceptor : private Noncopyable
 public:
     using NewConnectionCallback = std::function<void(std::unique_ptr<Socket>)>;
 
-    Acceptor(EventLoop* loop, const std::string& ip, uint16_t port);
+    Acceptor(EventLoop* loop, const std::string& ip, uint16_t port, int backlog = 4096);
     ~Acceptor();
 
     // 设置新连接到来时的处理函数

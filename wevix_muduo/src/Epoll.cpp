@@ -11,6 +11,7 @@ namespace wevix_muduo
 {
 
 Epoll::Epoll()
+    : events_(kInitEventListSize)
 {
     // 使用 EPOLL_CLOEXEC 防止子进程继承该 fd
     epollfd_ = ::epoll_create1(EPOLL_CLOEXEC);
@@ -29,11 +30,18 @@ Epoll::~Epoll()
 void Epoll::poll(int timeoutMs, ChannelList* activeChannels)
 {
     // 调用 epoll_wait
-    int numEvents = ::epoll_wait(epollfd_, events_, kMaxEvents, timeoutMs);
+    int numEvents = ::epoll_wait(epollfd_, events_.data(),
+                                 static_cast<int>(events_.size()), timeoutMs);
     int savedErrno = errno;
 
     if (numEvents > 0)
     {
+        // 动态扩容：如果返回数等于当前容量，说明可能还有就绪事件未取出
+        if (numEvents == static_cast<int>(events_.size()))
+        {
+            events_.resize(events_.size() * 2);
+        }
+
         for (int i = 0; i < numEvents; ++i)
         {
             // 通过 data.ptr 拿回 Channel 对象

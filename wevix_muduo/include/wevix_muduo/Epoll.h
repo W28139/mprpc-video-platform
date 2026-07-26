@@ -30,10 +30,10 @@ public:
     void removeChannel(Channel* ch);
 
 private:
-    static const int kMaxEvents = 4096;
+    static const int kInitEventListSize = 16;
 
     int epollfd_;
-    struct epoll_event events_[kMaxEvents];
+    std::vector<struct epoll_event> events_;
 };
 
 } // namespace wevix_muduo

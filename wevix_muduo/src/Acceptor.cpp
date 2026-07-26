@@ -7,7 +7,7 @@
 namespace wevix_muduo
 {
 
-Acceptor::Acceptor(EventLoop* loop, const std::string& ip, uint16_t port)
+Acceptor::Acceptor(EventLoop* loop, const std::string& ip, uint16_t port, int backlog)
     : loop_(loop)
     , serverSock_(Socket::createNonblocking())
     , acceptChannel_(loop_, serverSock_.fd())
@@ -22,7 +22,7 @@ Acceptor::Acceptor(EventLoop* loop, const std::string& ip, uint16_t port)
 
     // 绑定并监听
     serverSock_.bind(serverAddr);
-    serverSock_.listen();
+    serverSock_.listen(backlog);
 
     // 设置 Channel 的可读回调为接收新连接的逻辑
     acceptChannel_.setReadCallback(std::bind(&Acceptor::handleRead, this));

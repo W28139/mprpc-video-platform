@@ -3,6 +3,7 @@
 #include"wevix_muduo/AsyncLogger.h"
 #include"ZookeeperUtil.h"
 #include"mprpccodec.h"
+#include <chrono>
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
@@ -144,7 +145,7 @@ void RpcProvider::NotifyService(google::protobuf::Service *service)
     m_serviceMap.insert({service_name,service_info});
 }
 
-void RpcProvider::Run()
+bool RpcProvider::Run()
 {
     MprpcConfig& config = MprpcApplication::GetInstance().GetConfig();
     std::string ip;
@@ -152,14 +153,14 @@ void RpcProvider::Run()
     if (!config.LoadRequired("rpcserverip", ip, error))
     {
         LOG_ERROR("%s", error.c_str());
-        return;
+        return false;
     }
 
     int portValue = config.LoadInt("rpcserverport", -1, 1, 65535);
     if (portValue == -1)
     {
         LOG_ERROR("required config key invalid: rpcserverport");
-        return;
+        return false;
     }
     uint16_t port = static_cast<uint16_t>(portValue);
 
@@ -194,7 +195,7 @@ void RpcProvider::Run()
     if (!zkCli.Start())
     {
         LOG_ERROR("RpcProvider start failed: connect zookeeper failed");
-        return;
+        return false;
     }
 
     // 多实例注册路径：
@@ -203,7 +204,7 @@ void RpcProvider::Run()
         !zkCli.Create("/mprpc/services", nullptr, 0))
     {
         LOG_ERROR("RpcProvider start failed: create root registry path failed");
-        return;
+        return false;
     }
 
     // service_name 和 method_name 为永久节点，instance-* 为临时顺序节点。
@@ -214,7 +215,7 @@ void RpcProvider::Run()
         if (!zkCli.Create(service_path.c_str(), nullptr, 0))
         {
             LOG_ERROR("create service registry path failed: %s", service_path.c_str());
-            return;
+            return false;
         }
 
         for (auto &mp : sp.second.m_methodMap)
@@ -224,7 +225,7 @@ void RpcProvider::Run()
             if (!zkCli.Create(method_path.c_str(), nullptr, 0))
             {
                 LOG_ERROR("create method registry path failed: %s", method_path.c_str());
-                return;
+                return false;
             }
 
             char method_path_data[128] = {0};
@@ -237,7 +238,7 @@ void RpcProvider::Run()
                               ZOO_EPHEMERAL | ZOO_SEQUENCE, &actualPath))
             {
                 LOG_ERROR("create service instance failed: %s", instance_path.c_str());
-                return;
+                return false;
             }
             LOG_INFO("Register rpc instance: %s -> %s", actualPath.c_str(), method_path_data);
         }
@@ -254,6 +255,7 @@ void RpcProvider::Run()
     // 启动网络服务（内部启动 mainLoop + subLoops）
     server.start();
     LOG_INFO("RpcProvider service stopped.");
+    return true;
 }
 
 // 新连接建立回调（wevix_muduo 的 connectionCallback 仅在新连接时触发）
@@ -294,6 +296,26 @@ void RpcProvider::OnMessage(const wevix_muduo::TcpServer::ConnectionPtr& conn,
     LOG_DEBUG("RPC request: request_id=%llu, service=%s, method=%s, args_size=%u",
               static_cast<unsigned long long>(requestId),
               service_name.c_str(), method_name.c_str(), rpcHeader.args_size());
+
+    // 检查请求是否已过期：客户端通过 RpcHeader.deadline_ms 传递绝对截止时间戳（毫秒），
+    // 如果请求在 work pool 排队后已经超过 deadline，直接丢弃并返回 RPC_TIMEOUT，
+    // 避免做无效计算。
+    // deadline_ms == 0 表示客户端未设置（不检查）。
+    if (rpcHeader.deadline_ms() > 0)
+    {
+        uint64_t nowMs = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::system_clock::now().time_since_epoch()).count();
+        if (nowMs > rpcHeader.deadline_ms())
+        {
+            LOG_DEBUG("RPC request expired: request_id=%llu, deadline=%llu, now=%llu",
+                      static_cast<unsigned long long>(requestId),
+                      static_cast<unsigned long long>(rpcHeader.deadline_ms()),
+                      static_cast<unsigned long long>(nowMs));
+            SendRpcError(conn, requestId, mprpc::RPC_TIMEOUT,
+                        "request deadline exceeded before processing");
+            return;
+        }
+    }
 
     if (service_name.empty() || method_name.empty())
     {

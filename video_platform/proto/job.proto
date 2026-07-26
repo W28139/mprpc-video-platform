@@ -1,0 +1,56 @@
+syntax = "proto3";
+
+package video_platform;
+
+import "common.proto";
+
+option cc_generic_services = true;
+
+// ============================================================================
+// JobService — 任务生命周期管理
+// ============================================================================
+
+message SubmitJobRequest {
+    string user_id            = 1;
+    string input_path         = 2;
+    string output_path        = 3;
+    string target_format      = 4;
+    string target_resolution  = 5;
+    int32  target_bitrate     = 6;
+    int32  priority           = 7;
+    int32  shard_duration_sec = 8;   // 每 shard 时长秒数，0 表示使用默认值
+}
+
+message SubmitJobResponse {
+    int32  error_code  = 1;
+    string error_msg   = 2;
+    string job_id      = 3;
+    JobInfo job_info   = 4;
+}
+
+message QueryJobRequest {
+    string job_id = 1;
+}
+
+message QueryJobResponse {
+    int32  error_code     = 1;
+    string error_msg      = 2;
+    JobInfo job_info      = 3;
+    repeated ShardInfo shards = 4;  // 如果已有 shard 则一并返回
+}
+
+message CancelJobRequest {
+    string job_id  = 1;
+    string reason  = 2;
+}
+
+message CancelJobResponse {
+    int32  error_code = 1;
+    string error_msg  = 2;
+}
+
+service JobService {
+    rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
+    rpc QueryJob(QueryJobRequest) returns (QueryJobResponse);
+    rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);
+}

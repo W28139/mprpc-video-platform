@@ -26,7 +26,7 @@ public:
     using ConnectionCallback = std::function<void(const ConnectionPtr&)>;
     using MessageCallback = std::function<void(const ConnectionPtr&, std::string&)>;
 
-    TcpServer(const std::string& ip, uint16_t port, int threadNum = 3);
+    TcpServer(const std::string& ip, uint16_t port, int threadNum = 3, int backlog = 4096);
     ~TcpServer();
 
     // 启动服务器
@@ -90,6 +90,7 @@ private:
     std::unique_ptr<ThreadPool> workThreadPool_;        // Work线程池（可选）
 
     Acceptor acceptor_;                                 // 接收器
+    int backlog_;                                       // listen backlog
 
     // 连接管理
     std::mutex mutex_;

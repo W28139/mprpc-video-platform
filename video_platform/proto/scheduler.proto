@@ -1,0 +1,39 @@
+syntax = "proto3";
+
+package video_platform;
+
+import "common.proto";
+
+option cc_generic_services = true;
+
+// ============================================================================
+// SchedulerService — 任务调度与切分
+// ============================================================================
+
+message ScheduleJobRequest {
+    JobInfo job_info = 1;
+}
+
+message ScheduleJobResponse {
+    int32  error_code         = 1;
+    string error_msg          = 2;
+    bool   accepted           = 3;
+    string job_id             = 4;
+}
+
+message RescheduleShardRequest {
+    string shard_id    = 1;
+    string job_id      = 2;
+    string reason      = 3;  // 重调度原因：TIMEOUT / WORKER_FAILED / MANUAL
+}
+
+message RescheduleShardResponse {
+    int32  error_code = 1;
+    string error_msg  = 2;
+    bool   accepted   = 3;
+}
+
+service SchedulerService {
+    rpc ScheduleJob(ScheduleJobRequest) returns (ScheduleJobResponse);
+    rpc RescheduleShard(RescheduleShardRequest) returns (RescheduleShardResponse);
+}
