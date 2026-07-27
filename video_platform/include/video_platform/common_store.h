@@ -184,6 +184,24 @@ public:
     /// @brief 查询单个 Worker。不存在返回 nullptr。
     WorkerRecord* Get(const std::string& worker_id);
 
+    // ── 原子方法（在 unique_lock 内完成读-改-写，消除 TOCTOU 竞争） ──
+
+    /// @brief 原子更新心跳时间戳和运行中 shard 数。
+    /// 在 unique_lock 内完成：查找 → 更新 last_heartbeat/status/running_shards。
+    /// @return true 表示 worker_id 存在且已更新，false 表示未找到。
+    bool UpdateHeartbeat(const std::string& worker_id, int32_t running_shards);
+
+    /// @brief 原子检查心跳超时并标记 OFFLINE。
+    /// 在 unique_lock 内完成：查找 → 检查 status==ONLINE → 检查 now-last_heartbeat>timeout
+    /// → 标记 OFFLINE。全程持写锁，与 Heartbeat RPC 的 UpdateHeartbeat 互斥。
+    /// @return true 表示确认超时并已标记 OFFLINE，false 表示未超时或不存在。
+    bool MarkOfflineIfTimeout(const std::string& worker_id, int64_t now, int64_t timeout_ms);
+
+    /// @brief 原子插入或覆盖更新（upsert）。
+    /// 在 unique_lock 内完成：key 不存在则插入，存在则覆盖。全程持写锁。
+    /// @return true 表示是新插入（key 之前不存在），false 表示覆盖了已存在的记录。
+    bool InsertOrUpdate(const WorkerRecord& worker);
+
     /// @brief 按状态过滤列出 Worker。
     /// @param status_filter 状态值，传 -1 表示列出全部。
     std::vector<WorkerRecord> ListByStatus(int32_t status_filter) const;

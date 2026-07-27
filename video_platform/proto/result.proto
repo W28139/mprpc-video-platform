@@ -8,43 +8,53 @@ option cc_generic_services = true;
 
 // ============================================================================
 // ResultCollectorService — 结果收集与聚合
+//
+// Worker 在 shard 执行过程中周期性上报进度，完成后上报最终结果。
+// ResultCollector 负责幂等接收、判断 job 是否全部完成、
+// 触发失败重试和最终聚合。
 // ============================================================================
 
+// ── ReportShardProgress ────────────────────────────────────────────────────
+
 message ReportShardProgressRequest {
-    string shard_id    = 1;
-    string job_id      = 2;
-    string worker_id   = 3;
-    string attempt_id  = 4;
-    int32  progress    = 5;   // 0-100
-    string message     = 6;   // 附加信息
+    string shard_id   = 1;  // 正在执行的 shard ID
+    string job_id     = 2;  // 所属 job ID
+    string worker_id  = 3;  // 执行该 shard 的 Worker ID
+    string attempt_id = 4;  // 当前执行尝试 ID（与 AssignShard 时的一致）
+    int32  progress   = 5;  // 执行进度（0-100 整数百分比）
+    string message    = 6;  // 附加信息，如 ffmpeg 当前帧号 / 输出行
 }
 
 message ReportShardProgressResponse {
-    int32  error_code = 1;
-    string error_msg  = 2;
-    bool   recorded   = 3;
+    int32  error_code = 1;  // 0=成功记录
+    string error_msg  = 2;  // 错误描述
+    bool   recorded   = 3;  // true=进度已记录
 }
 
+// ── ReportShardResult ──────────────────────────────────────────────────────
+
 message ReportShardResultRequest {
-    string shard_id       = 1;
-    string job_id         = 2;
-    string worker_id      = 3;
-    string attempt_id     = 4;
-    bool   is_success     = 5;
-    int32  exit_code      = 6;   // 执行器退出码，成功时为 0
-    string error_msg      = 7;   // 失败时的错误信息
-    string output_path    = 8;   // 输出文件路径
-    int64  elapsed_ms     = 9;   // 执行耗时
+    string shard_id    = 1;   // 已完成的 shard ID
+    string job_id      = 2;   // 所属 job ID
+    string worker_id   = 3;   // 执行该 shard 的 Worker ID
+    string attempt_id  = 4;   // 执行尝试 ID，用于幂等：只接受当前 attempt 的结果
+    bool   is_success  = 5;   // true=执行成功，false=执行失败
+    int32  exit_code   = 6;   // 进程退出码，FFmpeg 成功时为 0，失败时为非 0
+    string error_msg   = 7;   // 失败时的错误描述（ffmpeg stderr 摘要）
+    string output_path = 8;   // 输出文件路径（成功时必填，用于后续合并）
+    int64  elapsed_ms  = 9;   // 执行总耗时（毫秒），用于统计和调度策略优化
 }
 
 message ReportShardResultResponse {
-    int32  error_code = 1;
-    string error_msg  = 2;
-    bool   accepted   = 3;       // 是否被接受（幂等拒绝返回 true）
-    bool   job_done   = 4;       // 该 shard 是否是 job 的最后一个
+    int32  error_code = 1;  // 0=成功
+    string error_msg  = 2;  // 错误描述
+    bool   accepted   = 3;  // true=结果被接受（幂等：已 SUCCESS 的再次上报也返回 true）
+    bool   job_done   = 4;  // true=该 shard 是 job 的最后一个未完成 shard，job 可以进入 MERGING
 }
 
+// ── Service ────────────────────────────────────────────────────────────────
+
 service ResultCollectorService {
-    rpc ReportShardProgress(ReportShardProgressRequest) returns (ReportShardProgressResponse);
-    rpc ReportShardResult(ReportShardResultRequest) returns (ReportShardResultResponse);
+    rpc ReportShardProgress(ReportShardProgressRequest) returns (ReportShardProgressResponse);  // 上报执行进度
+    rpc ReportShardResult(ReportShardResultRequest) returns (ReportShardResultResponse);        // 上报最终执行结果
 }

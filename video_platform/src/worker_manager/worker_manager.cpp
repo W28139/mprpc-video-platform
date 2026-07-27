@@ -1,5 +1,8 @@
 #include <string>
 #include <cstdlib>
+#include <thread>
+#include <atomic>
+#include <chrono>
 #include "worker.pb.h"
 #include "mprpcapplication.h"
 #include "rpcprovider.h"
@@ -47,11 +50,14 @@ public:
         worker.memory_mb              = request->memory_mb();
         worker.gpu_count              = request->gpu_count();
         worker.max_running_shards     = request->max_running_shards();
-        worker.current_running_shards = 0;    // 刚注册时没有正在执行的任务
+        worker.current_running_shards = 0;
         worker.status                 = static_cast<int32_t>(WorkerStatus::WORKER_ONLINE);
         worker.last_heartbeat         = NowMs();
 
-        WorkerStore::GetInstance().Insert(worker);
+        bool is_new = WorkerStore::GetInstance().InsertOrUpdate(worker);
+        LOG_INFO("WorkerManagerService::RegisterWorker worker_id=%s %s",
+                 request->worker_id().c_str(),
+                 is_new ? "registered" : "re-registered (overwritten existing record)");
 
         response->set_error_code(0);
         response->set_error_msg("");
@@ -76,21 +82,13 @@ public:
                  load.memory_usage(),
                  load.running_shards());
 
-        WorkerRecord* worker = WorkerStore::GetInstance().Get(load.worker_id());
-        if (worker != nullptr)
-        {
-            // 更新实时负载与心跳时间
-            worker->current_running_shards = load.running_shards();
-            worker->last_heartbeat         = NowMs();
-            worker->status                 = static_cast<int32_t>(WorkerStatus::WORKER_ONLINE);
-            WorkerStore::GetInstance().Update(load.worker_id(), *worker);
-        }
-        // 若 worker 不存在（未注册或已下线），仍返回 alive=false 语义留后续处理
-        // 当前阶段不因心跳失败而影响客户端
+        // 原子更新：在 unique_lock 内完成 查找→更新 heartbeat/status/running_shards
+        bool alive = WorkerStore::GetInstance().UpdateHeartbeat(
+            load.worker_id(), load.running_shards());
 
         response->set_error_code(0);
         response->set_error_msg("");
-        response->set_alive(worker != nullptr);
+        response->set_alive(alive);
         done->Run();
     }
 
@@ -135,6 +133,51 @@ public:
 };
 
 // ============================================================================
+// HeartbeatTimeoutCheck — 心跳超时检测线程
+// ============================================================================
+
+static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
+{
+    constexpr int64_t kHeartbeatTimeoutMs = 10000;  // 10 秒无心跳 → OFFLINE
+    constexpr int64_t kCheckIntervalMs    = 2000;   // 每 2 秒扫描一次
+
+    LOG_INFO("HeartbeatTimeoutCheck thread started, timeout=%lldms, interval=%lldms",
+             (long long)kHeartbeatTimeoutMs, (long long)kCheckIntervalMs);
+
+    while (!stop_flag)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(kCheckIntervalMs));
+        if (stop_flag) break;
+
+        int64_t now = NowMs();
+        auto workers = WorkerStore::GetInstance().ListAll();  // 在锁内拷贝快照
+
+        for (const auto& w : workers)
+        {
+            if (w.status != static_cast<int32_t>(WorkerStatus::WORKER_ONLINE))
+                continue;
+
+            if (now - w.last_heartbeat <= kHeartbeatTimeoutMs)
+                continue;
+
+            // 原子检查并标记：在 unique_lock 内完成 查找→二次确认→标记 OFFLINE
+            // 与 Heartbeat RPC 的 UpdateHeartbeat 互斥，消除 TOCTOU 竞争窗口
+            if (WorkerStore::GetInstance().MarkOfflineIfTimeout(
+                    w.worker_id, now, kHeartbeatTimeoutMs))
+            {
+                LOG_WARN("WorkerManager: worker_id=%s marked OFFLINE (heartbeat timeout, last=%lld, now=%lld, gap=%lldms)",
+                         w.worker_id.c_str(),
+                         (long long)w.last_heartbeat,
+                         (long long)now,
+                         (long long)(now - w.last_heartbeat));
+            }
+        }
+    }
+
+    LOG_INFO("HeartbeatTimeoutCheck thread stopped");
+}
+
+// ============================================================================
 // main — 服务入口
 // ============================================================================
 
@@ -156,15 +199,24 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
+    // 启动心跳超时检测后台线程
+    std::atomic<bool> timeout_stopped{false};
+    std::thread timeout_thread(HeartbeatTimeoutCheck, std::ref(timeout_stopped));
+
     RpcProvider provider;
     provider.NotifyService(new WorkerManagerServiceImpl());
 
     if (!provider.Run())
     {
         LOG_ERROR("WorkerManagerService start failed");
+        timeout_stopped = true;
+        if (timeout_thread.joinable()) timeout_thread.join();
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }
+
+    timeout_stopped = true;
+    if (timeout_thread.joinable()) timeout_thread.join();
 
     wevix_muduo::AsyncLogger::GetInstance().stop();
     return 0;

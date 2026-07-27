@@ -6,94 +6,106 @@ package video_platform;
 // 共享枚举
 // ============================================================================
 
+// 任务生命周期状态
+// PENDING → SPLITTING → SCHEDULING → RUNNING → MERGING → SUCCESS
+//                                            ↘ FAILED / CANCELED
 enum JobStatus {
-    JOB_STATUS_UNKNOWN   = 0;
-    JOB_PENDING          = 1;
-    JOB_SPLITTING        = 2;
-    JOB_SCHEDULING       = 3;
-    JOB_RUNNING          = 4;
-    JOB_MERGING          = 5;
-    JOB_SUCCESS          = 6;
-    JOB_FAILED           = 7;
-    JOB_CANCELED         = 8;
+    JOB_STATUS_UNKNOWN = 0;  // 未知状态（proto 默认值）
+    JOB_PENDING        = 1;  // 已提交，等待系统处理
+    JOB_SPLITTING      = 2;  // 正在拆分为 shard
+    JOB_SCHEDULING     = 3;  // 正在为 shard 匹配 Worker
+    JOB_RUNNING        = 4;  // shard 正在执行中
+    JOB_MERGING        = 5;  // 所有 shard 完成，正在合并结果
+    JOB_SUCCESS        = 6;  // 任务成功完成
+    JOB_FAILED         = 7;  // 任务失败（超过最大重试次数）
+    JOB_CANCELED       = 8;  // 用户主动取消
 }
 
+// 子任务（Shard）生命周期状态
+// CREATED → WAITING → ASSIGNED → RUNNING → SUCCESS
+//                                     ↘ FAILED → RETRYING → WAITING
+//                                                ↘ (超次)  → FAILED
+// 任意状态 → CANCELED
 enum ShardStatus {
-    SHARD_STATUS_UNKNOWN = 0;
-    SHARD_CREATED        = 1;
-    SHARD_WAITING        = 2;
-    SHARD_ASSIGNED       = 3;
-    SHARD_RUNNING        = 4;
-    SHARD_SUCCESS        = 5;
-    SHARD_FAILED         = 6;
-    SHARD_RETRYING       = 7;
-    SHARD_CANCELED       = 8;
+    SHARD_STATUS_UNKNOWN = 0;  // 未知状态（proto 默认值）
+    SHARD_CREATED        = 1;  // 已创建，尚未进入调度队列
+    SHARD_WAITING        = 2;  // 在待调度队列中等待分配 Worker
+    SHARD_ASSIGNED       = 3;  // 已分配给 Worker，等待 Worker 确认
+    SHARD_RUNNING        = 4;  // Worker 正在执行
+    SHARD_SUCCESS        = 5;  // 执行成功
+    SHARD_FAILED         = 6;  // 执行失败（可重试或已超次）
+    SHARD_RETRYING       = 7;  // 正在重试（短暂过渡状态）
+    SHARD_CANCELED       = 8;  // 被取消
 }
 
+// Worker 节点状态
 enum WorkerStatus {
-    WORKER_STATUS_UNKNOWN = 0;
-    WORKER_ONLINE         = 1;
-    WORKER_OFFLINE        = 2;
-    WORKER_DRAINING       = 3;
+    WORKER_STATUS_UNKNOWN = 0;  // 未知状态（proto 默认值）
+    WORKER_ONLINE         = 1;  // 在线，可接收调度
+    WORKER_OFFLINE        = 2;  // 离线（心跳超时或主动下线）
+    WORKER_DRAINING       = 3;  // 排空中：不再接收新任务，等待当前任务完成
 }
 
 // ============================================================================
 // 共享实体消息
 // ============================================================================
 
+// 任务完整信息 — 由 JobService 返回，Scheduler / ResultCollector 消费
 message JobInfo {
-    string job_id             = 1;
-    string user_id            = 2;
-    string input_path         = 3;
-    string output_path        = 4;
-    string target_format      = 5;
-    string target_resolution  = 6;
-    int32  target_bitrate     = 7;
-    int64  duration_sec       = 8;
-    int32  priority           = 9;
-    JobStatus status          = 10;
-    int32  shard_count        = 11;
-    int64  created_at         = 12;
-    int64  updated_at         = 13;
+    string job_id             = 1;  // 全局唯一任务 ID
+    string user_id            = 2;  // 提交任务的用户标识
+    string input_path         = 3;  // 输入视频文件路径
+    string output_path        = 4;  // 期望输出目录（shard 结果放此目录下）
+    string target_format      = 5;  // 目标容器格式：mp4 / mkv / flv
+    string target_resolution  = 6;  // 目标分辨率：720p / 1080p / 4k
+    int32  target_bitrate     = 7;  // 目标码率（kbps），0 表示保持原码率
+    int64  duration_sec       = 8;  // 视频总时长（秒），由 Scheduler 探测后回填，0=尚未探测
+    int32  priority           = 9;  // 调度优先级，数值越大越优先
+    JobStatus status          = 10; // 任务当前状态
+    int32  shard_count        = 11; // 拆分出的 shard 总数（切分完成后回填）
+    int64  created_at         = 12; // 任务创建时间戳（毫秒）
+    int64  updated_at         = 13; // 最后状态更新时间戳（毫秒）
 }
 
+// 子任务完整信息 — Scheduler 创建，Worker 执行，ResultCollector 聚合
 message ShardInfo {
-    string shard_id           = 1;
-    string job_id             = 2;
-    int32  shard_index        = 3;
-    int64  start_ms           = 4;
-    int64  duration_ms        = 5;
-    ShardStatus status        = 6;
-    string assigned_worker_id = 7;
-    string attempt_id         = 8;
-    int32  retry_count        = 9;
-    int32  max_retry          = 10;
-    string input_path         = 11;
-    string output_path        = 12;
-    int64  created_at         = 13;
-    int64  updated_at         = 14;
+    string shard_id           = 1;  // 全局唯一 shard ID（格式：{job_id}_shard_{index}）
+    string job_id             = 2;  // 所属 job ID
+    int32  shard_index        = 3;  // 在 job 中的序号（0, 1, 2, ...）
+    int64  start_ms           = 4;  // 视频片段起始偏移（毫秒）
+    int64  duration_ms        = 5;  // 视频片段时长（毫秒）
+    ShardStatus status        = 6;  // 当前状态
+    string assigned_worker_id = 7;  // 被分配到的 Worker ID，空字符串=尚未分配
+    string attempt_id         = 8;  // 当前执行尝试 ID，每次重试时更新，用于幂等校验
+    int32  retry_count        = 9;  // 已重试次数
+    int32  max_retry          = 10; // 最大重试次数，超过后 shard 终态为 FAILED
+    string input_path         = 11; // 输入文件路径（切片后的临时文件路径）
+    string output_path        = 12; // 输出文件路径（转码后的结果文件）
+    int64  created_at         = 13; // shard 创建时间戳（毫秒）
+    int64  updated_at         = 14; // 最后状态更新时间戳（毫秒）
 }
 
+// Worker 节点完整信息 — WorkerManager 维护，Scheduler 查询
 message WorkerInfo {
-    string worker_id              = 1;
-    string ip                     = 2;
-    int32  port                   = 3;
-    int32  cpu_cores              = 4;
-    int32  memory_mb              = 5;
-    int32  gpu_count              = 6;
-    int32  current_running_shards = 7;
-    int32  max_running_shards     = 8;
-    WorkerStatus status           = 9;
-    int64  last_heartbeat         = 10;
+    string worker_id              = 1;  // 全局唯一 Worker ID
+    string ip                     = 2;  // Worker 所在机器 IP
+    int32  port                   = 3;  // Worker RPC 监听端口
+    int32  cpu_cores              = 4;  // 机器 CPU 逻辑核心数
+    int32  memory_mb              = 5;  // 机器总内存（MB）
+    int32  gpu_count              = 6;  // GPU 数量，0 表示无 GPU
+    int32  current_running_shards = 7;  // 当前正在执行的 shard 数量
+    int32  max_running_shards     = 8;  // Worker 允许的最大并发 shard 数
+    WorkerStatus status           = 9;  // 当前状态（ONLINE / OFFLINE / DRAINING）
+    int64  last_heartbeat         = 10; // 最后一次心跳时间戳（毫秒），用于超时判断
 }
 
-// Worker 负载信息（心跳上报用）
+// Worker 实时负载快照 — 心跳上报用
 message WorkerLoad {
-    string worker_id              = 1;
-    int32  cpu_usage              = 2;   // 百分比 0-100
-    int32  memory_usage           = 3;   // 百分比 0-100
-    int32  running_shards         = 4;
-    int32  finished_shards        = 5;
-    int32  failed_shards          = 6;
-    int64  timestamp              = 7;
+    string worker_id       = 1;  // Worker ID
+    int32  cpu_usage       = 2;  // CPU 使用率（百分比 0-100）
+    int32  memory_usage    = 3;  // 内存使用率（百分比 0-100）
+    int32  running_shards  = 4;  // 当前正在执行的 shard 数
+    int32  finished_shards = 5;  // 历史完成 shard 总数（本次运行周期内）
+    int32  failed_shards   = 6;  // 历史失败 shard 总数（本次运行周期内）
+    int64  timestamp       = 7;  // 负载快照采样时间戳（毫秒）
 }

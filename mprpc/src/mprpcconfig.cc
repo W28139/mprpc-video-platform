@@ -80,6 +80,15 @@ bool MprpcConfig::LoadConfigFile(const char* config_file)
         std::string value = src_buf.substr(idx + 1);
         Trim(value); // 处理 value 前面的空格
 
+        // 去掉行内注释（" #" 及之后的内容），如 "8080 # 端口号" → "8080"
+        // 仅在 # 前有空格时才视为注释，避免截断 URL fragment 等含 # 的合法值
+        size_t comment_pos = value.find(" #");
+        if (comment_pos != std::string::npos)
+        {
+            value = value.substr(0, comment_pos);
+            Trim(value); // 去掉注释前的尾部空格
+        }
+
         // 5. 存储到 map 容器中
         m_configMap[key] = value;
     }

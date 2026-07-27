@@ -1,7 +1,13 @@
 #include <string>
 #include <cstdlib>
+#include <thread>
+#include <atomic>
+#include <chrono>
 #include "scheduler.pb.h"
+#include "worker.pb.h"
 #include "mprpcapplication.h"
+#include "mprpcchannel.h"
+#include "mprpccontroller.h"
 #include "rpcprovider.h"
 #include "wevix_muduo/AsyncLogger.h"
 
@@ -75,6 +81,64 @@ public:
 };
 
 // ============================================================================
+// PeriodicListWorkers — 周期查询 Worker 列表后台线程
+// ============================================================================
+
+/// @brief 在后台线程中周期性调用 WorkerManager.ListWorkers，查询并打印 ONLINE Worker 列表
+///
+/// 阶段 3 用途：验证 Scheduler 能通过 RPC 获取 Worker 列表。
+/// 阶段 4+ 会扩展为实际的调度循环，根据 Worker 资源状态分配 shard。
+///
+/// @param stop_flag 主线程设置的停止标志
+static void PeriodicListWorkers(std::atomic<bool>& stop_flag)
+{
+    constexpr int64_t kQueryIntervalMs = 5000;  // 每 5 秒查询一次
+
+    LOG_INFO("PeriodicListWorkers thread started, interval=%lldms",
+             (long long)kQueryIntervalMs);
+
+    // 等待 Provider 启动完成
+    std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    WorkerManagerService_Stub stub(new MprpcChannel());
+
+    while (!stop_flag)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(kQueryIntervalMs));
+        if (stop_flag) break;
+
+        ListWorkersRequest req;
+        // filter_status=WORKER_STATUS_UNKNOWN(0) 表示不过滤，返回全部
+        req.set_filter_status(WorkerStatus::WORKER_STATUS_UNKNOWN);
+
+        ListWorkersResponse resp;
+        MprpcController controller;
+
+        stub.ListWorkers(&controller, &req, &resp, nullptr);
+
+        if (!controller.Failed() && resp.error_code() == 0)
+        {
+            int online_count = 0;
+            for (const auto& w : resp.workers())
+            {
+                if (w.status() == WorkerStatus::WORKER_ONLINE)
+                    ++online_count;
+            }
+            LOG_INFO("PeriodicListWorkers: total=%d, online=%d",
+                     resp.workers_size(), online_count);
+        }
+        else
+        {
+            LOG_WARN("PeriodicListWorkers: ListWorkers RPC failed: %s",
+                     controller.Failed() ? controller.ErrorText().c_str()
+                                         : resp.error_msg().c_str());
+        }
+    }
+
+    LOG_INFO("PeriodicListWorkers thread stopped");
+}
+
+// ============================================================================
 // main — 服务入口
 // ============================================================================
 
@@ -96,15 +160,25 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
+    // 启动后台线程：周期性查询 WorkerManager 的 ONLINE Worker 列表
+    std::atomic<bool> list_workers_stopped{false};
+    std::thread list_workers_thread(PeriodicListWorkers, std::ref(list_workers_stopped));
+
     RpcProvider provider;
     provider.NotifyService(new SchedulerServiceImpl());
 
     if (!provider.Run())
     {
         LOG_ERROR("SchedulerService start failed");
+        list_workers_stopped = true;
+        if (list_workers_thread.joinable()) list_workers_thread.join();
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }
+
+    // Provider 退出后清理
+    list_workers_stopped = true;
+    if (list_workers_thread.joinable()) list_workers_thread.join();
 
     wevix_muduo::AsyncLogger::GetInstance().stop();
     return 0;

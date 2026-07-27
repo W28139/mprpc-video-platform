@@ -1,4 +1,5 @@
 #include "video_platform/common_store.h"
+#include "worker.pb.h"
 #include <chrono>
 #include <random>
 #include <sstream>
@@ -256,6 +257,44 @@ size_t WorkerStore::Count() const
 {
     std::shared_lock lock(mutex_);
     return workers_.size();
+}
+
+// ── 原子方法（在 unique_lock 内完成读-改-写） ──
+
+bool WorkerStore::UpdateHeartbeat(const std::string& worker_id, int32_t running_shards)
+{
+    std::unique_lock lock(mutex_);
+    auto it = workers_.find(worker_id);
+    if (it == workers_.end()) return false;
+
+    it->second.current_running_shards = running_shards;
+    it->second.last_heartbeat         = NowMs();
+    it->second.status                 = static_cast<int32_t>(WorkerStatus::WORKER_ONLINE);
+    return true;
+}
+
+bool WorkerStore::MarkOfflineIfTimeout(const std::string& worker_id, int64_t now, int64_t timeout_ms)
+{
+    std::unique_lock lock(mutex_);
+    auto it = workers_.find(worker_id);
+    if (it == workers_.end()) return false;
+    if (it->second.status != static_cast<int32_t>(WorkerStatus::WORKER_ONLINE)) return false;
+    if (now - it->second.last_heartbeat <= timeout_ms) return false;
+
+    it->second.status = static_cast<int32_t>(WorkerStatus::WORKER_OFFLINE);
+    return true;
+}
+
+bool WorkerStore::InsertOrUpdate(const WorkerRecord& worker)
+{
+    std::unique_lock lock(mutex_);
+    auto result = workers_.try_emplace(worker.worker_id, worker);
+    if (!result.second)
+    {
+        // key 已存在，覆盖旧记录
+        result.first->second = worker;
+    }
+    return result.second;  // true = 新插入, false = 覆盖
 }
 
 } // namespace video_platform

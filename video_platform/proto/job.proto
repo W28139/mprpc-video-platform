@@ -8,49 +8,60 @@ option cc_generic_services = true;
 
 // ============================================================================
 // JobService — 任务生命周期管理
+//
+// 对外接口，是用户操作任务的唯一入口。
+// 收到 SubmitJob 后创建 JobInfo 写入存储，后续由 Scheduler 异步处理。
 // ============================================================================
 
+// ── SubmitJob ──────────────────────────────────────────────────────────────
+
 message SubmitJobRequest {
-    string user_id            = 1;
-    string input_path         = 2;
-    string output_path        = 3;
-    string target_format      = 4;
-    string target_resolution  = 5;
-    int32  target_bitrate     = 6;
-    int32  priority           = 7;
-    int32  shard_duration_sec = 8;   // 每 shard 时长秒数，0 表示使用默认值
+    string user_id            = 1;  // 提交用户标识
+    string input_path         = 2;  // 输入视频文件路径（必填）
+    string output_path        = 3;  // 期望输出目录路径
+    string target_format      = 4;  // 目标容器格式：mp4 / mkv / flv，空=保持原格式
+    string target_resolution  = 5;  // 目标分辨率，如 "720p"、"1080p"，空=保持原分辨率
+    int32  target_bitrate     = 6;  // 目标码率（kbps），0=保持原码率
+    int32  priority           = 7;  // 调度优先级，数值越大越优先，默认 0
+    int32  shard_duration_sec = 8;  // 每 shard 时长（秒），0=使用默认值（30 秒）
 }
 
 message SubmitJobResponse {
-    int32  error_code  = 1;
-    string error_msg   = 2;
-    string job_id      = 3;
-    JobInfo job_info   = 4;
+    int32  error_code = 1;  // 0=成功，非0=失败
+    string error_msg  = 2;  // 失败时的错误描述
+    string job_id     = 3;  // 创建成功的 job ID（失败时为空）
+    JobInfo job_info  = 4;  // 完整的 job 信息
 }
 
+// ── QueryJob ───────────────────────────────────────────────────────────────
+
 message QueryJobRequest {
-    string job_id = 1;
+    string job_id = 1;  // 要查询的 job ID
 }
 
 message QueryJobResponse {
-    int32  error_code     = 1;
-    string error_msg      = 2;
-    JobInfo job_info      = 3;
-    repeated ShardInfo shards = 4;  // 如果已有 shard 则一并返回
+    int32  error_code          = 1;  // 0=成功，1=job 不存在
+    string error_msg           = 2;  // 失败时的错误描述
+    JobInfo job_info           = 3;  // job 核心信息
+    repeated ShardInfo shards  = 4;  // 所有已创建的 shard（可能为空）
 }
 
+// ── CancelJob ──────────────────────────────────────────────────────────────
+
 message CancelJobRequest {
-    string job_id  = 1;
-    string reason  = 2;
+    string job_id = 1;  // 要取消的 job ID
+    string reason = 2;  // 取消原因（便于排查）
 }
 
 message CancelJobResponse {
-    int32  error_code = 1;
-    string error_msg  = 2;
+    int32  error_code = 1;  // 0=成功，1=job 不存在
+    string error_msg  = 2;  // 失败时的错误描述
 }
 
+// ── Service ────────────────────────────────────────────────────────────────
+
 service JobService {
-    rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);
-    rpc QueryJob(QueryJobRequest) returns (QueryJobResponse);
-    rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);
+    rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);  // 提交视频处理任务
+    rpc QueryJob(QueryJobRequest) returns (QueryJobResponse);     // 查询任务状态与所有 shard
+    rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);  // 取消任务
 }

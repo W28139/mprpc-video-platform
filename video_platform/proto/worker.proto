@@ -8,88 +8,111 @@ option cc_generic_services = true;
 
 // ============================================================================
 // WorkerManagerService — Worker 生命周期管理
+//
+// 维护所有 Worker 节点的注册信息、心跳状态和负载快照。
+// 由 Worker 调用 Register/Heartbeat，由 Scheduler 调用 ListWorkers。
 // ============================================================================
 
+// ── RegisterWorker ─────────────────────────────────────────────────────────
+
 message RegisterWorkerRequest {
-    string worker_id          = 1;
-    string ip                 = 2;
-    int32  port               = 3;
-    int32  cpu_cores          = 4;
-    int32  memory_mb          = 5;
-    int32  gpu_count          = 6;
-    int32  max_running_shards = 7;
+    string worker_id          = 1;  // Worker 节点唯一 ID（启动时生成）
+    string ip                 = 2;  // Worker 所在机器 IP
+    int32  port               = 3;  // Worker 的 RPC 监听端口
+    int32  cpu_cores          = 4;  // 机器 CPU 逻辑核心数
+    int32  memory_mb          = 5;  // 机器总内存（MB）
+    int32  gpu_count          = 6;  // GPU 数量，0=无 GPU
+    int32  max_running_shards = 7;  // 该 Worker 允许的最大并发 shard 数（调度器据此分配）
 }
 
 message RegisterWorkerResponse {
-    int32  error_code = 1;
-    string error_msg  = 2;
-    bool   registered = 3;
+    int32  error_code = 1;  // 0=注册成功
+    string error_msg  = 2;  // 失败描述
+    bool   registered = 3;  // true=注册成功，false=worker_id 已存在（幂等拒绝）
 }
 
+// ── Heartbeat ──────────────────────────────────────────────────────────────
+
 message HeartbeatRequest {
-    WorkerLoad load = 1;
+    WorkerLoad load = 1;  // Worker 当前负载快照
 }
 
 message HeartbeatResponse {
-    int32  error_code = 1;
-    string error_msg  = 2;
-    bool   alive      = 3;
+    int32  error_code = 1;  // 0=成功
+    string error_msg  = 2;  // 错误描述
+    bool   alive      = 3;  // true=心跳被接受，false=Worker 未注册或已被标记下线
 }
 
+// ── ListWorkers ────────────────────────────────────────────────────────────
+
 message ListWorkersRequest {
-    WorkerStatus filter_status = 1;  // 按状态过滤，UNKNOWN 表示全部
+    WorkerStatus filter_status = 1;  // 按状态过滤，WORKER_STATUS_UNKNOWN（0）= 返回全部
 }
 
 message ListWorkersResponse {
-    int32  error_code          = 1;
-    string error_msg           = 2;
-    repeated WorkerInfo workers = 3;
+    int32  error_code           = 1;  // 0=成功
+    string error_msg            = 2;  // 错误描述
+    repeated WorkerInfo workers = 3;  // 符合条件的 Worker 列表
 }
 
+// ── Service ────────────────────────────────────────────────────────────────
+
 service WorkerManagerService {
-    rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);
-    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);
-    rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);
+    rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerResponse);  // Worker 首次启动注册
+    rpc Heartbeat(HeartbeatRequest) returns (HeartbeatResponse);                 // Worker 周期心跳（3 秒一次）
+    rpc ListWorkers(ListWorkersRequest) returns (ListWorkersResponse);           // 查询在线/全部 Worker
 }
 
 // ============================================================================
 // WorkerService — Worker 端接收调度命令
+//
+// 跑在 TranscodeWorker 进程上，接收 Scheduler 下发的 shard 和执行控制命令。
+// Worker 本身既是这个 service 的 Provider，也是 WorkerManager 和
+// ResultCollector 的 Consumer（双向 RPC）。
 // ============================================================================
 
+// ── AssignShard ────────────────────────────────────────────────────────────
+
 message AssignShardRequest {
-    ShardInfo shard = 1;
+    ShardInfo shard = 1;  // 要执行的 shard 完整信息（含 start_ms / duration_ms / input_path / output_path 等）
 }
 
 message AssignShardResponse {
-    int32  error_code = 1;
-    string error_msg  = 2;
-    bool   accepted   = 3;
+    int32  error_code = 1;  // 0=成功接收，非0=拒绝
+    string error_msg  = 2;  // 拒绝原因（如 Worker 已满、正在 draining）
+    bool   accepted   = 3;  // true=Worker 接受该 shard 并开始执行
 }
 
+// ── CancelShard ────────────────────────────────────────────────────────────
+
 message CancelShardRequest {
-    string shard_id = 1;
-    string reason   = 2;
+    string shard_id = 1;  // 要取消的 shard ID
+    string reason   = 2;  // 取消原因：USER_CANCEL / TIMEOUT / PREEMPT
 }
 
 message CancelShardResponse {
-    int32  error_code = 1;
-    string error_msg  = 2;
-    bool   canceled   = 3;
+    int32  error_code = 1;  // 0=成功
+    string error_msg  = 2;  // 错误描述
+    bool   canceled   = 3;  // true=已成功取消，false=shard 不存在或已结束
 }
 
+// ── QueryShard ─────────────────────────────────────────────────────────────
+
 message QueryShardRequest {
-    string shard_id = 1;
+    string shard_id = 1;  // 要查询进度的 shard ID
 }
 
 message QueryShardResponse {
-    int32  error_code  = 1;
-    string error_msg   = 2;
-    ShardInfo shard_info = 3;
-    int32  progress     = 4;  // 0-100 进度百分比
+    int32  error_code     = 1;  // 0=成功
+    string error_msg      = 2;  // 错误描述
+    ShardInfo shard_info  = 3;  // shard 当前状态（含 status / worker_id / attempt_id 等）
+    int32  progress       = 4;  // 执行进度（0-100），-1=shard 不存在
 }
 
+// ── Service ────────────────────────────────────────────────────────────────
+
 service WorkerService {
-    rpc AssignShard(AssignShardRequest) returns (AssignShardResponse);
-    rpc CancelShard(CancelShardRequest) returns (CancelShardResponse);
-    rpc QueryShard(QueryShardRequest) returns (QueryShardResponse);
+    rpc AssignShard(AssignShardRequest) returns (AssignShardResponse);  // 分配 shard 给 Worker
+    rpc CancelShard(CancelShardRequest) returns (CancelShardResponse);  // 取消正在执行的 shard
+    rpc QueryShard(QueryShardRequest) returns (QueryShardResponse);     // 查询 shard 执行进度
 }

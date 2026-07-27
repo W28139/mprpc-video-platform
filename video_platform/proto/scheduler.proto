@@ -8,32 +8,41 @@ option cc_generic_services = true;
 
 // ============================================================================
 // SchedulerService — 任务调度与切分
+//
+// 由 JobService 调用 ScheduleJob 触发，内部做视频时长探测 + 按时间切片 +
+// 从 WorkerManager 查询可用 Worker + 按评分策略分配 shard。
 // ============================================================================
 
+// ── ScheduleJob ────────────────────────────────────────────────────────────
+
 message ScheduleJobRequest {
-    JobInfo job_info = 1;
+    JobInfo job_info = 1;  // 要进行切分和调度的 job（至少包含 job_id / input_path / target_resolution）
 }
 
 message ScheduleJobResponse {
-    int32  error_code         = 1;
-    string error_msg          = 2;
-    bool   accepted           = 3;
-    string job_id             = 4;
+    int32  error_code = 1;  // 0=成功接受，非0=拒绝
+    string error_msg  = 2;  // 失败时的错误描述
+    bool   accepted   = 3;  // 是否被调度器接受
+    string job_id     = 4;  // 回传 job_id，方便调用方校验
 }
 
+// ── RescheduleShard ────────────────────────────────────────────────────────
+
 message RescheduleShardRequest {
-    string shard_id    = 1;
-    string job_id      = 2;
-    string reason      = 3;  // 重调度原因：TIMEOUT / WORKER_FAILED / MANUAL
+    string shard_id = 1;  // 要重新调度的 shard
+    string job_id   = 2;  // 所属 job（用于校验和日志）
+    string reason   = 3;  // 触发原因：TIMEOUT（心跳超时） / WORKER_FAILED（Worker 返回失败） / MANUAL（人工）
 }
 
 message RescheduleShardResponse {
-    int32  error_code = 1;
-    string error_msg  = 2;
-    bool   accepted   = 3;
+    int32  error_code = 1;  // 0=成功，非0=失败（如 shard 已达最大重试次数）
+    string error_msg  = 2;  // 失败描述
+    bool   accepted   = 3;  // 是否接受重调度请求
 }
 
+// ── Service ────────────────────────────────────────────────────────────────
+
 service SchedulerService {
-    rpc ScheduleJob(ScheduleJobRequest) returns (ScheduleJobResponse);
-    rpc RescheduleShard(RescheduleShardRequest) returns (RescheduleShardResponse);
+    rpc ScheduleJob(ScheduleJobRequest) returns (ScheduleJobResponse);          // 对 job 进行切分并开始调度
+    rpc RescheduleShard(RescheduleShardRequest) returns (RescheduleShardResponse); // 重新调度失败的 shard
 }

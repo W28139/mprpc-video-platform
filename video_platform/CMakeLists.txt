@@ -73,3 +73,9 @@ add_executable(result_collector
     ${CMAKE_CURRENT_SOURCE_DIR}/src/result_collector/result_collector.cpp
 )
 target_link_libraries(result_collector video_common)
+
+# JobClient — 提交任务的命令行客户端工具
+add_executable(job_client
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/job_service/job_client.cpp
+)
+target_link_libraries(job_client video_common)
