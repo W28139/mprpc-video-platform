@@ -114,8 +114,37 @@ struct CancelJobResponseDefaultTypeInternal {
   };
 };
 PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 CancelJobResponseDefaultTypeInternal _CancelJobResponse_default_instance_;
+PROTOBUF_CONSTEXPR UpdateJobStatusRequest::UpdateJobStatusRequest(
+    ::_pbi::ConstantInitialized): _impl_{
+    /*decltype(_impl_.job_id_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+  , /*decltype(_impl_.status_)*/0
+  , /*decltype(_impl_.shard_count_)*/0
+  , /*decltype(_impl_._cached_size_)*/{}} {}
+struct UpdateJobStatusRequestDefaultTypeInternal {
+  PROTOBUF_CONSTEXPR UpdateJobStatusRequestDefaultTypeInternal()
+      : _instance(::_pbi::ConstantInitialized{}) {}
+  ~UpdateJobStatusRequestDefaultTypeInternal() {}
+  union {
+    UpdateJobStatusRequest _instance;
+  };
+};
+PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 UpdateJobStatusRequestDefaultTypeInternal _UpdateJobStatusRequest_default_instance_;
+PROTOBUF_CONSTEXPR UpdateJobStatusResponse::UpdateJobStatusResponse(
+    ::_pbi::ConstantInitialized): _impl_{
+    /*decltype(_impl_.error_msg_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+  , /*decltype(_impl_.error_code_)*/0
+  , /*decltype(_impl_._cached_size_)*/{}} {}
+struct UpdateJobStatusResponseDefaultTypeInternal {
+  PROTOBUF_CONSTEXPR UpdateJobStatusResponseDefaultTypeInternal()
+      : _instance(::_pbi::ConstantInitialized{}) {}
+  ~UpdateJobStatusResponseDefaultTypeInternal() {}
+  union {
+    UpdateJobStatusResponse _instance;
+  };
+};
+PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 UpdateJobStatusResponseDefaultTypeInternal _UpdateJobStatusResponse_default_instance_;
 }  // namespace video_platform
-static ::_pb::Metadata file_level_metadata_job_2eproto[6];
+static ::_pb::Metadata file_level_metadata_job_2eproto[8];
 static constexpr ::_pb::EnumDescriptor const** file_level_enum_descriptors_job_2eproto = nullptr;
 static const ::_pb::ServiceDescriptor* file_level_service_descriptors_job_2eproto[1];
 
@@ -177,6 +206,23 @@ const uint32_t TableStruct_job_2eproto::offsets[] PROTOBUF_SECTION_VARIABLE(prot
   ~0u,  // no _inlined_string_donated_
   PROTOBUF_FIELD_OFFSET(::video_platform::CancelJobResponse, _impl_.error_code_),
   PROTOBUF_FIELD_OFFSET(::video_platform::CancelJobResponse, _impl_.error_msg_),
+  ~0u,  // no _has_bits_
+  PROTOBUF_FIELD_OFFSET(::video_platform::UpdateJobStatusRequest, _internal_metadata_),
+  ~0u,  // no _extensions_
+  ~0u,  // no _oneof_case_
+  ~0u,  // no _weak_field_map_
+  ~0u,  // no _inlined_string_donated_
+  PROTOBUF_FIELD_OFFSET(::video_platform::UpdateJobStatusRequest, _impl_.job_id_),
+  PROTOBUF_FIELD_OFFSET(::video_platform::UpdateJobStatusRequest, _impl_.status_),
+  PROTOBUF_FIELD_OFFSET(::video_platform::UpdateJobStatusRequest, _impl_.shard_count_),
+  ~0u,  // no _has_bits_
+  PROTOBUF_FIELD_OFFSET(::video_platform::UpdateJobStatusResponse, _internal_metadata_),
+  ~0u,  // no _extensions_
+  ~0u,  // no _oneof_case_
+  ~0u,  // no _weak_field_map_
+  ~0u,  // no _inlined_string_donated_
+  PROTOBUF_FIELD_OFFSET(::video_platform::UpdateJobStatusResponse, _impl_.error_code_),
+  PROTOBUF_FIELD_OFFSET(::video_platform::UpdateJobStatusResponse, _impl_.error_msg_),
 };
 static const ::_pbi::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) = {
   { 0, -1, -1, sizeof(::video_platform::SubmitJobRequest)},
@@ -185,6 +231,8 @@ static const ::_pbi::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protode
   { 31, -1, -1, sizeof(::video_platform::QueryJobResponse)},
   { 41, -1, -1, sizeof(::video_platform::CancelJobRequest)},
   { 49, -1, -1, sizeof(::video_platform::CancelJobResponse)},
+  { 57, -1, -1, sizeof(::video_platform::UpdateJobStatusRequest)},
+  { 66, -1, -1, sizeof(::video_platform::UpdateJobStatusResponse)},
 };
 
 static const ::_pb::Message* const file_default_instances[] = {
@@ -194,6 +242,8 @@ static const ::_pb::Message* const file_default_instances[] = {
   &::video_platform::_QueryJobResponse_default_instance_._instance,
   &::video_platform::_CancelJobRequest_default_instance_._instance,
   &::video_platform::_CancelJobResponse_default_instance_._instance,
+  &::video_platform::_UpdateJobStatusRequest_default_instance_._instance,
+  &::video_platform::_UpdateJobStatusResponse_default_instance_._instance,
 };
 
 const char descriptor_table_protodef_job_2eproto[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) =
@@ -213,23 +263,29 @@ const char descriptor_table_protodef_job_2eproto[] PROTOBUF_SECTION_VARIABLE(pro
   "o_platform.ShardInfo\"2\n\020CancelJobRequest"
   "\022\016\n\006job_id\030\001 \001(\t\022\016\n\006reason\030\002 \001(\t\":\n\021Canc"
   "elJobResponse\022\022\n\nerror_code\030\001 \001(\005\022\021\n\terr"
-  "or_msg\030\002 \001(\t2\377\001\n\nJobService\022P\n\tSubmitJob"
-  "\022 .video_platform.SubmitJobRequest\032!.vid"
-  "eo_platform.SubmitJobResponse\022M\n\010QueryJo"
-  "b\022\037.video_platform.QueryJobRequest\032 .vid"
-  "eo_platform.QueryJobResponse\022P\n\tCancelJo"
-  "b\022 .video_platform.CancelJobRequest\032!.vi"
-  "deo_platform.CancelJobResponseB\003\200\001\001b\006pro"
-  "to3"
+  "or_msg\030\002 \001(\t\"h\n\026UpdateJobStatusRequest\022\016"
+  "\n\006job_id\030\001 \001(\t\022)\n\006status\030\002 \001(\0162\031.video_p"
+  "latform.JobStatus\022\023\n\013shard_count\030\003 \001(\005\"@"
+  "\n\027UpdateJobStatusResponse\022\022\n\nerror_code\030"
+  "\001 \001(\005\022\021\n\terror_msg\030\002 \001(\t2\343\002\n\nJobService\022"
+  "P\n\tSubmitJob\022 .video_platform.SubmitJobR"
+  "equest\032!.video_platform.SubmitJobRespons"
+  "e\022M\n\010QueryJob\022\037.video_platform.QueryJobR"
+  "equest\032 .video_platform.QueryJobResponse"
+  "\022P\n\tCancelJob\022 .video_platform.CancelJob"
+  "Request\032!.video_platform.CancelJobRespon"
+  "se\022b\n\017UpdateJobStatus\022&.video_platform.U"
+  "pdateJobStatusRequest\032\'.video_platform.U"
+  "pdateJobStatusResponseB\003\200\001\001b\006proto3"
   ;
 static const ::_pbi::DescriptorTable* const descriptor_table_job_2eproto_deps[1] = {
   &::descriptor_table_common_2eproto,
 };
 static ::_pbi::once_flag descriptor_table_job_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_job_2eproto = {
-    false, false, 923, descriptor_table_protodef_job_2eproto,
+    false, false, 1195, descriptor_table_protodef_job_2eproto,
     "job.proto",
-    &descriptor_table_job_2eproto_once, descriptor_table_job_2eproto_deps, 1, 6,
+    &descriptor_table_job_2eproto_once, descriptor_table_job_2eproto_deps, 1, 8,
     schemas, file_default_instances, TableStruct_job_2eproto::offsets,
     file_level_metadata_job_2eproto, file_level_enum_descriptors_job_2eproto,
     file_level_service_descriptors_job_2eproto,
@@ -2068,6 +2124,502 @@ void CancelJobResponse::InternalSwap(CancelJobResponse* other) {
 
 // ===================================================================
 
+class UpdateJobStatusRequest::_Internal {
+ public:
+};
+
+UpdateJobStatusRequest::UpdateJobStatusRequest(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+                         bool is_message_owned)
+  : ::PROTOBUF_NAMESPACE_ID::Message(arena, is_message_owned) {
+  SharedCtor(arena, is_message_owned);
+  // @@protoc_insertion_point(arena_constructor:video_platform.UpdateJobStatusRequest)
+}
+UpdateJobStatusRequest::UpdateJobStatusRequest(const UpdateJobStatusRequest& from)
+  : ::PROTOBUF_NAMESPACE_ID::Message() {
+  UpdateJobStatusRequest* const _this = this; (void)_this;
+  new (&_impl_) Impl_{
+      decltype(_impl_.job_id_){}
+    , decltype(_impl_.status_){}
+    , decltype(_impl_.shard_count_){}
+    , /*decltype(_impl_._cached_size_)*/{}};
+
+  _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
+  _impl_.job_id_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.job_id_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_job_id().empty()) {
+    _this->_impl_.job_id_.Set(from._internal_job_id(), 
+      _this->GetArenaForAllocation());
+  }
+  ::memcpy(&_impl_.status_, &from._impl_.status_,
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.shard_count_) -
+    reinterpret_cast<char*>(&_impl_.status_)) + sizeof(_impl_.shard_count_));
+  // @@protoc_insertion_point(copy_constructor:video_platform.UpdateJobStatusRequest)
+}
+
+inline void UpdateJobStatusRequest::SharedCtor(
+    ::_pb::Arena* arena, bool is_message_owned) {
+  (void)arena;
+  (void)is_message_owned;
+  new (&_impl_) Impl_{
+      decltype(_impl_.job_id_){}
+    , decltype(_impl_.status_){0}
+    , decltype(_impl_.shard_count_){0}
+    , /*decltype(_impl_._cached_size_)*/{}
+  };
+  _impl_.job_id_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.job_id_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+}
+
+UpdateJobStatusRequest::~UpdateJobStatusRequest() {
+  // @@protoc_insertion_point(destructor:video_platform.UpdateJobStatusRequest)
+  if (auto *arena = _internal_metadata_.DeleteReturnArena<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>()) {
+  (void)arena;
+    return;
+  }
+  SharedDtor();
+}
+
+inline void UpdateJobStatusRequest::SharedDtor() {
+  GOOGLE_DCHECK(GetArenaForAllocation() == nullptr);
+  _impl_.job_id_.Destroy();
+}
+
+void UpdateJobStatusRequest::SetCachedSize(int size) const {
+  _impl_._cached_size_.Set(size);
+}
+
+void UpdateJobStatusRequest::Clear() {
+// @@protoc_insertion_point(message_clear_start:video_platform.UpdateJobStatusRequest)
+  uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  _impl_.job_id_.ClearToEmpty();
+  ::memset(&_impl_.status_, 0, static_cast<size_t>(
+      reinterpret_cast<char*>(&_impl_.shard_count_) -
+      reinterpret_cast<char*>(&_impl_.status_)) + sizeof(_impl_.shard_count_));
+  _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
+}
+
+const char* UpdateJobStatusRequest::_InternalParse(const char* ptr, ::_pbi::ParseContext* ctx) {
+#define CHK_(x) if (PROTOBUF_PREDICT_FALSE(!(x))) goto failure
+  while (!ctx->Done(&ptr)) {
+    uint32_t tag;
+    ptr = ::_pbi::ReadTag(ptr, &tag);
+    switch (tag >> 3) {
+      // string job_id = 1;
+      case 1:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 10)) {
+          auto str = _internal_mutable_job_id();
+          ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+          CHK_(::_pbi::VerifyUTF8(str, "video_platform.UpdateJobStatusRequest.job_id"));
+        } else
+          goto handle_unusual;
+        continue;
+      // .video_platform.JobStatus status = 2;
+      case 2:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 16)) {
+          uint64_t val = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+          _internal_set_status(static_cast<::video_platform::JobStatus>(val));
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 shard_count = 3;
+      case 3:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 24)) {
+          _impl_.shard_count_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      default:
+        goto handle_unusual;
+    }  // switch
+  handle_unusual:
+    if ((tag == 0) || ((tag & 7) == 4)) {
+      CHK_(ptr);
+      ctx->SetLastTag(tag);
+      goto message_done;
+    }
+    ptr = UnknownFieldParse(
+        tag,
+        _internal_metadata_.mutable_unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(),
+        ptr, ctx);
+    CHK_(ptr != nullptr);
+  }  // while
+message_done:
+  return ptr;
+failure:
+  ptr = nullptr;
+  goto message_done;
+#undef CHK_
+}
+
+uint8_t* UpdateJobStatusRequest::_InternalSerialize(
+    uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const {
+  // @@protoc_insertion_point(serialize_to_array_start:video_platform.UpdateJobStatusRequest)
+  uint32_t cached_has_bits = 0;
+  (void) cached_has_bits;
+
+  // string job_id = 1;
+  if (!this->_internal_job_id().empty()) {
+    ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::VerifyUtf8String(
+      this->_internal_job_id().data(), static_cast<int>(this->_internal_job_id().length()),
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::SERIALIZE,
+      "video_platform.UpdateJobStatusRequest.job_id");
+    target = stream->WriteStringMaybeAliased(
+        1, this->_internal_job_id(), target);
+  }
+
+  // .video_platform.JobStatus status = 2;
+  if (this->_internal_status() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteEnumToArray(
+      2, this->_internal_status(), target);
+  }
+
+  // int32 shard_count = 3;
+  if (this->_internal_shard_count() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(3, this->_internal_shard_count(), target);
+  }
+
+  if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
+    target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
+        _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
+  }
+  // @@protoc_insertion_point(serialize_to_array_end:video_platform.UpdateJobStatusRequest)
+  return target;
+}
+
+size_t UpdateJobStatusRequest::ByteSizeLong() const {
+// @@protoc_insertion_point(message_byte_size_start:video_platform.UpdateJobStatusRequest)
+  size_t total_size = 0;
+
+  uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  // string job_id = 1;
+  if (!this->_internal_job_id().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::StringSize(
+        this->_internal_job_id());
+  }
+
+  // .video_platform.JobStatus status = 2;
+  if (this->_internal_status() != 0) {
+    total_size += 1 +
+      ::_pbi::WireFormatLite::EnumSize(this->_internal_status());
+  }
+
+  // int32 shard_count = 3;
+  if (this->_internal_shard_count() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_shard_count());
+  }
+
+  return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
+}
+
+const ::PROTOBUF_NAMESPACE_ID::Message::ClassData UpdateJobStatusRequest::_class_data_ = {
+    ::PROTOBUF_NAMESPACE_ID::Message::CopyWithSourceCheck,
+    UpdateJobStatusRequest::MergeImpl
+};
+const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*UpdateJobStatusRequest::GetClassData() const { return &_class_data_; }
+
+
+void UpdateJobStatusRequest::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROTOBUF_NAMESPACE_ID::Message& from_msg) {
+  auto* const _this = static_cast<UpdateJobStatusRequest*>(&to_msg);
+  auto& from = static_cast<const UpdateJobStatusRequest&>(from_msg);
+  // @@protoc_insertion_point(class_specific_merge_from_start:video_platform.UpdateJobStatusRequest)
+  GOOGLE_DCHECK_NE(&from, _this);
+  uint32_t cached_has_bits = 0;
+  (void) cached_has_bits;
+
+  if (!from._internal_job_id().empty()) {
+    _this->_internal_set_job_id(from._internal_job_id());
+  }
+  if (from._internal_status() != 0) {
+    _this->_internal_set_status(from._internal_status());
+  }
+  if (from._internal_shard_count() != 0) {
+    _this->_internal_set_shard_count(from._internal_shard_count());
+  }
+  _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
+}
+
+void UpdateJobStatusRequest::CopyFrom(const UpdateJobStatusRequest& from) {
+// @@protoc_insertion_point(class_specific_copy_from_start:video_platform.UpdateJobStatusRequest)
+  if (&from == this) return;
+  Clear();
+  MergeFrom(from);
+}
+
+bool UpdateJobStatusRequest::IsInitialized() const {
+  return true;
+}
+
+void UpdateJobStatusRequest::InternalSwap(UpdateJobStatusRequest* other) {
+  using std::swap;
+  auto* lhs_arena = GetArenaForAllocation();
+  auto* rhs_arena = other->GetArenaForAllocation();
+  _internal_metadata_.InternalSwap(&other->_internal_metadata_);
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &_impl_.job_id_, lhs_arena,
+      &other->_impl_.job_id_, rhs_arena
+  );
+  ::PROTOBUF_NAMESPACE_ID::internal::memswap<
+      PROTOBUF_FIELD_OFFSET(UpdateJobStatusRequest, _impl_.shard_count_)
+      + sizeof(UpdateJobStatusRequest::_impl_.shard_count_)
+      - PROTOBUF_FIELD_OFFSET(UpdateJobStatusRequest, _impl_.status_)>(
+          reinterpret_cast<char*>(&_impl_.status_),
+          reinterpret_cast<char*>(&other->_impl_.status_));
+}
+
+::PROTOBUF_NAMESPACE_ID::Metadata UpdateJobStatusRequest::GetMetadata() const {
+  return ::_pbi::AssignDescriptors(
+      &descriptor_table_job_2eproto_getter, &descriptor_table_job_2eproto_once,
+      file_level_metadata_job_2eproto[6]);
+}
+
+// ===================================================================
+
+class UpdateJobStatusResponse::_Internal {
+ public:
+};
+
+UpdateJobStatusResponse::UpdateJobStatusResponse(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+                         bool is_message_owned)
+  : ::PROTOBUF_NAMESPACE_ID::Message(arena, is_message_owned) {
+  SharedCtor(arena, is_message_owned);
+  // @@protoc_insertion_point(arena_constructor:video_platform.UpdateJobStatusResponse)
+}
+UpdateJobStatusResponse::UpdateJobStatusResponse(const UpdateJobStatusResponse& from)
+  : ::PROTOBUF_NAMESPACE_ID::Message() {
+  UpdateJobStatusResponse* const _this = this; (void)_this;
+  new (&_impl_) Impl_{
+      decltype(_impl_.error_msg_){}
+    , decltype(_impl_.error_code_){}
+    , /*decltype(_impl_._cached_size_)*/{}};
+
+  _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
+  _impl_.error_msg_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.error_msg_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_error_msg().empty()) {
+    _this->_impl_.error_msg_.Set(from._internal_error_msg(), 
+      _this->GetArenaForAllocation());
+  }
+  _this->_impl_.error_code_ = from._impl_.error_code_;
+  // @@protoc_insertion_point(copy_constructor:video_platform.UpdateJobStatusResponse)
+}
+
+inline void UpdateJobStatusResponse::SharedCtor(
+    ::_pb::Arena* arena, bool is_message_owned) {
+  (void)arena;
+  (void)is_message_owned;
+  new (&_impl_) Impl_{
+      decltype(_impl_.error_msg_){}
+    , decltype(_impl_.error_code_){0}
+    , /*decltype(_impl_._cached_size_)*/{}
+  };
+  _impl_.error_msg_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.error_msg_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+}
+
+UpdateJobStatusResponse::~UpdateJobStatusResponse() {
+  // @@protoc_insertion_point(destructor:video_platform.UpdateJobStatusResponse)
+  if (auto *arena = _internal_metadata_.DeleteReturnArena<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>()) {
+  (void)arena;
+    return;
+  }
+  SharedDtor();
+}
+
+inline void UpdateJobStatusResponse::SharedDtor() {
+  GOOGLE_DCHECK(GetArenaForAllocation() == nullptr);
+  _impl_.error_msg_.Destroy();
+}
+
+void UpdateJobStatusResponse::SetCachedSize(int size) const {
+  _impl_._cached_size_.Set(size);
+}
+
+void UpdateJobStatusResponse::Clear() {
+// @@protoc_insertion_point(message_clear_start:video_platform.UpdateJobStatusResponse)
+  uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  _impl_.error_msg_.ClearToEmpty();
+  _impl_.error_code_ = 0;
+  _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
+}
+
+const char* UpdateJobStatusResponse::_InternalParse(const char* ptr, ::_pbi::ParseContext* ctx) {
+#define CHK_(x) if (PROTOBUF_PREDICT_FALSE(!(x))) goto failure
+  while (!ctx->Done(&ptr)) {
+    uint32_t tag;
+    ptr = ::_pbi::ReadTag(ptr, &tag);
+    switch (tag >> 3) {
+      // int32 error_code = 1;
+      case 1:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 8)) {
+          _impl_.error_code_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // string error_msg = 2;
+      case 2:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 18)) {
+          auto str = _internal_mutable_error_msg();
+          ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+          CHK_(::_pbi::VerifyUTF8(str, "video_platform.UpdateJobStatusResponse.error_msg"));
+        } else
+          goto handle_unusual;
+        continue;
+      default:
+        goto handle_unusual;
+    }  // switch
+  handle_unusual:
+    if ((tag == 0) || ((tag & 7) == 4)) {
+      CHK_(ptr);
+      ctx->SetLastTag(tag);
+      goto message_done;
+    }
+    ptr = UnknownFieldParse(
+        tag,
+        _internal_metadata_.mutable_unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(),
+        ptr, ctx);
+    CHK_(ptr != nullptr);
+  }  // while
+message_done:
+  return ptr;
+failure:
+  ptr = nullptr;
+  goto message_done;
+#undef CHK_
+}
+
+uint8_t* UpdateJobStatusResponse::_InternalSerialize(
+    uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const {
+  // @@protoc_insertion_point(serialize_to_array_start:video_platform.UpdateJobStatusResponse)
+  uint32_t cached_has_bits = 0;
+  (void) cached_has_bits;
+
+  // int32 error_code = 1;
+  if (this->_internal_error_code() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(1, this->_internal_error_code(), target);
+  }
+
+  // string error_msg = 2;
+  if (!this->_internal_error_msg().empty()) {
+    ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::VerifyUtf8String(
+      this->_internal_error_msg().data(), static_cast<int>(this->_internal_error_msg().length()),
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::SERIALIZE,
+      "video_platform.UpdateJobStatusResponse.error_msg");
+    target = stream->WriteStringMaybeAliased(
+        2, this->_internal_error_msg(), target);
+  }
+
+  if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
+    target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
+        _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
+  }
+  // @@protoc_insertion_point(serialize_to_array_end:video_platform.UpdateJobStatusResponse)
+  return target;
+}
+
+size_t UpdateJobStatusResponse::ByteSizeLong() const {
+// @@protoc_insertion_point(message_byte_size_start:video_platform.UpdateJobStatusResponse)
+  size_t total_size = 0;
+
+  uint32_t cached_has_bits = 0;
+  // Prevent compiler warnings about cached_has_bits being unused
+  (void) cached_has_bits;
+
+  // string error_msg = 2;
+  if (!this->_internal_error_msg().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::StringSize(
+        this->_internal_error_msg());
+  }
+
+  // int32 error_code = 1;
+  if (this->_internal_error_code() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_error_code());
+  }
+
+  return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
+}
+
+const ::PROTOBUF_NAMESPACE_ID::Message::ClassData UpdateJobStatusResponse::_class_data_ = {
+    ::PROTOBUF_NAMESPACE_ID::Message::CopyWithSourceCheck,
+    UpdateJobStatusResponse::MergeImpl
+};
+const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*UpdateJobStatusResponse::GetClassData() const { return &_class_data_; }
+
+
+void UpdateJobStatusResponse::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROTOBUF_NAMESPACE_ID::Message& from_msg) {
+  auto* const _this = static_cast<UpdateJobStatusResponse*>(&to_msg);
+  auto& from = static_cast<const UpdateJobStatusResponse&>(from_msg);
+  // @@protoc_insertion_point(class_specific_merge_from_start:video_platform.UpdateJobStatusResponse)
+  GOOGLE_DCHECK_NE(&from, _this);
+  uint32_t cached_has_bits = 0;
+  (void) cached_has_bits;
+
+  if (!from._internal_error_msg().empty()) {
+    _this->_internal_set_error_msg(from._internal_error_msg());
+  }
+  if (from._internal_error_code() != 0) {
+    _this->_internal_set_error_code(from._internal_error_code());
+  }
+  _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
+}
+
+void UpdateJobStatusResponse::CopyFrom(const UpdateJobStatusResponse& from) {
+// @@protoc_insertion_point(class_specific_copy_from_start:video_platform.UpdateJobStatusResponse)
+  if (&from == this) return;
+  Clear();
+  MergeFrom(from);
+}
+
+bool UpdateJobStatusResponse::IsInitialized() const {
+  return true;
+}
+
+void UpdateJobStatusResponse::InternalSwap(UpdateJobStatusResponse* other) {
+  using std::swap;
+  auto* lhs_arena = GetArenaForAllocation();
+  auto* rhs_arena = other->GetArenaForAllocation();
+  _internal_metadata_.InternalSwap(&other->_internal_metadata_);
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &_impl_.error_msg_, lhs_arena,
+      &other->_impl_.error_msg_, rhs_arena
+  );
+  swap(_impl_.error_code_, other->_impl_.error_code_);
+}
+
+::PROTOBUF_NAMESPACE_ID::Metadata UpdateJobStatusResponse::GetMetadata() const {
+  return ::_pbi::AssignDescriptors(
+      &descriptor_table_job_2eproto_getter, &descriptor_table_job_2eproto_once,
+      file_level_metadata_job_2eproto[7]);
+}
+
+// ===================================================================
+
 JobService::~JobService() {}
 
 const ::PROTOBUF_NAMESPACE_ID::ServiceDescriptor* JobService::descriptor() {
@@ -2103,6 +2655,14 @@ void JobService::CancelJob(::PROTOBUF_NAMESPACE_ID::RpcController* controller,
   done->Run();
 }
 
+void JobService::UpdateJobStatus(::PROTOBUF_NAMESPACE_ID::RpcController* controller,
+                         const ::video_platform::UpdateJobStatusRequest*,
+                         ::video_platform::UpdateJobStatusResponse*,
+                         ::google::protobuf::Closure* done) {
+  controller->SetFailed("Method UpdateJobStatus() not implemented.");
+  done->Run();
+}
+
 void JobService::CallMethod(const ::PROTOBUF_NAMESPACE_ID::MethodDescriptor* method,
                              ::PROTOBUF_NAMESPACE_ID::RpcController* controller,
                              const ::PROTOBUF_NAMESPACE_ID::Message* request,
@@ -2134,6 +2694,14 @@ void JobService::CallMethod(const ::PROTOBUF_NAMESPACE_ID::MethodDescriptor* met
                  response),
              done);
       break;
+    case 3:
+      UpdateJobStatus(controller,
+             ::PROTOBUF_NAMESPACE_ID::internal::DownCast<const ::video_platform::UpdateJobStatusRequest*>(
+                 request),
+             ::PROTOBUF_NAMESPACE_ID::internal::DownCast<::video_platform::UpdateJobStatusResponse*>(
+                 response),
+             done);
+      break;
     default:
       GOOGLE_LOG(FATAL) << "Bad method index; this should never happen.";
       break;
@@ -2150,6 +2718,8 @@ const ::PROTOBUF_NAMESPACE_ID::Message& JobService::GetRequestPrototype(
       return ::video_platform::QueryJobRequest::default_instance();
     case 2:
       return ::video_platform::CancelJobRequest::default_instance();
+    case 3:
+      return ::video_platform::UpdateJobStatusRequest::default_instance();
     default:
       GOOGLE_LOG(FATAL) << "Bad method index; this should never happen.";
       return *::PROTOBUF_NAMESPACE_ID::MessageFactory::generated_factory()
@@ -2167,6 +2737,8 @@ const ::PROTOBUF_NAMESPACE_ID::Message& JobService::GetResponsePrototype(
       return ::video_platform::QueryJobResponse::default_instance();
     case 2:
       return ::video_platform::CancelJobResponse::default_instance();
+    case 3:
+      return ::video_platform::UpdateJobStatusResponse::default_instance();
     default:
       GOOGLE_LOG(FATAL) << "Bad method index; this should never happen.";
       return *::PROTOBUF_NAMESPACE_ID::MessageFactory::generated_factory()
@@ -2206,6 +2778,13 @@ void JobService_Stub::CancelJob(::PROTOBUF_NAMESPACE_ID::RpcController* controll
   channel_->CallMethod(descriptor()->method(2),
                        controller, request, response, done);
 }
+void JobService_Stub::UpdateJobStatus(::PROTOBUF_NAMESPACE_ID::RpcController* controller,
+                              const ::video_platform::UpdateJobStatusRequest* request,
+                              ::video_platform::UpdateJobStatusResponse* response,
+                              ::google::protobuf::Closure* done) {
+  channel_->CallMethod(descriptor()->method(3),
+                       controller, request, response, done);
+}
 
 // @@protoc_insertion_point(namespace_scope)
 }  // namespace video_platform
@@ -2233,6 +2812,14 @@ Arena::CreateMaybeMessage< ::video_platform::CancelJobRequest >(Arena* arena) {
 template<> PROTOBUF_NOINLINE ::video_platform::CancelJobResponse*
 Arena::CreateMaybeMessage< ::video_platform::CancelJobResponse >(Arena* arena) {
   return Arena::CreateMessageInternal< ::video_platform::CancelJobResponse >(arena);
+}
+template<> PROTOBUF_NOINLINE ::video_platform::UpdateJobStatusRequest*
+Arena::CreateMaybeMessage< ::video_platform::UpdateJobStatusRequest >(Arena* arena) {
+  return Arena::CreateMessageInternal< ::video_platform::UpdateJobStatusRequest >(arena);
+}
+template<> PROTOBUF_NOINLINE ::video_platform::UpdateJobStatusResponse*
+Arena::CreateMaybeMessage< ::video_platform::UpdateJobStatusResponse >(Arena* arena) {
+  return Arena::CreateMessageInternal< ::video_platform::UpdateJobStatusResponse >(arena);
 }
 PROTOBUF_NAMESPACE_CLOSE
 

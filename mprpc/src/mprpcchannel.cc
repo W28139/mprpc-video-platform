@@ -772,35 +772,48 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
     // 外层 total_len 由 BuildRpcFrame 写入，服务端 Connection 的 codec 用它做粘包/拆包。
     std::string send_rpc_str = mprpc::BuildRpcFrame(request_payload);
 
-    // 4. 服务发现：优先使用新多实例路径，旧路径仅作为兼容兜底。
-    std::string method_path = MethodRegistryPath(service_name, method_name);
-    std::string legacy_method_path = LegacyMethodPath(service_name, method_name);
-    bool fromCache = false;
-    std::string host_data = GetHostData(method_path, legacy_method_path, fromCache);
-    LOG_DEBUG("rpc call %s::%s discovered endpoint from %s",
-              service_name.c_str(), method_name.c_str(),
-              fromCache ? "cache" : "zookeeper");
-    
-    if (host_data == "")
-    {
-        LOG_ERROR("rpc call %s::%s: zk path %s not found", service_name.c_str(), method_name.c_str(), method_path.c_str());
-        SetControllerFailed(controller, mprpc::RPC_SERVICE_DISCOVERY_FAILED,
-                            method_path + " is not exist!");
-        RunDone(done);
-        return;
-    }
-
+    // 4. 服务发现：直连模式跳过 ZK，否则走标准 ZK 发现流程。
     std::string ip;
     uint16_t port = 0;
-    std::string parseError;
-    if (!ParseHostData(host_data, ip, port, parseError))
+    std::string method_path;
+    std::string legacy_method_path;
+
+    if (use_direct_)
     {
-        LOG_ERROR("rpc call %s::%s: invalid host_data [%s]", service_name.c_str(), method_name.c_str(), host_data.c_str());
-        InvalidateHostData(method_path);
-        SetControllerFailed(controller, mprpc::RPC_SERVICE_DISCOVERY_FAILED,
-                            method_path + " " + parseError);
-        RunDone(done);
-        return;
+        ip = direct_ip_;
+        port = direct_port_;
+        LOG_DEBUG("rpc call %s::%s using direct connection %s:%u",
+                  service_name.c_str(), method_name.c_str(), ip.c_str(), port);
+    }
+    else
+    {
+        method_path = MethodRegistryPath(service_name, method_name);
+        legacy_method_path = LegacyMethodPath(service_name, method_name);
+        bool fromCache = false;
+        std::string host_data = GetHostData(method_path, legacy_method_path, fromCache);
+        LOG_DEBUG("rpc call %s::%s discovered endpoint from %s",
+                  service_name.c_str(), method_name.c_str(),
+                  fromCache ? "cache" : "zookeeper");
+
+        if (host_data == "")
+        {
+            LOG_ERROR("rpc call %s::%s: zk path %s not found", service_name.c_str(), method_name.c_str(), method_path.c_str());
+            SetControllerFailed(controller, mprpc::RPC_SERVICE_DISCOVERY_FAILED,
+                                method_path + " is not exist!");
+            RunDone(done);
+            return;
+        }
+
+        std::string parseError;
+        if (!ParseHostData(host_data, ip, port, parseError))
+        {
+            LOG_ERROR("rpc call %s::%s: invalid host_data [%s]", service_name.c_str(), method_name.c_str(), host_data.c_str());
+            InvalidateHostData(method_path);
+            SetControllerFailed(controller, mprpc::RPC_SERVICE_DISCOVERY_FAILED,
+                                method_path + " " + parseError);
+            RunDone(done);
+            return;
+        }
     }
 
     // 5. 从 endpoint 连接池取一条连接，发送请求并读取完整响应 payload。
@@ -812,6 +825,7 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
                                              recv_str, callErrorCode, callErrorMsg);
 
     if (!callOk &&
+        !use_direct_ &&  // 直连模式不重试 ZK 发现
         (callErrorCode == mprpc::RPC_CONNECT_FAILED ||
          callErrorCode == mprpc::RPC_TIMEOUT ||
          callErrorCode == mprpc::RPC_SEND_FAILED ||
@@ -820,8 +834,9 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
         // 缓存 endpoint 连接失败时，认为实例可能已经下线，失效缓存后重新发现并重试一次。
         DropEndpointConnections(pooledConn->key);
         InvalidateHostData(method_path);
-        host_data = PickEndpoint(QueryEndpointList(method_path, legacy_method_path));
-        if (!host_data.empty() && ParseHostData(host_data, ip, port, parseError))
+        std::string retry_host = PickEndpoint(QueryEndpointList(method_path, legacy_method_path));
+        std::string retryParseError;
+        if (!retry_host.empty() && ParseHostData(retry_host, ip, port, retryParseError))
         {
             pooledConn = GetPooledConnection(ip, port);
             callOk = SendRequestAndReadResponse(pooledConn, send_rpc_str, timeoutMs,
@@ -831,8 +846,11 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
 
     if (!callOk)
     {
+        std::string endpoint_str = use_direct_
+            ? (direct_ip_ + ":" + std::to_string(direct_port_))
+            : EndpointKey(ip, port);
         LOG_ERROR("rpc call %s::%s to %s failed: %s",
-                  service_name.c_str(), method_name.c_str(), host_data.c_str(), callErrorMsg.c_str());
+                  service_name.c_str(), method_name.c_str(), endpoint_str.c_str(), callErrorMsg.c_str());
         SetControllerFailed(controller, callErrorCode, callErrorMsg);
         RunDone(done);
         return;

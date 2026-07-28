@@ -174,6 +174,18 @@ std::vector<ShardRecord> ShardStore::ListByWorker(const std::string& worker_id) 
     return result;
 }
 
+std::vector<ShardRecord> ShardStore::ListByStatus(int32_t status_filter) const
+{
+    std::shared_lock lock(mutex_);
+    std::vector<ShardRecord> result;
+    for (const auto& kv : shards_)
+    {
+        if (status_filter < 0 || kv.second.status == status_filter)
+            result.push_back(kv.second);
+    }
+    return result;
+}
+
 std::vector<ShardRecord> ShardStore::ListAll() const
 {
     std::shared_lock lock(mutex_);

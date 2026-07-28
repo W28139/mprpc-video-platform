@@ -9,6 +9,16 @@
 
 namespace video_platform {
 
+// ════════════════════════════════════════════════════════════════════════════
+// ⚠️ 重要：所有 Store 都是进程内单例（static 局部变量 + unordered_map）
+//
+// 在多进程部署中（每个服务独立进程），各进程的 Store 实例完全隔离。
+// 跨进程的数据传递通过 RPC 的 proto 请求/响应完成，服务收到 RPC 后
+// 需要从请求参数构造本地 Store 副本。不要假定"写入 Store 后另一进程能读到"。
+//
+// 相关：业务日志第 3 篇「踩坑记录：跨进程内存存储不可见」
+// ════════════════════════════════════════════════════════════════════════════
+
 // ============================================================================
 // JobStore — 任务元信息内存存储
 // ============================================================================
@@ -28,9 +38,10 @@ struct JobRecord {
     std::string target_resolution;  ///< 目标分辨率（720p / 1080p / 4k 等）
     int32_t     target_bitrate = 0; ///< 目标码率（kbps），0 表示不限制
     int64_t     duration_sec = 0;   ///< 视频总时长（秒），由 Scheduler 探测后回填
-    int32_t     priority = 0;       ///< 调度优先级，数值越大越优先
-    int32_t     status = 0;         ///< 当前状态，对应 JobStatus 枚举值
-    int32_t     shard_count = 0;    ///< 拆分出的 shard 总数
+    int32_t     priority = 0;           ///< 调度优先级，数值越大越优先
+    int32_t     status = 0;             ///< 当前状态，对应 JobStatus 枚举值
+    int32_t     shard_count = 0;        ///< 拆分出的 shard 总数
+    int32_t     shard_duration_sec = 0; ///< 每个 shard 的时间切片长度（秒），0=使用默认值
     int64_t     created_at = 0;     ///< 创建时间戳（毫秒）
     int64_t     updated_at = 0;     ///< 最后更新时间戳（毫秒）
 };
@@ -129,6 +140,11 @@ public:
     /// @brief 列出分配给指定 Worker 的所有 shard（线程安全）。
     /// 用途：Worker 心跳超时后，找出所有该 Worker 上 RUNNING 的 shard 重新调度。
     std::vector<ShardRecord> ListByWorker(const std::string& worker_id) const;
+
+    /// @brief 按状态过滤列出 shard。
+    /// @param status_filter 状态值，传 -1 表示列出全部。
+    /// 用途：Scheduler 调度循环查找 SHARD_WAITING 的待分配 shard。
+    std::vector<ShardRecord> ListByStatus(int32_t status_filter) const;
 
     /// @brief 列出所有 shard 的副本（线程安全）。
     std::vector<ShardRecord> ListAll() const;
