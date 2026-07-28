@@ -65,7 +65,7 @@ public:
         //     JobService 写入的数据在另一个进程的 JobStore 中，不可见）
         JobRecord local_job;
         bool job_exists = false;
-
+        // 这里验证，该job_id是否在JobStore的哈希表里已经存在，如果存在了直接使用，不需要新建jobRecord并放入哈希表中
         JobRecord* existing = JobStore::GetInstance().Get(job_id);
         if (existing != nullptr)
         {
@@ -111,9 +111,10 @@ public:
                  "(job_duration=%ds, shard_duration=%ds)",
                  job_id.c_str(), shard_count, mock_job_duration_sec, shard_dur);
 
-        // 3. 更新 Job 状态 → SPLITTING
+        // 3. 更新 Job 状态 → SPLITTING(切分状态)
         local_job.status = static_cast<int32_t>(JobStatus::JOB_SPLITTING);
         local_job.updated_at = NowMs();
+        // JobStore类中，是存放所有JobRecord,用哈希表存放，提供多种更新方法
         JobStore::GetInstance().Update(job_id, local_job);
 
         // 4. 按时间切片创建 ShardRecord
@@ -136,6 +137,7 @@ public:
             shard.created_at  = NowMs();
             shard.updated_at  = NowMs();
 
+            // 类似JobStore 有存放ShardRecord的哈希，提供一些操作的方法
             ShardStore::GetInstance().Insert(shard);
             LOG_INFO("SchedulerService: created shard %s [%lld-%lld ms]",
                      shard.shard_id.c_str(),
@@ -156,6 +158,7 @@ public:
         // JobStore 是进程内存储，Scheduler 的切分结果需要同步回 JobService，
         // 让 QueryJob 能返回正确的 shard_count。
         {
+            // 这里调用channel的目的，不是为了调用对方函数获取结果，仅仅是为了把参数传递到对方进程所在的变量里，巧妙，非常巧妙
             MprpcChannel js_channel;
             JobService_Stub js_stub(&js_channel);
 
@@ -245,7 +248,7 @@ public:
 
 /// @brief 在后台线程中运行调度循环，由 main() 在 Provider 启动前创建
 ///
-/// 设计：Pull 模式 —— 主动扫描 WAITING shard 并拉取 ONLINE Worker 列表，
+/// 设计：Pull 模式 —— 主动扫描 WAITING shard（等待被操作的片） 并拉取 ONLINE Worker(就绪的工作者) 列表，
 /// 而非在 ScheduleJob 中同步分配。优点：
 /// - ScheduleJob 不会被慢 Worker 阻塞（Worker 可能过载或网络慢）
 /// - Worker 列表变化（上线/离线）时分配逻辑自动感知
