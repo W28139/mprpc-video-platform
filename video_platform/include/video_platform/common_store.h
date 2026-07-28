@@ -142,6 +142,11 @@ public:
     /// 用途：Worker 心跳超时后，找出所有该 Worker 上 RUNNING 的 shard 重新调度。
     std::vector<ShardRecord> ListByWorker(const std::string& worker_id) const;
 
+    /// @brief 原子插入或覆盖更新（upsert）。
+    /// 在 unique_lock 内完成：key 不存在则插入，存在则覆盖。
+    /// @return true 表示是新插入（key 之前不存在），false 表示覆盖了已存在的记录。
+    bool InsertOrUpdate(const ShardRecord& shard);
+
     /// @brief 按状态过滤列出 shard。
     /// @param status_filter 状态值，传 -1 表示列出全部。
     /// 用途：Scheduler 调度循环查找 SHARD_WAITING 的待分配 shard。

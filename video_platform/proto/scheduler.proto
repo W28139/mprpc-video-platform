@@ -25,6 +25,7 @@ message ScheduleJobResponse {
     bool   accepted    = 3;  // 是否被调度器接受
     string job_id      = 4;  // 回传 job_id，方便调用方校验
     int32  shard_count = 5;  // 切分出的 shard 总数（直接数据路径，避免侧信道依赖）
+    repeated ShardInfo shards = 6;  // 切分出的 shard 列表（跨进程数据同步）
 }
 
 // ── RescheduleShard ────────────────────────────────────────────────────────

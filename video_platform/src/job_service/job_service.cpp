@@ -103,6 +103,7 @@ public:
         // 最多重试 3 次，防止单次网络抖动导致 job 永久卡死在 PENDING
         bool schedule_ok = false;
         int32_t shard_count_from_scheduler = 0;
+        std::vector<ShardInfo> shard_list_from_scheduler;  // 收集 shard 用于跨进程同步
         for (int attempt = 1; attempt <= 3; ++attempt)
         {
             MprpcChannel sched_channel;
@@ -123,6 +124,10 @@ public:
                          job_id.c_str(), attempt);
                 // 直接从 ScheduleJobResponse 获取 shard_count（直接数据路径，避免侧信道）
                 shard_count_from_scheduler = sched_resp.shard_count();
+                // 捕获 shard 列表用于跨进程同步
+                shard_list_from_scheduler.clear();
+                for (const auto& si : sched_resp.shards())
+                    shard_list_from_scheduler.push_back(si);
                 schedule_ok = true;
                 break;
             }
@@ -153,6 +158,28 @@ public:
                 jobInfo->set_shard_count(shard_count_from_scheduler);
                 jobInfo->set_updated_at(refreshed.updated_at);
             }
+
+            // 填充本地 ShardStore，让 QueryJob 能返回 shard 列表
+            // （JobService 和 Scheduler 是不同进程，shard 数据需要跨进程同步）
+            for (const auto& si : shard_list_from_scheduler)
+            {
+                ShardRecord s;
+                s.shard_id      = si.shard_id();
+                s.job_id        = si.job_id();
+                s.shard_index   = si.shard_index();
+                s.start_ms      = si.start_ms();
+                s.duration_ms   = si.duration_ms();
+                s.status        = static_cast<int32_t>(si.status());
+                s.retry_count   = si.retry_count();
+                s.max_retry     = si.max_retry();
+                s.input_path    = si.input_path();
+                s.output_path   = si.output_path();
+                s.created_at    = si.created_at();
+                s.updated_at    = si.updated_at();
+                ShardStore::GetInstance().Insert(s);
+            }
+            LOG_INFO("JobService::SubmitJob job_id=%s: populated %zu shards in local ShardStore",
+                     job_id.c_str(), shard_list_from_scheduler.size());
         }
         else
         {
@@ -323,6 +350,30 @@ public:
         }
         job.updated_at = NowMs();
         JobStore::GetInstance().Update(request->job_id(), job);
+
+        // ── 同步 shard 状态更新 ─────────────────────────────────────
+        // 其他服务（Scheduler/ResultCollector）通过此 RPC 推送 shard 状态变更。
+        // 首次创建 shard 副本（Scheduler.ScheduleJob 时）或更新已有 shard 状态。
+        for (const auto& si : request->shards())
+        {
+            ShardRecord s;
+            s.shard_id      = si.shard_id();
+            s.job_id        = si.job_id();
+            s.shard_index   = si.shard_index();
+            s.start_ms      = si.start_ms();
+            s.duration_ms   = si.duration_ms();
+            s.status        = static_cast<int32_t>(si.status());
+            s.assigned_worker_id = si.assigned_worker_id();
+            s.attempt_id    = si.attempt_id();
+            s.retry_count   = si.retry_count();
+            s.max_retry     = si.max_retry();
+            s.input_path    = si.input_path();
+            s.output_path   = si.output_path();
+            s.created_at    = si.created_at();
+            s.updated_at    = si.updated_at();
+            // 幂等：已存在则覆盖更新
+            ShardStore::GetInstance().InsertOrUpdate(s);
+        }
 
         LOG_INFO("JobService::UpdateJobStatus job_id=%s updated → status=%d, shard_count=%d",
                  request->job_id().c_str(), job.status, job.shard_count);

@@ -238,6 +238,20 @@ private:
             // 不设置 shard_count — Scheduler 已在切分时正确写入，避免用本地
             // ShardStore 的不完整数据覆盖
 
+            // 同步所有 shard 的最新状态到 JobService
+            for (const auto& s : shards)
+            {
+                auto* si = update_req.add_shards();
+                si->set_shard_id(s.shard_id);
+                si->set_job_id(s.job_id);
+                si->set_shard_index(s.shard_index);
+                si->set_status(static_cast<ShardStatus>(s.status));
+                si->set_assigned_worker_id(s.assigned_worker_id);
+                si->set_attempt_id(s.attempt_id);
+                si->set_retry_count(s.retry_count);
+                si->set_output_path(s.output_path);
+            }
+
             UpdateJobStatusResponse update_resp;
             MprpcController update_ctrl;
             update_ctrl.SetTimeoutMs(3000);

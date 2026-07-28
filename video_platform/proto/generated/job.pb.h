@@ -1347,10 +1347,29 @@ class UpdateJobStatusRequest final :
   // accessors -------------------------------------------------------
 
   enum : int {
+    kShardsFieldNumber = 4,
     kJobIdFieldNumber = 1,
     kStatusFieldNumber = 2,
     kShardCountFieldNumber = 3,
   };
+  // repeated .video_platform.ShardInfo shards = 4;
+  int shards_size() const;
+  private:
+  int _internal_shards_size() const;
+  public:
+  void clear_shards();
+  ::video_platform::ShardInfo* mutable_shards(int index);
+  ::PROTOBUF_NAMESPACE_ID::RepeatedPtrField< ::video_platform::ShardInfo >*
+      mutable_shards();
+  private:
+  const ::video_platform::ShardInfo& _internal_shards(int index) const;
+  ::video_platform::ShardInfo* _internal_add_shards();
+  public:
+  const ::video_platform::ShardInfo& shards(int index) const;
+  ::video_platform::ShardInfo* add_shards();
+  const ::PROTOBUF_NAMESPACE_ID::RepeatedPtrField< ::video_platform::ShardInfo >&
+      shards() const;
+
   // string job_id = 1;
   void clear_job_id();
   const std::string& job_id() const;
@@ -1391,6 +1410,7 @@ class UpdateJobStatusRequest final :
   typedef void InternalArenaConstructable_;
   typedef void DestructorSkippable_;
   struct Impl_ {
+    ::PROTOBUF_NAMESPACE_ID::RepeatedPtrField< ::video_platform::ShardInfo > shards_;
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr job_id_;
     int status_;
     int32_t shard_count_;
@@ -2696,6 +2716,43 @@ inline void UpdateJobStatusRequest::_internal_set_shard_count(int32_t value) {
 inline void UpdateJobStatusRequest::set_shard_count(int32_t value) {
   _internal_set_shard_count(value);
   // @@protoc_insertion_point(field_set:video_platform.UpdateJobStatusRequest.shard_count)
+}
+
+// repeated .video_platform.ShardInfo shards = 4;
+inline int UpdateJobStatusRequest::_internal_shards_size() const {
+  return _impl_.shards_.size();
+}
+inline int UpdateJobStatusRequest::shards_size() const {
+  return _internal_shards_size();
+}
+inline ::video_platform::ShardInfo* UpdateJobStatusRequest::mutable_shards(int index) {
+  // @@protoc_insertion_point(field_mutable:video_platform.UpdateJobStatusRequest.shards)
+  return _impl_.shards_.Mutable(index);
+}
+inline ::PROTOBUF_NAMESPACE_ID::RepeatedPtrField< ::video_platform::ShardInfo >*
+UpdateJobStatusRequest::mutable_shards() {
+  // @@protoc_insertion_point(field_mutable_list:video_platform.UpdateJobStatusRequest.shards)
+  return &_impl_.shards_;
+}
+inline const ::video_platform::ShardInfo& UpdateJobStatusRequest::_internal_shards(int index) const {
+  return _impl_.shards_.Get(index);
+}
+inline const ::video_platform::ShardInfo& UpdateJobStatusRequest::shards(int index) const {
+  // @@protoc_insertion_point(field_get:video_platform.UpdateJobStatusRequest.shards)
+  return _internal_shards(index);
+}
+inline ::video_platform::ShardInfo* UpdateJobStatusRequest::_internal_add_shards() {
+  return _impl_.shards_.Add();
+}
+inline ::video_platform::ShardInfo* UpdateJobStatusRequest::add_shards() {
+  ::video_platform::ShardInfo* _add = _internal_add_shards();
+  // @@protoc_insertion_point(field_add:video_platform.UpdateJobStatusRequest.shards)
+  return _add;
+}
+inline const ::PROTOBUF_NAMESPACE_ID::RepeatedPtrField< ::video_platform::ShardInfo >&
+UpdateJobStatusRequest::shards() const {
+  // @@protoc_insertion_point(field_list:video_platform.UpdateJobStatusRequest.shards)
+  return _impl_.shards_;
 }
 
 // -------------------------------------------------------------------

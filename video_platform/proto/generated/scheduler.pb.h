@@ -348,12 +348,31 @@ class ScheduleJobResponse final :
   // accessors -------------------------------------------------------
 
   enum : int {
+    kShardsFieldNumber = 6,
     kErrorMsgFieldNumber = 2,
     kJobIdFieldNumber = 4,
     kErrorCodeFieldNumber = 1,
     kAcceptedFieldNumber = 3,
     kShardCountFieldNumber = 5,
   };
+  // repeated .video_platform.ShardInfo shards = 6;
+  int shards_size() const;
+  private:
+  int _internal_shards_size() const;
+  public:
+  void clear_shards();
+  ::video_platform::ShardInfo* mutable_shards(int index);
+  ::PROTOBUF_NAMESPACE_ID::RepeatedPtrField< ::video_platform::ShardInfo >*
+      mutable_shards();
+  private:
+  const ::video_platform::ShardInfo& _internal_shards(int index) const;
+  ::video_platform::ShardInfo* _internal_add_shards();
+  public:
+  const ::video_platform::ShardInfo& shards(int index) const;
+  ::video_platform::ShardInfo* add_shards();
+  const ::PROTOBUF_NAMESPACE_ID::RepeatedPtrField< ::video_platform::ShardInfo >&
+      shards() const;
+
   // string error_msg = 2;
   void clear_error_msg();
   const std::string& error_msg() const;
@@ -417,6 +436,7 @@ class ScheduleJobResponse final :
   typedef void InternalArenaConstructable_;
   typedef void DestructorSkippable_;
   struct Impl_ {
+    ::PROTOBUF_NAMESPACE_ID::RepeatedPtrField< ::video_platform::ShardInfo > shards_;
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr error_msg_;
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr job_id_;
     int32_t error_code_;
@@ -1112,6 +1132,43 @@ inline void ScheduleJobResponse::_internal_set_shard_count(int32_t value) {
 inline void ScheduleJobResponse::set_shard_count(int32_t value) {
   _internal_set_shard_count(value);
   // @@protoc_insertion_point(field_set:video_platform.ScheduleJobResponse.shard_count)
+}
+
+// repeated .video_platform.ShardInfo shards = 6;
+inline int ScheduleJobResponse::_internal_shards_size() const {
+  return _impl_.shards_.size();
+}
+inline int ScheduleJobResponse::shards_size() const {
+  return _internal_shards_size();
+}
+inline ::video_platform::ShardInfo* ScheduleJobResponse::mutable_shards(int index) {
+  // @@protoc_insertion_point(field_mutable:video_platform.ScheduleJobResponse.shards)
+  return _impl_.shards_.Mutable(index);
+}
+inline ::PROTOBUF_NAMESPACE_ID::RepeatedPtrField< ::video_platform::ShardInfo >*
+ScheduleJobResponse::mutable_shards() {
+  // @@protoc_insertion_point(field_mutable_list:video_platform.ScheduleJobResponse.shards)
+  return &_impl_.shards_;
+}
+inline const ::video_platform::ShardInfo& ScheduleJobResponse::_internal_shards(int index) const {
+  return _impl_.shards_.Get(index);
+}
+inline const ::video_platform::ShardInfo& ScheduleJobResponse::shards(int index) const {
+  // @@protoc_insertion_point(field_get:video_platform.ScheduleJobResponse.shards)
+  return _internal_shards(index);
+}
+inline ::video_platform::ShardInfo* ScheduleJobResponse::_internal_add_shards() {
+  return _impl_.shards_.Add();
+}
+inline ::video_platform::ShardInfo* ScheduleJobResponse::add_shards() {
+  ::video_platform::ShardInfo* _add = _internal_add_shards();
+  // @@protoc_insertion_point(field_add:video_platform.ScheduleJobResponse.shards)
+  return _add;
+}
+inline const ::PROTOBUF_NAMESPACE_ID::RepeatedPtrField< ::video_platform::ShardInfo >&
+ScheduleJobResponse::shards() const {
+  // @@protoc_insertion_point(field_list:video_platform.ScheduleJobResponse.shards)
+  return _impl_.shards_;
 }
 
 // -------------------------------------------------------------------

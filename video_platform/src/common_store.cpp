@@ -174,6 +174,18 @@ std::vector<ShardRecord> ShardStore::ListByWorker(const std::string& worker_id) 
     return result;
 }
 
+bool ShardStore::InsertOrUpdate(const ShardRecord& shard)
+{
+    std::unique_lock lock(mutex_);
+    auto result = shards_.try_emplace(shard.shard_id, shard);
+    if (!result.second)
+    {
+        // key 已存在，覆盖旧记录
+        result.first->second = shard;
+    }
+    return result.second;  // true = 新插入, false = 覆盖
+}
+
 std::vector<ShardRecord> ShardStore::ListByStatus(int32_t status_filter) const
 {
     std::shared_lock lock(mutex_);

@@ -119,6 +119,7 @@ public:
 
         // 4. 按时间切片创建 ShardRecord
         int64_t shard_duration_ms = static_cast<int64_t>(shard_dur) * 1000;
+        std::vector<ShardRecord> created_shards;
         for (int i = 0; i < shard_count; ++i)
         {
             ShardRecord shard;
@@ -137,8 +138,8 @@ public:
             shard.created_at  = NowMs();
             shard.updated_at  = NowMs();
 
-            // 类似JobStore 有存放ShardRecord的哈希，提供一些操作的方法
             ShardStore::GetInstance().Insert(shard);
+            created_shards.push_back(shard);
             LOG_INFO("SchedulerService: created shard %s [%lld-%lld ms]",
                      shard.shard_id.c_str(),
                      (long long)shard.start_ms,
@@ -167,6 +168,24 @@ public:
             update_req.set_status(JobStatus::JOB_SCHEDULING);
             update_req.set_shard_count(shard_count);
 
+            // 同步 shard 列表到 JobService，让 QueryJob 能返回 shard 详情
+            for (const auto& s : created_shards)
+            {
+                auto* si = update_req.add_shards();
+                si->set_shard_id(s.shard_id);
+                si->set_job_id(s.job_id);
+                si->set_shard_index(s.shard_index);
+                si->set_start_ms(s.start_ms);
+                si->set_duration_ms(s.duration_ms);
+                si->set_status(static_cast<ShardStatus>(s.status));
+                si->set_input_path(s.input_path);
+                si->set_output_path(s.output_path);
+                si->set_retry_count(s.retry_count);
+                si->set_max_retry(s.max_retry);
+                si->set_created_at(s.created_at);
+                si->set_updated_at(s.updated_at);
+            }
+
             UpdateJobStatusResponse update_resp;
             MprpcController update_ctrl;
             update_ctrl.SetTimeoutMs(3000);
@@ -192,6 +211,25 @@ public:
         response->set_accepted(true);
         response->set_job_id(job_id);
         response->set_shard_count(shard_count);  // 直接数据路径，避免侧信道依赖
+
+        // 将 shard 列表填入 response，让 JobService 可构造本地 ShardStore 副本
+        for (const auto& s : created_shards)
+        {
+            auto* si = response->add_shards();
+            si->set_shard_id(s.shard_id);
+            si->set_job_id(s.job_id);
+            si->set_shard_index(s.shard_index);
+            si->set_start_ms(s.start_ms);
+            si->set_duration_ms(s.duration_ms);
+            si->set_status(static_cast<ShardStatus>(s.status));
+            si->set_input_path(s.input_path);
+            si->set_output_path(s.output_path);
+            si->set_retry_count(s.retry_count);
+            si->set_max_retry(s.max_retry);
+            si->set_created_at(s.created_at);
+            si->set_updated_at(s.updated_at);
+        }
+
         done->Run();
     }
 

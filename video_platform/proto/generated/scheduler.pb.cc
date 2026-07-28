@@ -36,7 +36,8 @@ struct ScheduleJobRequestDefaultTypeInternal {
 PROTOBUF_ATTRIBUTE_NO_DESTROY PROTOBUF_CONSTINIT PROTOBUF_ATTRIBUTE_INIT_PRIORITY1 ScheduleJobRequestDefaultTypeInternal _ScheduleJobRequest_default_instance_;
 PROTOBUF_CONSTEXPR ScheduleJobResponse::ScheduleJobResponse(
     ::_pbi::ConstantInitialized): _impl_{
-    /*decltype(_impl_.error_msg_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+    /*decltype(_impl_.shards_)*/{}
+  , /*decltype(_impl_.error_msg_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.job_id_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.error_code_)*/0
   , /*decltype(_impl_.accepted_)*/false
@@ -105,6 +106,7 @@ const uint32_t TableStruct_scheduler_2eproto::offsets[] PROTOBUF_SECTION_VARIABL
   PROTOBUF_FIELD_OFFSET(::video_platform::ScheduleJobResponse, _impl_.accepted_),
   PROTOBUF_FIELD_OFFSET(::video_platform::ScheduleJobResponse, _impl_.job_id_),
   PROTOBUF_FIELD_OFFSET(::video_platform::ScheduleJobResponse, _impl_.shard_count_),
+  PROTOBUF_FIELD_OFFSET(::video_platform::ScheduleJobResponse, _impl_.shards_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::video_platform::RescheduleShardRequest, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -127,8 +129,8 @@ const uint32_t TableStruct_scheduler_2eproto::offsets[] PROTOBUF_SECTION_VARIABL
 static const ::_pbi::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) = {
   { 0, -1, -1, sizeof(::video_platform::ScheduleJobRequest)},
   { 7, -1, -1, sizeof(::video_platform::ScheduleJobResponse)},
-  { 18, -1, -1, sizeof(::video_platform::RescheduleShardRequest)},
-  { 27, -1, -1, sizeof(::video_platform::RescheduleShardResponse)},
+  { 19, -1, -1, sizeof(::video_platform::RescheduleShardRequest)},
+  { 28, -1, -1, sizeof(::video_platform::RescheduleShardResponse)},
 };
 
 static const ::_pb::Message* const file_default_instances[] = {
@@ -141,27 +143,28 @@ static const ::_pb::Message* const file_default_instances[] = {
 const char descriptor_table_protodef_scheduler_2eproto[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) =
   "\n\017scheduler.proto\022\016video_platform\032\014commo"
   "n.proto\"\?\n\022ScheduleJobRequest\022)\n\010job_inf"
-  "o\030\001 \001(\0132\027.video_platform.JobInfo\"s\n\023Sche"
-  "duleJobResponse\022\022\n\nerror_code\030\001 \001(\005\022\021\n\te"
-  "rror_msg\030\002 \001(\t\022\020\n\010accepted\030\003 \001(\010\022\016\n\006job_"
-  "id\030\004 \001(\t\022\023\n\013shard_count\030\005 \001(\005\"J\n\026Resched"
-  "uleShardRequest\022\020\n\010shard_id\030\001 \001(\t\022\016\n\006job"
-  "_id\030\002 \001(\t\022\016\n\006reason\030\003 \001(\t\"R\n\027RescheduleS"
-  "hardResponse\022\022\n\nerror_code\030\001 \001(\005\022\021\n\terro"
-  "r_msg\030\002 \001(\t\022\020\n\010accepted\030\003 \001(\0102\316\001\n\020Schedu"
-  "lerService\022V\n\013ScheduleJob\022\".video_platfo"
-  "rm.ScheduleJobRequest\032#.video_platform.S"
-  "cheduleJobResponse\022b\n\017RescheduleShard\022&."
-  "video_platform.RescheduleShardRequest\032\'."
-  "video_platform.RescheduleShardResponseB\003"
-  "\200\001\001b\006proto3"
+  "o\030\001 \001(\0132\027.video_platform.JobInfo\"\236\001\n\023Sch"
+  "eduleJobResponse\022\022\n\nerror_code\030\001 \001(\005\022\021\n\t"
+  "error_msg\030\002 \001(\t\022\020\n\010accepted\030\003 \001(\010\022\016\n\006job"
+  "_id\030\004 \001(\t\022\023\n\013shard_count\030\005 \001(\005\022)\n\006shards"
+  "\030\006 \003(\0132\031.video_platform.ShardInfo\"J\n\026Res"
+  "cheduleShardRequest\022\020\n\010shard_id\030\001 \001(\t\022\016\n"
+  "\006job_id\030\002 \001(\t\022\016\n\006reason\030\003 \001(\t\"R\n\027Resched"
+  "uleShardResponse\022\022\n\nerror_code\030\001 \001(\005\022\021\n\t"
+  "error_msg\030\002 \001(\t\022\020\n\010accepted\030\003 \001(\0102\316\001\n\020Sc"
+  "hedulerService\022V\n\013ScheduleJob\022\".video_pl"
+  "atform.ScheduleJobRequest\032#.video_platfo"
+  "rm.ScheduleJobResponse\022b\n\017RescheduleShar"
+  "d\022&.video_platform.RescheduleShardReques"
+  "t\032\'.video_platform.RescheduleShardRespon"
+  "seB\003\200\001\001b\006proto3"
   ;
 static const ::_pbi::DescriptorTable* const descriptor_table_scheduler_2eproto_deps[1] = {
   &::descriptor_table_common_2eproto,
 };
 static ::_pbi::once_flag descriptor_table_scheduler_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_scheduler_2eproto = {
-    false, false, 611, descriptor_table_protodef_scheduler_2eproto,
+    false, false, 655, descriptor_table_protodef_scheduler_2eproto,
     "scheduler.proto",
     &descriptor_table_scheduler_2eproto_once, descriptor_table_scheduler_2eproto_deps, 1, 4,
     schemas, file_default_instances, TableStruct_scheduler_2eproto::offsets,
@@ -381,6 +384,9 @@ class ScheduleJobResponse::_Internal {
  public:
 };
 
+void ScheduleJobResponse::clear_shards() {
+  _impl_.shards_.Clear();
+}
 ScheduleJobResponse::ScheduleJobResponse(::PROTOBUF_NAMESPACE_ID::Arena* arena,
                          bool is_message_owned)
   : ::PROTOBUF_NAMESPACE_ID::Message(arena, is_message_owned) {
@@ -391,7 +397,8 @@ ScheduleJobResponse::ScheduleJobResponse(const ScheduleJobResponse& from)
   : ::PROTOBUF_NAMESPACE_ID::Message() {
   ScheduleJobResponse* const _this = this; (void)_this;
   new (&_impl_) Impl_{
-      decltype(_impl_.error_msg_){}
+      decltype(_impl_.shards_){from._impl_.shards_}
+    , decltype(_impl_.error_msg_){}
     , decltype(_impl_.job_id_){}
     , decltype(_impl_.error_code_){}
     , decltype(_impl_.accepted_){}
@@ -426,7 +433,8 @@ inline void ScheduleJobResponse::SharedCtor(
   (void)arena;
   (void)is_message_owned;
   new (&_impl_) Impl_{
-      decltype(_impl_.error_msg_){}
+      decltype(_impl_.shards_){arena}
+    , decltype(_impl_.error_msg_){}
     , decltype(_impl_.job_id_){}
     , decltype(_impl_.error_code_){0}
     , decltype(_impl_.accepted_){false}
@@ -454,6 +462,7 @@ ScheduleJobResponse::~ScheduleJobResponse() {
 
 inline void ScheduleJobResponse::SharedDtor() {
   GOOGLE_DCHECK(GetArenaForAllocation() == nullptr);
+  _impl_.shards_.~RepeatedPtrField();
   _impl_.error_msg_.Destroy();
   _impl_.job_id_.Destroy();
 }
@@ -468,6 +477,7 @@ void ScheduleJobResponse::Clear() {
   // Prevent compiler warnings about cached_has_bits being unused
   (void) cached_has_bits;
 
+  _impl_.shards_.Clear();
   _impl_.error_msg_.ClearToEmpty();
   _impl_.job_id_.ClearToEmpty();
   ::memset(&_impl_.error_code_, 0, static_cast<size_t>(
@@ -523,6 +533,19 @@ const char* ScheduleJobResponse::_InternalParse(const char* ptr, ::_pbi::ParseCo
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 40)) {
           _impl_.shard_count_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // repeated .video_platform.ShardInfo shards = 6;
+      case 6:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 50)) {
+          ptr -= 1;
+          do {
+            ptr += 1;
+            ptr = ctx->ParseMessage(_internal_add_shards(), ptr);
+            CHK_(ptr);
+            if (!ctx->DataAvailable(ptr)) break;
+          } while (::PROTOBUF_NAMESPACE_ID::internal::ExpectTag<50>(ptr));
         } else
           goto handle_unusual;
         continue;
@@ -593,6 +616,14 @@ uint8_t* ScheduleJobResponse::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt32ToArray(5, this->_internal_shard_count(), target);
   }
 
+  // repeated .video_platform.ShardInfo shards = 6;
+  for (unsigned i = 0,
+      n = static_cast<unsigned>(this->_internal_shards_size()); i < n; i++) {
+    const auto& repfield = this->_internal_shards(i);
+    target = ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::
+        InternalWriteMessage(6, repfield, repfield.GetCachedSize(), target, stream);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -608,6 +639,13 @@ size_t ScheduleJobResponse::ByteSizeLong() const {
   uint32_t cached_has_bits = 0;
   // Prevent compiler warnings about cached_has_bits being unused
   (void) cached_has_bits;
+
+  // repeated .video_platform.ShardInfo shards = 6;
+  total_size += 1UL * this->_internal_shards_size();
+  for (const auto& msg : this->_impl_.shards_) {
+    total_size +=
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::MessageSize(msg);
+  }
 
   // string error_msg = 2;
   if (!this->_internal_error_msg().empty()) {
@@ -656,6 +694,7 @@ void ScheduleJobResponse::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, co
   uint32_t cached_has_bits = 0;
   (void) cached_has_bits;
 
+  _this->_impl_.shards_.MergeFrom(from._impl_.shards_);
   if (!from._internal_error_msg().empty()) {
     _this->_internal_set_error_msg(from._internal_error_msg());
   }
@@ -690,6 +729,7 @@ void ScheduleJobResponse::InternalSwap(ScheduleJobResponse* other) {
   auto* lhs_arena = GetArenaForAllocation();
   auto* rhs_arena = other->GetArenaForAllocation();
   _internal_metadata_.InternalSwap(&other->_internal_metadata_);
+  _impl_.shards_.InternalSwap(&other->_impl_.shards_);
   ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
       &_impl_.error_msg_, lhs_arena,
       &other->_impl_.error_msg_, rhs_arena
