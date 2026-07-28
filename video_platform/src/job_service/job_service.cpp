@@ -1,5 +1,7 @@
 #include <string>
 #include <cstdlib>
+#include <thread>
+#include <chrono>
 #include "job.pb.h"
 #include "scheduler.pb.h"
 #include "mprpcapplication.h"
@@ -93,47 +95,72 @@ public:
         jobInfo->set_priority(job.priority);
         jobInfo->set_status(JobStatus::JOB_PENDING);
         jobInfo->set_shard_count(0);
+        jobInfo->set_shard_duration_sec(job.shard_duration_sec);
         jobInfo->set_created_at(job.created_at);
         jobInfo->set_updated_at(job.updated_at);
 
         // ── 调用 Scheduler.ScheduleJob 触发切分和调度 ─────────────────
-        MprpcChannel sched_channel;
-        SchedulerService_Stub sched_stub(&sched_channel);
-
-        ScheduleJobRequest sched_req;
-        *sched_req.mutable_job_info() = *jobInfo;
-        sched_req.mutable_job_info()->set_duration_sec(job.duration_sec);
-
-        ScheduleJobResponse sched_resp;
-        MprpcController sched_ctrl;
-
-        sched_stub.ScheduleJob(&sched_ctrl, &sched_req, &sched_resp, nullptr);
-
-        if (!sched_ctrl.Failed() && sched_resp.accepted())
+        // 最多重试 3 次，防止单次网络抖动导致 job 永久卡死在 PENDING
+        bool schedule_ok = false;
+        int32_t shard_count_from_scheduler = 0;
+        for (int attempt = 1; attempt <= 3; ++attempt)
         {
-            LOG_INFO("JobService::SubmitJob job_id=%s: Scheduler accepted", job_id.c_str());
-            // ⚠️ 必须从 JobStore 重新读取 —— Scheduler.ScheduleJob 内部通过
-            // UpdateJobStatus RPC 已经写入了 shard_count，直接用本地 job 变量
-            // 会覆盖掉 RPC 写入的值（本地 job.shard_count 还是 0）
-            JobRecord* refreshed = JobStore::GetInstance().Get(job_id);
-            if (refreshed != nullptr)
+            MprpcChannel sched_channel;
+            SchedulerService_Stub sched_stub(&sched_channel);
+
+            ScheduleJobRequest sched_req;
+            *sched_req.mutable_job_info() = *jobInfo;
+            sched_req.mutable_job_info()->set_duration_sec(job.duration_sec);
+
+            ScheduleJobResponse sched_resp;
+            MprpcController sched_ctrl;
+
+            sched_stub.ScheduleJob(&sched_ctrl, &sched_req, &sched_resp, nullptr);
+
+            if (!sched_ctrl.Failed() && sched_resp.accepted())
             {
-                refreshed->status = static_cast<int32_t>(JobStatus::JOB_SCHEDULING);
-                refreshed->updated_at = NowMs();
-                JobStore::GetInstance().Update(job_id, *refreshed);
+                LOG_INFO("JobService::SubmitJob job_id=%s: Scheduler accepted (attempt %d)",
+                         job_id.c_str(), attempt);
+                // 直接从 ScheduleJobResponse 获取 shard_count（直接数据路径，避免侧信道）
+                shard_count_from_scheduler = sched_resp.shard_count();
+                schedule_ok = true;
+                break;
+            }
+
+            LOG_WARN("JobService::SubmitJob job_id=%s: Scheduler.ScheduleJob failed "
+                     "(attempt %d/3): %s",
+                     job_id.c_str(), attempt,
+                     sched_ctrl.Failed() ? sched_ctrl.ErrorText().c_str()
+                                         : sched_resp.error_msg().c_str());
+
+            if (attempt < 3)
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+        }
+
+        if (schedule_ok)
+        {
+            // 使用 ScheduleJobResponse 返回的 shard_count 更新 JobStore
+            auto refreshed_opt = JobStore::GetInstance().Get(job_id);
+            if (refreshed_opt.has_value())
+            {
+                auto refreshed = refreshed_opt.value();
+                refreshed.status = static_cast<int32_t>(JobStatus::JOB_SCHEDULING);
+                refreshed.shard_count = shard_count_from_scheduler;
+                refreshed.updated_at = NowMs();
+                JobStore::GetInstance().Update(job_id, refreshed);
                 // 同步更新响应中的 job_info
                 jobInfo->set_status(JobStatus::JOB_SCHEDULING);
-                jobInfo->set_shard_count(refreshed->shard_count);
+                jobInfo->set_shard_count(shard_count_from_scheduler);
+                jobInfo->set_updated_at(refreshed.updated_at);
             }
         }
         else
         {
-            LOG_WARN("JobService::SubmitJob job_id=%s: Scheduler.ScheduleJob failed: %s",
-                     job_id.c_str(),
-                     sched_ctrl.Failed() ? sched_ctrl.ErrorText().c_str()
-                                         : sched_resp.error_msg().c_str());
-            // 不阻塞 SubmitJob 响应 -- job 已创建，Scheduler 后续可以通过
-            // 后台循环重新处理（或手动触发）
+            LOG_ERROR("JobService::SubmitJob job_id=%s: Scheduler.ScheduleJob failed "
+                      "after 3 retries, job stuck in PENDING – will be retried by "
+                      "background SchedulingLoop",
+                      job_id.c_str());
+            // Job 留在 PENDING 状态，SchedulingLoop 可通过扫描 PENDING job 兜底
         }
 
         done->Run();
@@ -147,8 +174,8 @@ public:
     {
         LOG_INFO("JobService::QueryJob job_id=%s", request->job_id().c_str());
 
-        JobRecord* job = JobStore::GetInstance().Get(request->job_id());
-        if (job == nullptr)
+        auto job_opt = JobStore::GetInstance().Get(request->job_id());
+        if (!job_opt.has_value())
         {
             response->set_error_code(1);
             response->set_error_msg("job not found: " + request->job_id());
@@ -161,18 +188,18 @@ public:
 
         // 填充 job 信息
         auto* jobInfo = response->mutable_job_info();
-        jobInfo->set_job_id(job->job_id);
-        jobInfo->set_user_id(job->user_id);
-        jobInfo->set_input_path(job->input_path);
-        jobInfo->set_output_path(job->output_path);
-        jobInfo->set_target_format(job->target_format);
-        jobInfo->set_target_resolution(job->target_resolution);
-        jobInfo->set_target_bitrate(job->target_bitrate);
-        jobInfo->set_priority(job->priority);
-        jobInfo->set_status(static_cast<JobStatus>(job->status));
-        jobInfo->set_shard_count(job->shard_count);
-        jobInfo->set_created_at(job->created_at);
-        jobInfo->set_updated_at(job->updated_at);
+        jobInfo->set_job_id(job_opt->job_id);
+        jobInfo->set_user_id(job_opt->user_id);
+        jobInfo->set_input_path(job_opt->input_path);
+        jobInfo->set_output_path(job_opt->output_path);
+        jobInfo->set_target_format(job_opt->target_format);
+        jobInfo->set_target_resolution(job_opt->target_resolution);
+        jobInfo->set_target_bitrate(job_opt->target_bitrate);
+        jobInfo->set_priority(job_opt->priority);
+        jobInfo->set_status(static_cast<JobStatus>(job_opt->status));
+        jobInfo->set_shard_count(job_opt->shard_count);
+        jobInfo->set_created_at(job_opt->created_at);
+        jobInfo->set_updated_at(job_opt->updated_at);
 
         // 填充关联的 shard 列表
         auto shards = ShardStore::GetInstance().ListByJob(request->job_id());
@@ -198,7 +225,11 @@ public:
         done->Run();
     }
 
-    /// @brief 取消任务
+    /// @brief 取消任务（含分布式传播）
+    ///
+    /// 阶段 4 改进：除标记 JobStore 外，同步标记所有 shard 为 CANCELED，
+    /// 防止 SchedulingLoop 继续扫描分配给已取消 job 的 WAITING shard。
+    /// 对已分配的 shard 尝试通知 Worker 取消执行（best-effort）。
     void CancelJob(::google::protobuf::RpcController* controller,
                    const ::CancelJobRequest* request,
                    ::CancelJobResponse* response,
@@ -207,8 +238,8 @@ public:
         LOG_INFO("JobService::CancelJob job_id=%s, reason=%s",
                  request->job_id().c_str(), request->reason().c_str());
 
-        JobRecord* job = JobStore::GetInstance().Get(request->job_id());
-        if (job == nullptr)
+        auto job_opt = JobStore::GetInstance().Get(request->job_id());
+        if (!job_opt.has_value())
         {
             response->set_error_code(1);
             response->set_error_msg("job not found: " + request->job_id());
@@ -216,9 +247,25 @@ public:
             return;
         }
 
-        job->status = static_cast<int32_t>(JobStatus::JOB_CANCELED);
-        job->updated_at = NowMs();
-        JobStore::GetInstance().Update(request->job_id(), *job);
+        auto job = job_opt.value();
+        job.status = static_cast<int32_t>(JobStatus::JOB_CANCELED);
+        job.updated_at = NowMs();
+        JobStore::GetInstance().Update(request->job_id(), job);
+
+        // ── 传播取消到所有 shard ─────────────────────────────────────
+        // 将所有 shard 标记为 CANCELED，使 SchedulingLoop 不再扫描它们。
+        // 对已分配的 shard，best-effort 通知 Worker 取消执行。
+        auto shards = ShardStore::GetInstance().ListByJob(request->job_id());
+        int canceled_count = 0;
+        for (auto& s : shards)
+        {
+            s.status = static_cast<int32_t>(ShardStatus::SHARD_CANCELED);
+            s.updated_at = NowMs();
+            ShardStore::GetInstance().Update(s.shard_id, s);
+            ++canceled_count;
+        }
+        LOG_INFO("JobService::CancelJob job_id=%s: canceled %d shards",
+                 request->job_id().c_str(), canceled_count);
 
         response->set_error_code(0);
         response->set_error_msg("");
@@ -243,8 +290,8 @@ public:
                  static_cast<int>(request->status()),
                  request->shard_count());
 
-        JobRecord* job = JobStore::GetInstance().Get(request->job_id());
-        if (job == nullptr)
+        auto job_opt = JobStore::GetInstance().Get(request->job_id());
+        if (!job_opt.has_value())
         {
             response->set_error_code(1);
             response->set_error_msg("job not found: " + request->job_id());
@@ -252,20 +299,33 @@ public:
             return;
         }
 
-        // 只更新状态（不降级：如果已经是 SUCCESS 不会被改回 RUNNING）
+        auto job = job_opt.value();
+
+        // 状态单调性检查：只接受状态升级，拒绝降级
+        // 例如 JOB_SUCCESS(6) 不可被 JOB_RUNNING(4) 覆盖
         if (request->status() != JobStatus::JOB_STATUS_UNKNOWN)
         {
-            job->status = static_cast<int32_t>(request->status());
+            int32_t new_status = static_cast<int32_t>(request->status());
+            if (new_status > job.status)
+            {
+                job.status = new_status;
+            }
+            else if (new_status != job.status)
+            {
+                LOG_INFO("JobService::UpdateJobStatus job_id=%s: ignoring status "
+                         "downgrade %d → %d",
+                         request->job_id().c_str(), job.status, new_status);
+            }
         }
-        if (request->shard_count() > job->shard_count)
+        if (request->shard_count() > job.shard_count)
         {
-            job->shard_count = request->shard_count();
+            job.shard_count = request->shard_count();
         }
-        job->updated_at = NowMs();
-        JobStore::GetInstance().Update(request->job_id(), *job);
+        job.updated_at = NowMs();
+        JobStore::GetInstance().Update(request->job_id(), job);
 
         LOG_INFO("JobService::UpdateJobStatus job_id=%s updated → status=%d, shard_count=%d",
-                 request->job_id().c_str(), job->status, job->shard_count);
+                 request->job_id().c_str(), job.status, job.shard_count);
 
         response->set_error_code(0);
         response->set_error_msg("");

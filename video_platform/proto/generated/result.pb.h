@@ -603,6 +603,7 @@ class ReportShardResultRequest final :
     kIsSuccessFieldNumber = 5,
     kExitCodeFieldNumber = 6,
     kElapsedMsFieldNumber = 9,
+    kShardIndexFieldNumber = 10,
   };
   // string shard_id = 1;
   void clear_shard_id();
@@ -715,6 +716,15 @@ class ReportShardResultRequest final :
   void _internal_set_elapsed_ms(int64_t value);
   public:
 
+  // int32 shard_index = 10;
+  void clear_shard_index();
+  int32_t shard_index() const;
+  void set_shard_index(int32_t value);
+  private:
+  int32_t _internal_shard_index() const;
+  void _internal_set_shard_index(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:video_platform.ReportShardResultRequest)
  private:
   class _Internal;
@@ -732,6 +742,7 @@ class ReportShardResultRequest final :
     bool is_success_;
     int32_t exit_code_;
     int64_t elapsed_ms_;
+    int32_t shard_index_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -1727,6 +1738,26 @@ inline void ReportShardResultRequest::_internal_set_elapsed_ms(int64_t value) {
 inline void ReportShardResultRequest::set_elapsed_ms(int64_t value) {
   _internal_set_elapsed_ms(value);
   // @@protoc_insertion_point(field_set:video_platform.ReportShardResultRequest.elapsed_ms)
+}
+
+// int32 shard_index = 10;
+inline void ReportShardResultRequest::clear_shard_index() {
+  _impl_.shard_index_ = 0;
+}
+inline int32_t ReportShardResultRequest::_internal_shard_index() const {
+  return _impl_.shard_index_;
+}
+inline int32_t ReportShardResultRequest::shard_index() const {
+  // @@protoc_insertion_point(field_get:video_platform.ReportShardResultRequest.shard_index)
+  return _internal_shard_index();
+}
+inline void ReportShardResultRequest::_internal_set_shard_index(int32_t value) {
+  
+  _impl_.shard_index_ = value;
+}
+inline void ReportShardResultRequest::set_shard_index(int32_t value) {
+  _internal_set_shard_index(value);
+  // @@protoc_insertion_point(field_set:video_platform.ReportShardResultRequest.shard_index)
 }
 
 // -------------------------------------------------------------------

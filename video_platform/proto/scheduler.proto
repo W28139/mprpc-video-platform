@@ -20,10 +20,11 @@ message ScheduleJobRequest {
 }
 
 message ScheduleJobResponse {
-    int32  error_code = 1;  // 0=成功接受，非0=拒绝
-    string error_msg  = 2;  // 失败时的错误描述
-    bool   accepted   = 3;  // 是否被调度器接受
-    string job_id     = 4;  // 回传 job_id，方便调用方校验
+    int32  error_code  = 1;  // 0=成功接受，非0=拒绝
+    string error_msg   = 2;  // 失败时的错误描述
+    bool   accepted    = 3;  // 是否被调度器接受
+    string job_id      = 4;  // 回传 job_id，方便调用方校验
+    int32  shard_count = 5;  // 切分出的 shard 总数（直接数据路径，避免侧信道依赖）
 }
 
 // ── RescheduleShard ────────────────────────────────────────────────────────

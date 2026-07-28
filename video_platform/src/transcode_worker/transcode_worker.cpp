@@ -83,7 +83,17 @@ public:
                  (long long)shard.start_ms(),
                  (long long)shard.duration_ms());
 
-        // 检查是否为新 shard（非重试的分配）
+        // 生成 attempt_id
+        std::string attempt_id = shard.shard_id() + "_attempt_"
+            + std::to_string(shard.retry_count());
+
+        // 读取 mock 执行时长配置
+        int mock_execution_ms = MprpcApplication::GetConfig().LoadInt(
+            "mock_execution_time_ms", 5000, 500, 120000);
+
+        std::shared_ptr<RunningShard> rs;
+
+        // 检查 + 插入合并在同一锁内，消除 TOCTOU 窗口
         {
             std::lock_guard<std::mutex> lock(mutex_);
             auto it = running_shards_.find(shard.shard_id());
@@ -97,28 +107,15 @@ public:
                 done->Run();
                 return;
             }
-        }
 
-        // 生成 attempt_id
-        std::string attempt_id = shard.shard_id() + "_attempt_"
-            + std::to_string(shard.retry_count());
-
-        // 创建 RunningShard 追踪对象
-        auto rs = std::make_shared<RunningShard>(shard, attempt_id);
-
-        // 读取 mock 执行时长配置
-        int mock_execution_ms = MprpcApplication::GetConfig().LoadInt(
-            "mock_execution_time_ms", 5000, 500, 120000);
-
-        // 启动 mock 执行线程
-        rs->executor_thread = std::thread(&WorkerServiceImpl::MockExecute,
-                                          this, rs, mock_execution_ms);
-
-        // 加入运行中 map
-        {
-            std::lock_guard<std::mutex> lock(mutex_);
+            // 创建 RunningShard 追踪对象并插入 map（在同一临界区内）
+            rs = std::make_shared<RunningShard>(shard, attempt_id);
             running_shards_[shard.shard_id()] = rs;
         }
+
+        // 锁外启动 mock 执行线程，避免与 CancelShard/CleanupShard 死锁
+        rs->executor_thread = std::thread(&WorkerServiceImpl::MockExecute,
+                                          this, rs, mock_execution_ms);
 
         LOG_INFO("WorkerService::AssignShard shard=%s attempt=%s started (mock_exec=%dms)",
                  shard.shard_id().c_str(), attempt_id.c_str(), mock_execution_ms);
@@ -270,35 +267,55 @@ private:
             }
         }
 
-        // 执行完成，上报最终结果
+        // 执行完成，上报最终结果（带重试，防止网络抖动导致结果永久丢失）
         rs->progress = 100;
 
-        ReportShardResultRequest result_req;
-        result_req.set_shard_id(shard_id);
-        result_req.set_job_id(job_id);
-        result_req.set_worker_id(worker_id);
-        result_req.set_attempt_id(rs->attempt_id);
-        result_req.set_is_success(true);
-        result_req.set_exit_code(0);
-        result_req.set_error_msg("");
-        result_req.set_output_path(rs->info.output_path());
-        result_req.set_elapsed_ms(mock_execution_ms);
-
-        ReportShardResultResponse result_resp;
-        MprpcController ctrl;
-
-        rc_stub.ReportShardResult(&ctrl, &result_req, &result_resp, nullptr);
-
-        if (!ctrl.Failed() && result_resp.accepted())
+        bool result_reported = false;
+        for (int retry = 0; retry < 3 && !result_reported; ++retry)
         {
-            LOG_INFO("MockExecute: shard=%s SUCCESS, job_done=%d",
-                     shard_id.c_str(), result_resp.job_done());
+            if (retry > 0)
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+
+            ReportShardResultRequest result_req;
+            result_req.set_shard_id(shard_id);
+            result_req.set_job_id(job_id);
+            result_req.set_worker_id(worker_id);
+            result_req.set_attempt_id(rs->attempt_id);
+            result_req.set_is_success(true);
+            result_req.set_exit_code(0);
+            result_req.set_error_msg("");
+            result_req.set_output_path(rs->info.output_path());
+            result_req.set_elapsed_ms(mock_execution_ms);
+            result_req.set_shard_index(rs->info.shard_index());
+
+            ReportShardResultResponse result_resp;
+            MprpcController ctrl;
+
+            rc_stub.ReportShardResult(&ctrl, &result_req, &result_resp, nullptr);
+
+            if (!ctrl.Failed() && result_resp.accepted())
+            {
+                LOG_INFO("MockExecute: shard=%s SUCCESS, job_done=%d (attempt %d)",
+                         shard_id.c_str(), result_resp.job_done(), retry + 1);
+                result_reported = true;
+            }
+            else
+            {
+                LOG_ERROR("MockExecute: shard=%s result report failed (attempt %d/3): %s",
+                          shard_id.c_str(), retry + 1,
+                          ctrl.Failed() ? ctrl.ErrorText().c_str()
+                                        : result_resp.error_msg().c_str());
+            }
         }
-        else
+
+        if (!result_reported)
         {
-            LOG_ERROR("MockExecute: shard=%s result report failed: %s",
-                      shard_id.c_str(),
-                      ctrl.Failed() ? ctrl.ErrorText().c_str() : result_resp.error_msg().c_str());
+            LOG_ERROR("MockExecute: shard=%s result report FAILED after 3 retries, "
+                      "keeping in running_shards for heartbeat-based recovery",
+                      shard_id.c_str());
+            // 不调用 CleanupShard — 保留在 running_shards_ 中，
+            // 由心跳线程检测并重试上报（阶段 5 完善）
+            return;
         }
 
         CleanupShard(shard_id);

@@ -43,6 +43,7 @@ message ReportShardResultRequest {
     string error_msg   = 7;   // 失败时的错误描述（ffmpeg stderr 摘要）
     string output_path = 8;   // 输出文件路径（成功时必填，用于后续合并）
     int64  elapsed_ms  = 9;   // 执行总耗时（毫秒），用于统计和调度策略优化
+    int32  shard_index = 10;  // shard 在 job 中的序号，用于 ResultCollector 构造本地副本
 }
 
 message ReportShardResultResponse {

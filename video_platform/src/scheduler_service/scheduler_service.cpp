@@ -66,11 +66,11 @@ public:
         JobRecord local_job;
         bool job_exists = false;
         // 这里验证，该job_id是否在JobStore的哈希表里已经存在，如果存在了直接使用，不需要新建jobRecord并放入哈希表中
-        JobRecord* existing = JobStore::GetInstance().Get(job_id);
-        if (existing != nullptr)
+        auto existing = JobStore::GetInstance().Get(job_id);
+        if (existing.has_value())
         {
             // 已有本地副本：可能是 JobService 重试导致 ScheduleJob 被调用多次
-            local_job = *existing;
+            local_job = existing.value();
             job_exists = true;
         }
         else
@@ -87,7 +87,7 @@ public:
             local_job.priority           = jobInfo.priority();
             local_job.status             = static_cast<int32_t>(JobStatus::JOB_PENDING);
             local_job.shard_count        = 0;
-            local_job.shard_duration_sec = 0;  // proto JobInfo 不含此字段，使用配置默认值
+            local_job.shard_duration_sec = jobInfo.shard_duration_sec();  // 从 JobInfo proto 读取用户指定值
             local_job.created_at         = NowMs();
             local_job.updated_at         = NowMs();
             JobStore::GetInstance().Insert(local_job);
@@ -104,7 +104,7 @@ public:
         int shard_dur = (local_job.shard_duration_sec > 0)
                         ? local_job.shard_duration_sec : mock_shard_duration_sec;
 
-        int shard_count = mock_job_duration_sec / shard_dur;
+        int shard_count = (mock_job_duration_sec + shard_dur - 1) / shard_dur;  // 向上取整
         if (shard_count < 1) shard_count = 1;
 
         LOG_INFO("SchedulerService::ScheduleJob job_id=%s: splitting into %d shards "
@@ -191,6 +191,7 @@ public:
         response->set_error_msg("");
         response->set_accepted(true);
         response->set_job_id(job_id);
+        response->set_shard_count(shard_count);  // 直接数据路径，避免侧信道依赖
         done->Run();
     }
 
@@ -213,8 +214,8 @@ public:
                  request->job_id().c_str(),
                  request->reason().c_str());
 
-        ShardRecord* shard = ShardStore::GetInstance().Get(shard_id);
-        if (shard == nullptr)
+        auto shard_opt = ShardStore::GetInstance().Get(shard_id);
+        if (!shard_opt.has_value())
         {
             response->set_error_code(1);
             response->set_error_msg("shard not found: " + shard_id);
@@ -225,15 +226,16 @@ public:
 
         // 阶段 4：简单重置为 WAITING，由调度循环重新分配
         // 阶段 5 将在此处检查 retry_count 是否超过 max_retry
-        shard->status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
-        shard->assigned_worker_id.clear();
-        shard->attempt_id.clear();
-        shard->retry_count++;
-        shard->updated_at = NowMs();
-        ShardStore::GetInstance().Update(shard_id, *shard);
+        auto shard = shard_opt.value();
+        shard.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
+        shard.assigned_worker_id.clear();
+        shard.attempt_id.clear();
+        shard.retry_count++;
+        shard.updated_at = NowMs();
+        ShardStore::GetInstance().Update(shard_id, shard);
 
         LOG_INFO("SchedulerService::RescheduleShard shard_id=%s reset to WAITING (retry=%d/%d)",
-                 shard_id.c_str(), shard->retry_count, shard->max_retry);
+                 shard_id.c_str(), shard.retry_count, shard.max_retry);
 
         response->set_error_code(0);
         response->set_error_msg("");
@@ -359,6 +361,7 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
             si->set_input_path(shard.input_path);
             si->set_output_path(shard.output_path);
             si->set_created_at(shard.created_at);
+            si->set_retry_count(shard.retry_count);  // 透传 retry_count 给 Worker
 
             AssignShardResponse as_resp;
             MprpcController as_ctrl;
@@ -377,20 +380,30 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
             }
 
             // ── 5. 更新 shard 状态 → ASSIGNED ───────────────────────
-            shard.status = static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED);
-            shard.assigned_worker_id = best_worker->worker_id();
-            shard.attempt_id = shard.shard_id + "_attempt_" + std::to_string(shard.retry_count);
-            shard.updated_at = NowMs();
-            ShardStore::GetInstance().Update(shard.shard_id, shard);
-
-            // ── 6. 更新 job 状态 → RUNNING（若是首次分配） ─────────────
-            JobRecord* job = JobStore::GetInstance().Get(shard.job_id);
-            if (job != nullptr &&
-                job->status == static_cast<int32_t>(JobStatus::JOB_SCHEDULING))
+            // 重新从 ShardStore 读取最新状态，避免用快照副本覆盖并发修改
             {
-                job->status = static_cast<int32_t>(JobStatus::JOB_RUNNING);
-                job->updated_at = NowMs();
-                JobStore::GetInstance().Update(shard.job_id, *job);
+                auto fresh_opt = ShardStore::GetInstance().Get(shard.shard_id);
+                if (!fresh_opt.has_value()) continue;  // 已被删除
+                auto fresh = fresh_opt.value();
+                fresh.status = static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED);
+                fresh.assigned_worker_id = best_worker->worker_id();
+                fresh.attempt_id = fresh.shard_id + "_attempt_" + std::to_string(fresh.retry_count);
+                fresh.updated_at = NowMs();
+                ShardStore::GetInstance().Update(fresh.shard_id, fresh);
+            }
+
+            // ── 6. 递减本地可用槽位（防止同一 Worker 超额分配） ───
+            --best_slots;
+
+            // ── 7. 更新 job 状态 → RUNNING（若是首次分配） ─────────────
+            auto job_opt = JobStore::GetInstance().Get(shard.job_id);
+            if (job_opt.has_value() &&
+                job_opt->status == static_cast<int32_t>(JobStatus::JOB_SCHEDULING))
+            {
+                auto job = job_opt.value();
+                job.status = static_cast<int32_t>(JobStatus::JOB_RUNNING);
+                job.updated_at = NowMs();
+                JobStore::GetInstance().Update(shard.job_id, job);
 
                 // 反向通知 JobService 状态变更（跨进程同步）
                 {
@@ -403,6 +416,14 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                     MprpcController update_ctrl;
                     update_ctrl.SetTimeoutMs(3000);
                     js_stub.UpdateJobStatus(&update_ctrl, &update_req, &update_resp, nullptr);
+
+                    if (update_ctrl.Failed() || update_resp.error_code() != 0)
+                    {
+                        LOG_WARN("SchedulingLoop: UpdateJobStatus(RUNNING) failed for job=%s: %s",
+                                 shard.job_id.c_str(),
+                                 update_ctrl.Failed() ? update_ctrl.ErrorText().c_str()
+                                                      : update_resp.error_msg().c_str());
+                    }
                 }
             }
 
@@ -411,7 +432,7 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                      best_worker->worker_id().c_str(),
                      best_worker->ip().c_str(),
                      best_worker->port(),
-                     best_slots - 1);
+                     best_slots);
         }
     }
 

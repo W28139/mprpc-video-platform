@@ -65,6 +65,7 @@ PROTOBUF_CONSTEXPR ReportShardResultRequest::ReportShardResultRequest(
   , /*decltype(_impl_.is_success_)*/false
   , /*decltype(_impl_.exit_code_)*/0
   , /*decltype(_impl_.elapsed_ms_)*/int64_t{0}
+  , /*decltype(_impl_.shard_index_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct ReportShardResultRequestDefaultTypeInternal {
   PROTOBUF_CONSTEXPR ReportShardResultRequestDefaultTypeInternal()
@@ -133,6 +134,7 @@ const uint32_t TableStruct_result_2eproto::offsets[] PROTOBUF_SECTION_VARIABLE(p
   PROTOBUF_FIELD_OFFSET(::video_platform::ReportShardResultRequest, _impl_.error_msg_),
   PROTOBUF_FIELD_OFFSET(::video_platform::ReportShardResultRequest, _impl_.output_path_),
   PROTOBUF_FIELD_OFFSET(::video_platform::ReportShardResultRequest, _impl_.elapsed_ms_),
+  PROTOBUF_FIELD_OFFSET(::video_platform::ReportShardResultRequest, _impl_.shard_index_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::video_platform::ReportShardResultResponse, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -148,7 +150,7 @@ static const ::_pbi::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protode
   { 0, -1, -1, sizeof(::video_platform::ReportShardProgressRequest)},
   { 12, -1, -1, sizeof(::video_platform::ReportShardProgressResponse)},
   { 21, -1, -1, sizeof(::video_platform::ReportShardResultRequest)},
-  { 36, -1, -1, sizeof(::video_platform::ReportShardResultResponse)},
+  { 37, -1, -1, sizeof(::video_platform::ReportShardResultResponse)},
 };
 
 static const ::_pb::Message* const file_default_instances[] = {
@@ -165,28 +167,29 @@ const char descriptor_table_protodef_result_2eproto[] PROTOBUF_SECTION_VARIABLE(
   "id\030\003 \001(\t\022\022\n\nattempt_id\030\004 \001(\t\022\020\n\010progress"
   "\030\005 \001(\005\022\017\n\007message\030\006 \001(\t\"V\n\033ReportShardPr"
   "ogressResponse\022\022\n\nerror_code\030\001 \001(\005\022\021\n\ter"
-  "ror_msg\030\002 \001(\t\022\020\n\010recorded\030\003 \001(\010\"\306\001\n\030Repo"
+  "ror_msg\030\002 \001(\t\022\020\n\010recorded\030\003 \001(\010\"\333\001\n\030Repo"
   "rtShardResultRequest\022\020\n\010shard_id\030\001 \001(\t\022\016"
   "\n\006job_id\030\002 \001(\t\022\021\n\tworker_id\030\003 \001(\t\022\022\n\natt"
   "empt_id\030\004 \001(\t\022\022\n\nis_success\030\005 \001(\010\022\021\n\texi"
   "t_code\030\006 \001(\005\022\021\n\terror_msg\030\007 \001(\t\022\023\n\013outpu"
-  "t_path\030\010 \001(\t\022\022\n\nelapsed_ms\030\t \001(\003\"f\n\031Repo"
-  "rtShardResultResponse\022\022\n\nerror_code\030\001 \001("
-  "\005\022\021\n\terror_msg\030\002 \001(\t\022\020\n\010accepted\030\003 \001(\010\022\020"
-  "\n\010job_done\030\004 \001(\0102\362\001\n\026ResultCollectorServ"
-  "ice\022n\n\023ReportShardProgress\022*.video_platf"
-  "orm.ReportShardProgressRequest\032+.video_p"
-  "latform.ReportShardProgressResponse\022h\n\021R"
-  "eportShardResult\022(.video_platform.Report"
-  "ShardResultRequest\032).video_platform.Repo"
-  "rtShardResultResponseB\003\200\001\001b\006proto3"
+  "t_path\030\010 \001(\t\022\022\n\nelapsed_ms\030\t \001(\003\022\023\n\013shar"
+  "d_index\030\n \001(\005\"f\n\031ReportShardResultRespon"
+  "se\022\022\n\nerror_code\030\001 \001(\005\022\021\n\terror_msg\030\002 \001("
+  "\t\022\020\n\010accepted\030\003 \001(\010\022\020\n\010job_done\030\004 \001(\0102\362\001"
+  "\n\026ResultCollectorService\022n\n\023ReportShardP"
+  "rogress\022*.video_platform.ReportShardProg"
+  "ressRequest\032+.video_platform.ReportShard"
+  "ProgressResponse\022h\n\021ReportShardResult\022(."
+  "video_platform.ReportShardResultRequest\032"
+  ").video_platform.ReportShardResultRespon"
+  "seB\003\200\001\001b\006proto3"
   ;
 static const ::_pbi::DescriptorTable* const descriptor_table_result_2eproto_deps[1] = {
   &::descriptor_table_common_2eproto,
 };
 static ::_pbi::once_flag descriptor_table_result_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_result_2eproto = {
-    false, false, 834, descriptor_table_protodef_result_2eproto,
+    false, false, 855, descriptor_table_protodef_result_2eproto,
     "result.proto",
     &descriptor_table_result_2eproto_once, descriptor_table_result_2eproto_deps, 1, 4,
     schemas, file_default_instances, TableStruct_result_2eproto::offsets,
@@ -919,6 +922,7 @@ ReportShardResultRequest::ReportShardResultRequest(const ReportShardResultReques
     , decltype(_impl_.is_success_){}
     , decltype(_impl_.exit_code_){}
     , decltype(_impl_.elapsed_ms_){}
+    , decltype(_impl_.shard_index_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -971,8 +975,8 @@ ReportShardResultRequest::ReportShardResultRequest(const ReportShardResultReques
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.is_success_, &from._impl_.is_success_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.elapsed_ms_) -
-    reinterpret_cast<char*>(&_impl_.is_success_)) + sizeof(_impl_.elapsed_ms_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.shard_index_) -
+    reinterpret_cast<char*>(&_impl_.is_success_)) + sizeof(_impl_.shard_index_));
   // @@protoc_insertion_point(copy_constructor:video_platform.ReportShardResultRequest)
 }
 
@@ -990,6 +994,7 @@ inline void ReportShardResultRequest::SharedCtor(
     , decltype(_impl_.is_success_){false}
     , decltype(_impl_.exit_code_){0}
     , decltype(_impl_.elapsed_ms_){int64_t{0}}
+    , decltype(_impl_.shard_index_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.shard_id_.InitDefault();
@@ -1054,8 +1059,8 @@ void ReportShardResultRequest::Clear() {
   _impl_.error_msg_.ClearToEmpty();
   _impl_.output_path_.ClearToEmpty();
   ::memset(&_impl_.is_success_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.elapsed_ms_) -
-      reinterpret_cast<char*>(&_impl_.is_success_)) + sizeof(_impl_.elapsed_ms_));
+      reinterpret_cast<char*>(&_impl_.shard_index_) -
+      reinterpret_cast<char*>(&_impl_.is_success_)) + sizeof(_impl_.shard_index_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -1145,6 +1150,14 @@ const char* ReportShardResultRequest::_InternalParse(const char* ptr, ::_pbi::Pa
       case 9:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 72)) {
           _impl_.elapsed_ms_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 shard_index = 10;
+      case 10:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 80)) {
+          _impl_.shard_index_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -1256,6 +1269,12 @@ uint8_t* ReportShardResultRequest::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt64ToArray(9, this->_internal_elapsed_ms(), target);
   }
 
+  // int32 shard_index = 10;
+  if (this->_internal_shard_index() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(10, this->_internal_shard_index(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -1329,6 +1348,11 @@ size_t ReportShardResultRequest::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::Int64SizePlusOne(this->_internal_elapsed_ms());
   }
 
+  // int32 shard_index = 10;
+  if (this->_internal_shard_index() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_shard_index());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -1374,6 +1398,9 @@ void ReportShardResultRequest::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_ms
   if (from._internal_elapsed_ms() != 0) {
     _this->_internal_set_elapsed_ms(from._internal_elapsed_ms());
   }
+  if (from._internal_shard_index() != 0) {
+    _this->_internal_set_shard_index(from._internal_shard_index());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -1418,8 +1445,8 @@ void ReportShardResultRequest::InternalSwap(ReportShardResultRequest* other) {
       &other->_impl_.output_path_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(ReportShardResultRequest, _impl_.elapsed_ms_)
-      + sizeof(ReportShardResultRequest::_impl_.elapsed_ms_)
+      PROTOBUF_FIELD_OFFSET(ReportShardResultRequest, _impl_.shard_index_)
+      + sizeof(ReportShardResultRequest::_impl_.shard_index_)
       - PROTOBUF_FIELD_OFFSET(ReportShardResultRequest, _impl_.is_success_)>(
           reinterpret_cast<char*>(&_impl_.is_success_),
           reinterpret_cast<char*>(&other->_impl_.is_success_));

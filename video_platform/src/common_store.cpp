@@ -85,13 +85,13 @@ bool JobStore::Delete(const std::string& job_id)
     return jobs_.erase(job_id) > 0;
 }
 
-JobRecord* JobStore::Get(const std::string& job_id)
+std::optional<JobRecord> JobStore::Get(const std::string& job_id)
 {
     std::shared_lock lock(mutex_);
     auto it = jobs_.find(job_id);
-    if (it == jobs_.end()) return nullptr;
-    // 返回 map 内元素地址，调用方需在锁释放前完成读取
-    return &it->second;
+    if (it == jobs_.end()) return std::nullopt;
+    // 返回副本，消除跨锁悬空指针风险
+    return it->second;
 }
 
 std::vector<JobRecord> JobStore::ListAll() const
@@ -142,12 +142,12 @@ bool ShardStore::Delete(const std::string& shard_id)
     return shards_.erase(shard_id) > 0;
 }
 
-ShardRecord* ShardStore::Get(const std::string& shard_id)
+std::optional<ShardRecord> ShardStore::Get(const std::string& shard_id)
 {
     std::shared_lock lock(mutex_);
     auto it = shards_.find(shard_id);
-    if (it == shards_.end()) return nullptr;
-    return &it->second;
+    if (it == shards_.end()) return std::nullopt;
+    return it->second;
 }
 
 std::vector<ShardRecord> ShardStore::ListByJob(const std::string& job_id) const
@@ -234,12 +234,12 @@ bool WorkerStore::Delete(const std::string& worker_id)
     return workers_.erase(worker_id) > 0;
 }
 
-WorkerRecord* WorkerStore::Get(const std::string& worker_id)
+std::optional<WorkerRecord> WorkerStore::Get(const std::string& worker_id)
 {
     std::shared_lock lock(mutex_);
     auto it = workers_.find(worker_id);
-    if (it == workers_.end()) return nullptr;
-    return &it->second;
+    if (it == workers_.end()) return std::nullopt;
+    return it->second;
 }
 
 std::vector<WorkerRecord> WorkerStore::ListByStatus(int32_t status_filter) const

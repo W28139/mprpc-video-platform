@@ -92,14 +92,14 @@ public:
 
         // 1. 查找或创建 shard 本地副本
         //    （ShardStore 是进程内存储，ResultCollector 需要自己的本地副本）
-        ShardRecord shard_copy;
-        ShardRecord* shard = ShardStore::GetInstance().Get(shard_id);
-        if (shard == nullptr)
+        auto shard_opt = ShardStore::GetInstance().Get(shard_id);
+        if (!shard_opt.has_value())
         {
             // 首次收到该 shard 的结果：从请求参数构造本地 ShardRecord
+            ShardRecord shard_copy;
             shard_copy.shard_id      = shard_id;
             shard_copy.job_id        = job_id;
-            shard_copy.shard_index   = 0;       // 请求中不含 shard_index，默认为 0
+            shard_copy.shard_index   = request->shard_index();  // 从请求透传，不再硬编码 0
             shard_copy.status        = static_cast<int32_t>(ShardStatus::SHARD_CREATED);
             shard_copy.assigned_worker_id = worker_id;
             shard_copy.attempt_id    = attempt_id;
@@ -109,12 +109,14 @@ public:
             shard_copy.created_at    = NowMs();
             shard_copy.updated_at    = NowMs();
             ShardStore::GetInstance().Insert(shard_copy);
-            shard = ShardStore::GetInstance().Get(shard_id);
+            shard_opt = ShardStore::GetInstance().Get(shard_id);
             LOG_INFO("ResultCollectorService: created local shard copy shard_id=%s", shard_id.c_str());
         }
 
+        auto shard = shard_opt.value();
+
         // 2. 幂等检查：已 SUCCESS 的不再处理
-        if (shard->status == static_cast<int32_t>(ShardStatus::SHARD_SUCCESS))
+        if (shard.status == static_cast<int32_t>(ShardStatus::SHARD_SUCCESS))
         {
             LOG_INFO("ResultCollectorService: shard %s already SUCCESS (idempotent)",
                      shard_id.c_str());
@@ -127,13 +129,13 @@ public:
         }
 
         // 3. 更新 shard 状态
-        shard->status = request->is_success()
+        shard.status = request->is_success()
             ? static_cast<int32_t>(ShardStatus::SHARD_SUCCESS)
             : static_cast<int32_t>(ShardStatus::SHARD_FAILED);
-        shard->attempt_id = attempt_id;
-        shard->output_path = request->output_path();
-        shard->updated_at = NowMs();
-        ShardStore::GetInstance().Update(shard_id, *shard);
+        shard.attempt_id = attempt_id;
+        shard.output_path = request->output_path();
+        shard.updated_at = NowMs();
+        ShardStore::GetInstance().Update(shard_id, shard);
 
         LOG_INFO("ResultCollectorService: shard %s → %s",
                  shard_id.c_str(),
@@ -159,11 +161,13 @@ private:
     ///
     /// 由 ReportShardResult() 在每次收到 shard 结果后调用。
     ///
-    /// 逻辑：
-    /// 1. ShardStore.ListByJob(job_id) 获取该 job 所有 shard
-    /// 2. 逐个检查 status == SHARD_SUCCESS
-    /// 3. 全部 SUCCESS → JobStore 更新为 JOB_SUCCESS
-    /// 4. 若本地 JobStore 无此 job（跨进程存储），创建最小副本记录终态
+    /// 逻辑（阶段 4 修复：防止过早判定）：
+    /// 1. ShardStore.ListByJob(job_id) 获取该 job 所有已上报 shard
+    /// 2. 从 JobStore 读取预期的 shard_count（由 Scheduler 切分时设定）
+    /// 3. 仅当 success_count >= expected_shard_count 时才判定完成，防止
+    ///    ResultCollector 本地只有部分 shard 时过早标记 JOB_SUCCESS
+    /// 4. 全部 SUCCESS → JobStore 更新为 JOB_SUCCESS
+    /// 5. 若本地 JobStore 无此 job（跨进程存储），创建最小副本记录终态
     ///
     /// @return true 表示所有 shard 已 SUCCESS（job 终态已置）
     /// @return false 表示还有未完成的 shard
@@ -171,6 +175,14 @@ private:
     {
         auto shards = ShardStore::GetInstance().ListByJob(job_id);
         if (shards.empty()) return false;
+
+        // 从 JobStore 获取预期的 shard 总数（由 Scheduler 切分时写入）
+        int32_t expected_shard_count = 0;
+        auto job_opt = JobStore::GetInstance().Get(job_id);
+        if (job_opt.has_value())
+        {
+            expected_shard_count = job_opt->shard_count;
+        }
 
         int success_count = 0;
         for (const auto& s : shards)
@@ -183,13 +195,23 @@ private:
             ++success_count;
         }
 
-        // 所有 shard 都是 SUCCESS → 更新/创建本地 job 状态
-        JobRecord* job = JobStore::GetInstance().Get(job_id);
-        if (job != nullptr)
+        // 防止过早判定：已上报的 SUCCESS shard 数必须 >= 预期 shard 总数
+        if (expected_shard_count > 0 && success_count < expected_shard_count)
         {
-            job->status = static_cast<int32_t>(JobStatus::JOB_SUCCESS);
-            job->updated_at = NowMs();
-            JobStore::GetInstance().Update(job_id, *job);
+            LOG_INFO("ResultCollectorService::CheckJobDone job=%s: %d/%d shards SUCCESS, "
+                     "waiting for remaining %d",
+                     job_id.c_str(), success_count, expected_shard_count,
+                     expected_shard_count - success_count);
+            return false;
+        }
+
+        // 所有 shard 都是 SUCCESS → 更新/创建本地 job 状态
+        if (job_opt.has_value())
+        {
+            auto job = job_opt.value();
+            job.status = static_cast<int32_t>(JobStatus::JOB_SUCCESS);
+            job.updated_at = NowMs();
+            JobStore::GetInstance().Update(job_id, job);
         }
         else
         {

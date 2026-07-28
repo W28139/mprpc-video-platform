@@ -352,6 +352,7 @@ class ScheduleJobResponse final :
     kJobIdFieldNumber = 4,
     kErrorCodeFieldNumber = 1,
     kAcceptedFieldNumber = 3,
+    kShardCountFieldNumber = 5,
   };
   // string error_msg = 2;
   void clear_error_msg();
@@ -399,6 +400,15 @@ class ScheduleJobResponse final :
   void _internal_set_accepted(bool value);
   public:
 
+  // int32 shard_count = 5;
+  void clear_shard_count();
+  int32_t shard_count() const;
+  void set_shard_count(int32_t value);
+  private:
+  int32_t _internal_shard_count() const;
+  void _internal_set_shard_count(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:video_platform.ScheduleJobResponse)
  private:
   class _Internal;
@@ -411,6 +421,7 @@ class ScheduleJobResponse final :
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr job_id_;
     int32_t error_code_;
     bool accepted_;
+    int32_t shard_count_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -1081,6 +1092,26 @@ inline void ScheduleJobResponse::set_allocated_job_id(std::string* job_id) {
   }
 #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
   // @@protoc_insertion_point(field_set_allocated:video_platform.ScheduleJobResponse.job_id)
+}
+
+// int32 shard_count = 5;
+inline void ScheduleJobResponse::clear_shard_count() {
+  _impl_.shard_count_ = 0;
+}
+inline int32_t ScheduleJobResponse::_internal_shard_count() const {
+  return _impl_.shard_count_;
+}
+inline int32_t ScheduleJobResponse::shard_count() const {
+  // @@protoc_insertion_point(field_get:video_platform.ScheduleJobResponse.shard_count)
+  return _internal_shard_count();
+}
+inline void ScheduleJobResponse::_internal_set_shard_count(int32_t value) {
+  
+  _impl_.shard_count_ = value;
+}
+inline void ScheduleJobResponse::set_shard_count(int32_t value) {
+  _internal_set_shard_count(value);
+  // @@protoc_insertion_point(field_set:video_platform.ScheduleJobResponse.shard_count)
 }
 
 // -------------------------------------------------------------------

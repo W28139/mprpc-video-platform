@@ -6,6 +6,7 @@
 #include <string>
 #include <memory>
 #include <mutex>
+#include <optional>
 
 namespace video_platform {
 
@@ -52,8 +53,6 @@ struct JobRecord {
 /// - Insert / Update / Delete 使用 unique_lock（写锁），互斥所有读者
 /// - Get / ListAll / Count 使用 shared_lock（读锁），多个读可并发
 ///
-/// @warning Get() 返回裸指针，仅在调用方持有锁期间有效。
-///          调用方不应缓存该指针跨越锁边界。
 class JobStore {
 public:
     /// @brief 获取全局唯一实例
@@ -68,9 +67,10 @@ public:
     /// @brief 删除指定 job。返回 true 表示成功删除。
     bool Delete(const std::string& job_id);
 
-    /// @brief 查询单个 job。不存在返回 nullptr。
-    /// @warning 指针仅持有锁期间有效，勿跨锁使用。
-    JobRecord* Get(const std::string& job_id);
+    /// @brief 查询单个 job，返回副本（线程安全）。
+    /// @return std::nullopt 表示 job_id 不存在。
+    /// 返回值拷贝消除了跨锁悬空指针风险。
+    std::optional<JobRecord> Get(const std::string& job_id);
 
     /// @brief 列出所有 job 的副本（线程安全）。
     std::vector<JobRecord> ListAll() const;
@@ -131,8 +131,9 @@ public:
     /// @brief 删除指定 shard。返回 true 表示成功删除。
     bool Delete(const std::string& shard_id);
 
-    /// @brief 查询单个 shard。不存在返回 nullptr。
-    ShardRecord* Get(const std::string& shard_id);
+    /// @brief 查询单个 shard，返回副本（线程安全）。
+    /// @return std::nullopt 表示 shard_id 不存在。
+    std::optional<ShardRecord> Get(const std::string& shard_id);
 
     /// @brief 列出指定 job 下的所有 shard（线程安全）。
     std::vector<ShardRecord> ListByJob(const std::string& job_id) const;
@@ -197,8 +198,9 @@ public:
     /// @brief 注销 Worker。返回 true 表示成功删除。
     bool Delete(const std::string& worker_id);
 
-    /// @brief 查询单个 Worker。不存在返回 nullptr。
-    WorkerRecord* Get(const std::string& worker_id);
+    /// @brief 查询单个 Worker，返回副本（线程安全）。
+    /// @return std::nullopt 表示 worker_id 不存在。
+    std::optional<WorkerRecord> Get(const std::string& worker_id);
 
     // ── 原子方法（在 unique_lock 内完成读-改-写，消除 TOCTOU 竞争） ──
 

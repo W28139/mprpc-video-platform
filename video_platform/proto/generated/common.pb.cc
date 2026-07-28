@@ -36,6 +36,7 @@ PROTOBUF_CONSTEXPR JobInfo::JobInfo(
   , /*decltype(_impl_.shard_count_)*/0
   , /*decltype(_impl_.created_at_)*/int64_t{0}
   , /*decltype(_impl_.updated_at_)*/int64_t{0}
+  , /*decltype(_impl_.shard_duration_sec_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct JobInfoDefaultTypeInternal {
   PROTOBUF_CONSTEXPR JobInfoDefaultTypeInternal()
@@ -138,6 +139,7 @@ const uint32_t TableStruct_common_2eproto::offsets[] PROTOBUF_SECTION_VARIABLE(p
   PROTOBUF_FIELD_OFFSET(::video_platform::JobInfo, _impl_.shard_count_),
   PROTOBUF_FIELD_OFFSET(::video_platform::JobInfo, _impl_.created_at_),
   PROTOBUF_FIELD_OFFSET(::video_platform::JobInfo, _impl_.updated_at_),
+  PROTOBUF_FIELD_OFFSET(::video_platform::JobInfo, _impl_.shard_duration_sec_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::video_platform::ShardInfo, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -190,9 +192,9 @@ const uint32_t TableStruct_common_2eproto::offsets[] PROTOBUF_SECTION_VARIABLE(p
 };
 static const ::_pbi::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) = {
   { 0, -1, -1, sizeof(::video_platform::JobInfo)},
-  { 19, -1, -1, sizeof(::video_platform::ShardInfo)},
-  { 39, -1, -1, sizeof(::video_platform::WorkerInfo)},
-  { 55, -1, -1, sizeof(::video_platform::WorkerLoad)},
+  { 20, -1, -1, sizeof(::video_platform::ShardInfo)},
+  { 40, -1, -1, sizeof(::video_platform::WorkerInfo)},
+  { 56, -1, -1, sizeof(::video_platform::WorkerLoad)},
 };
 
 static const ::_pb::Message* const file_default_instances[] = {
@@ -203,7 +205,7 @@ static const ::_pb::Message* const file_default_instances[] = {
 };
 
 const char descriptor_table_protodef_common_2eproto[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) =
-  "\n\014common.proto\022\016video_platform\"\255\002\n\007JobIn"
+  "\n\014common.proto\022\016video_platform\"\311\002\n\007JobIn"
   "fo\022\016\n\006job_id\030\001 \001(\t\022\017\n\007user_id\030\002 \001(\t\022\022\n\ni"
   "nput_path\030\003 \001(\t\022\023\n\013output_path\030\004 \001(\t\022\025\n\r"
   "target_format\030\005 \001(\t\022\031\n\021target_resolution"
@@ -211,41 +213,42 @@ const char descriptor_table_protodef_common_2eproto[] PROTOBUF_SECTION_VARIABLE(
   "on_sec\030\010 \001(\003\022\020\n\010priority\030\t \001(\005\022)\n\006status"
   "\030\n \001(\0162\031.video_platform.JobStatus\022\023\n\013sha"
   "rd_count\030\013 \001(\005\022\022\n\ncreated_at\030\014 \001(\003\022\022\n\nup"
-  "dated_at\030\r \001(\003\"\277\002\n\tShardInfo\022\020\n\010shard_id"
-  "\030\001 \001(\t\022\016\n\006job_id\030\002 \001(\t\022\023\n\013shard_index\030\003 "
-  "\001(\005\022\020\n\010start_ms\030\004 \001(\003\022\023\n\013duration_ms\030\005 \001"
-  "(\003\022+\n\006status\030\006 \001(\0162\033.video_platform.Shar"
-  "dStatus\022\032\n\022assigned_worker_id\030\007 \001(\t\022\022\n\na"
-  "ttempt_id\030\010 \001(\t\022\023\n\013retry_count\030\t \001(\005\022\021\n\t"
-  "max_retry\030\n \001(\005\022\022\n\ninput_path\030\013 \001(\t\022\023\n\013o"
-  "utput_path\030\014 \001(\t\022\022\n\ncreated_at\030\r \001(\003\022\022\n\n"
-  "updated_at\030\016 \001(\003\"\364\001\n\nWorkerInfo\022\021\n\tworke"
-  "r_id\030\001 \001(\t\022\n\n\002ip\030\002 \001(\t\022\014\n\004port\030\003 \001(\005\022\021\n\t"
-  "cpu_cores\030\004 \001(\005\022\021\n\tmemory_mb\030\005 \001(\005\022\021\n\tgp"
-  "u_count\030\006 \001(\005\022\036\n\026current_running_shards\030"
-  "\007 \001(\005\022\032\n\022max_running_shards\030\010 \001(\005\022,\n\006sta"
-  "tus\030\t \001(\0162\034.video_platform.WorkerStatus\022"
-  "\026\n\016last_heartbeat\030\n \001(\003\"\243\001\n\nWorkerLoad\022\021"
-  "\n\tworker_id\030\001 \001(\t\022\021\n\tcpu_usage\030\002 \001(\005\022\024\n\014"
-  "memory_usage\030\003 \001(\005\022\026\n\016running_shards\030\004 \001"
-  "(\005\022\027\n\017finished_shards\030\005 \001(\005\022\025\n\rfailed_sh"
-  "ards\030\006 \001(\005\022\021\n\ttimestamp\030\007 \001(\003*\260\001\n\tJobSta"
-  "tus\022\026\n\022JOB_STATUS_UNKNOWN\020\000\022\017\n\013JOB_PENDI"
-  "NG\020\001\022\021\n\rJOB_SPLITTING\020\002\022\022\n\016JOB_SCHEDULIN"
-  "G\020\003\022\017\n\013JOB_RUNNING\020\004\022\017\n\013JOB_MERGING\020\005\022\017\n"
-  "\013JOB_SUCCESS\020\006\022\016\n\nJOB_FAILED\020\007\022\020\n\014JOB_CA"
-  "NCELED\020\010*\301\001\n\013ShardStatus\022\030\n\024SHARD_STATUS"
-  "_UNKNOWN\020\000\022\021\n\rSHARD_CREATED\020\001\022\021\n\rSHARD_W"
-  "AITING\020\002\022\022\n\016SHARD_ASSIGNED\020\003\022\021\n\rSHARD_RU"
-  "NNING\020\004\022\021\n\rSHARD_SUCCESS\020\005\022\020\n\014SHARD_FAIL"
-  "ED\020\006\022\022\n\016SHARD_RETRYING\020\007\022\022\n\016SHARD_CANCEL"
-  "ED\020\010*e\n\014WorkerStatus\022\031\n\025WORKER_STATUS_UN"
-  "KNOWN\020\000\022\021\n\rWORKER_ONLINE\020\001\022\022\n\016WORKER_OFF"
-  "LINE\020\002\022\023\n\017WORKER_DRAINING\020\003b\006proto3"
+  "dated_at\030\r \001(\003\022\032\n\022shard_duration_sec\030\016 \001"
+  "(\005\"\277\002\n\tShardInfo\022\020\n\010shard_id\030\001 \001(\t\022\016\n\006jo"
+  "b_id\030\002 \001(\t\022\023\n\013shard_index\030\003 \001(\005\022\020\n\010start"
+  "_ms\030\004 \001(\003\022\023\n\013duration_ms\030\005 \001(\003\022+\n\006status"
+  "\030\006 \001(\0162\033.video_platform.ShardStatus\022\032\n\022a"
+  "ssigned_worker_id\030\007 \001(\t\022\022\n\nattempt_id\030\010 "
+  "\001(\t\022\023\n\013retry_count\030\t \001(\005\022\021\n\tmax_retry\030\n "
+  "\001(\005\022\022\n\ninput_path\030\013 \001(\t\022\023\n\013output_path\030\014"
+  " \001(\t\022\022\n\ncreated_at\030\r \001(\003\022\022\n\nupdated_at\030\016"
+  " \001(\003\"\364\001\n\nWorkerInfo\022\021\n\tworker_id\030\001 \001(\t\022\n"
+  "\n\002ip\030\002 \001(\t\022\014\n\004port\030\003 \001(\005\022\021\n\tcpu_cores\030\004 "
+  "\001(\005\022\021\n\tmemory_mb\030\005 \001(\005\022\021\n\tgpu_count\030\006 \001("
+  "\005\022\036\n\026current_running_shards\030\007 \001(\005\022\032\n\022max"
+  "_running_shards\030\010 \001(\005\022,\n\006status\030\t \001(\0162\034."
+  "video_platform.WorkerStatus\022\026\n\016last_hear"
+  "tbeat\030\n \001(\003\"\243\001\n\nWorkerLoad\022\021\n\tworker_id\030"
+  "\001 \001(\t\022\021\n\tcpu_usage\030\002 \001(\005\022\024\n\014memory_usage"
+  "\030\003 \001(\005\022\026\n\016running_shards\030\004 \001(\005\022\027\n\017finish"
+  "ed_shards\030\005 \001(\005\022\025\n\rfailed_shards\030\006 \001(\005\022\021"
+  "\n\ttimestamp\030\007 \001(\003*\260\001\n\tJobStatus\022\026\n\022JOB_S"
+  "TATUS_UNKNOWN\020\000\022\017\n\013JOB_PENDING\020\001\022\021\n\rJOB_"
+  "SPLITTING\020\002\022\022\n\016JOB_SCHEDULING\020\003\022\017\n\013JOB_R"
+  "UNNING\020\004\022\017\n\013JOB_MERGING\020\005\022\017\n\013JOB_SUCCESS"
+  "\020\006\022\016\n\nJOB_FAILED\020\007\022\020\n\014JOB_CANCELED\020\010*\301\001\n"
+  "\013ShardStatus\022\030\n\024SHARD_STATUS_UNKNOWN\020\000\022\021"
+  "\n\rSHARD_CREATED\020\001\022\021\n\rSHARD_WAITING\020\002\022\022\n\016"
+  "SHARD_ASSIGNED\020\003\022\021\n\rSHARD_RUNNING\020\004\022\021\n\rS"
+  "HARD_SUCCESS\020\005\022\020\n\014SHARD_FAILED\020\006\022\022\n\016SHAR"
+  "D_RETRYING\020\007\022\022\n\016SHARD_CANCELED\020\010*e\n\014Work"
+  "erStatus\022\031\n\025WORKER_STATUS_UNKNOWN\020\000\022\021\n\rW"
+  "ORKER_ONLINE\020\001\022\022\n\016WORKER_OFFLINE\020\002\022\023\n\017WO"
+  "RKER_DRAINING\020\003b\006proto3"
   ;
 static ::_pbi::once_flag descriptor_table_common_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_common_2eproto = {
-    false, false, 1555, descriptor_table_protodef_common_2eproto,
+    false, false, 1583, descriptor_table_protodef_common_2eproto,
     "common.proto",
     &descriptor_table_common_2eproto_once, nullptr, 0, 4,
     schemas, file_default_instances, TableStruct_common_2eproto::offsets,
@@ -347,6 +350,7 @@ JobInfo::JobInfo(const JobInfo& from)
     , decltype(_impl_.shard_count_){}
     , decltype(_impl_.created_at_){}
     , decltype(_impl_.updated_at_){}
+    , decltype(_impl_.shard_duration_sec_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -399,8 +403,8 @@ JobInfo::JobInfo(const JobInfo& from)
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.duration_sec_, &from._impl_.duration_sec_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.updated_at_) -
-    reinterpret_cast<char*>(&_impl_.duration_sec_)) + sizeof(_impl_.updated_at_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.shard_duration_sec_) -
+    reinterpret_cast<char*>(&_impl_.duration_sec_)) + sizeof(_impl_.shard_duration_sec_));
   // @@protoc_insertion_point(copy_constructor:video_platform.JobInfo)
 }
 
@@ -422,6 +426,7 @@ inline void JobInfo::SharedCtor(
     , decltype(_impl_.shard_count_){0}
     , decltype(_impl_.created_at_){int64_t{0}}
     , decltype(_impl_.updated_at_){int64_t{0}}
+    , decltype(_impl_.shard_duration_sec_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.job_id_.InitDefault();
@@ -486,8 +491,8 @@ void JobInfo::Clear() {
   _impl_.target_format_.ClearToEmpty();
   _impl_.target_resolution_.ClearToEmpty();
   ::memset(&_impl_.duration_sec_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.updated_at_) -
-      reinterpret_cast<char*>(&_impl_.duration_sec_)) + sizeof(_impl_.updated_at_));
+      reinterpret_cast<char*>(&_impl_.shard_duration_sec_) -
+      reinterpret_cast<char*>(&_impl_.duration_sec_)) + sizeof(_impl_.shard_duration_sec_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -610,6 +615,14 @@ const char* JobInfo::_InternalParse(const char* ptr, ::_pbi::ParseContext* ctx) 
       case 13:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 104)) {
           _impl_.updated_at_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 shard_duration_sec = 14;
+      case 14:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 112)) {
+          _impl_.shard_duration_sec_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -746,6 +759,12 @@ uint8_t* JobInfo::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt64ToArray(13, this->_internal_updated_at(), target);
   }
 
+  // int32 shard_duration_sec = 14;
+  if (this->_internal_shard_duration_sec() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(14, this->_internal_shard_duration_sec(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -840,6 +859,11 @@ size_t JobInfo::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::Int64SizePlusOne(this->_internal_updated_at());
   }
 
+  // int32 shard_duration_sec = 14;
+  if (this->_internal_shard_duration_sec() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_shard_duration_sec());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -897,6 +921,9 @@ void JobInfo::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROTOB
   if (from._internal_updated_at() != 0) {
     _this->_internal_set_updated_at(from._internal_updated_at());
   }
+  if (from._internal_shard_duration_sec() != 0) {
+    _this->_internal_set_shard_duration_sec(from._internal_shard_duration_sec());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -941,8 +968,8 @@ void JobInfo::InternalSwap(JobInfo* other) {
       &other->_impl_.target_resolution_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(JobInfo, _impl_.updated_at_)
-      + sizeof(JobInfo::_impl_.updated_at_)
+      PROTOBUF_FIELD_OFFSET(JobInfo, _impl_.shard_duration_sec_)
+      + sizeof(JobInfo::_impl_.shard_duration_sec_)
       - PROTOBUF_FIELD_OFFSET(JobInfo, _impl_.duration_sec_)>(
           reinterpret_cast<char*>(&_impl_.duration_sec_),
           reinterpret_cast<char*>(&other->_impl_.duration_sec_));

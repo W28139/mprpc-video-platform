@@ -65,6 +65,7 @@ message JobInfo {
     int32  shard_count        = 11; // 拆分出的 shard 总数（切分完成后回填）
     int64  created_at         = 12; // 任务创建时间戳（毫秒）
     int64  updated_at         = 13; // 最后状态更新时间戳（毫秒）
+    int32  shard_duration_sec = 14; // 每 shard 时长（秒），0=使用默认值
 }
 
 // 子任务完整信息 — Scheduler 创建，Worker 执行，ResultCollector 聚合

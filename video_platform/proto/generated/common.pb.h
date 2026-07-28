@@ -294,6 +294,7 @@ class JobInfo final :
     kShardCountFieldNumber = 11,
     kCreatedAtFieldNumber = 12,
     kUpdatedAtFieldNumber = 13,
+    kShardDurationSecFieldNumber = 14,
   };
   // string job_id = 1;
   void clear_job_id();
@@ -442,6 +443,15 @@ class JobInfo final :
   void _internal_set_updated_at(int64_t value);
   public:
 
+  // int32 shard_duration_sec = 14;
+  void clear_shard_duration_sec();
+  int32_t shard_duration_sec() const;
+  void set_shard_duration_sec(int32_t value);
+  private:
+  int32_t _internal_shard_duration_sec() const;
+  void _internal_set_shard_duration_sec(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:video_platform.JobInfo)
  private:
   class _Internal;
@@ -463,6 +473,7 @@ class JobInfo final :
     int32_t shard_count_;
     int64_t created_at_;
     int64_t updated_at_;
+    int32_t shard_duration_sec_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -1714,6 +1725,26 @@ inline void JobInfo::_internal_set_updated_at(int64_t value) {
 inline void JobInfo::set_updated_at(int64_t value) {
   _internal_set_updated_at(value);
   // @@protoc_insertion_point(field_set:video_platform.JobInfo.updated_at)
+}
+
+// int32 shard_duration_sec = 14;
+inline void JobInfo::clear_shard_duration_sec() {
+  _impl_.shard_duration_sec_ = 0;
+}
+inline int32_t JobInfo::_internal_shard_duration_sec() const {
+  return _impl_.shard_duration_sec_;
+}
+inline int32_t JobInfo::shard_duration_sec() const {
+  // @@protoc_insertion_point(field_get:video_platform.JobInfo.shard_duration_sec)
+  return _internal_shard_duration_sec();
+}
+inline void JobInfo::_internal_set_shard_duration_sec(int32_t value) {
+  
+  _impl_.shard_duration_sec_ = value;
+}
+inline void JobInfo::set_shard_duration_sec(int32_t value) {
+  _internal_set_shard_duration_sec(value);
+  // @@protoc_insertion_point(field_set:video_platform.JobInfo.shard_duration_sec)
 }
 
 // -------------------------------------------------------------------
