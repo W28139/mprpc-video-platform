@@ -47,6 +47,18 @@ struct TableStruct_scheduler_2eproto {
 };
 extern const ::PROTOBUF_NAMESPACE_ID::internal::DescriptorTable descriptor_table_scheduler_2eproto;
 namespace video_platform {
+class CancelJobShardsRequest;
+struct CancelJobShardsRequestDefaultTypeInternal;
+extern CancelJobShardsRequestDefaultTypeInternal _CancelJobShardsRequest_default_instance_;
+class CancelJobShardsResponse;
+struct CancelJobShardsResponseDefaultTypeInternal;
+extern CancelJobShardsResponseDefaultTypeInternal _CancelJobShardsResponse_default_instance_;
+class NotifyWorkerOfflineRequest;
+struct NotifyWorkerOfflineRequestDefaultTypeInternal;
+extern NotifyWorkerOfflineRequestDefaultTypeInternal _NotifyWorkerOfflineRequest_default_instance_;
+class NotifyWorkerOfflineResponse;
+struct NotifyWorkerOfflineResponseDefaultTypeInternal;
+extern NotifyWorkerOfflineResponseDefaultTypeInternal _NotifyWorkerOfflineResponse_default_instance_;
 class RescheduleShardRequest;
 struct RescheduleShardRequestDefaultTypeInternal;
 extern RescheduleShardRequestDefaultTypeInternal _RescheduleShardRequest_default_instance_;
@@ -61,6 +73,10 @@ struct ScheduleJobResponseDefaultTypeInternal;
 extern ScheduleJobResponseDefaultTypeInternal _ScheduleJobResponse_default_instance_;
 }  // namespace video_platform
 PROTOBUF_NAMESPACE_OPEN
+template<> ::video_platform::CancelJobShardsRequest* Arena::CreateMaybeMessage<::video_platform::CancelJobShardsRequest>(Arena*);
+template<> ::video_platform::CancelJobShardsResponse* Arena::CreateMaybeMessage<::video_platform::CancelJobShardsResponse>(Arena*);
+template<> ::video_platform::NotifyWorkerOfflineRequest* Arena::CreateMaybeMessage<::video_platform::NotifyWorkerOfflineRequest>(Arena*);
+template<> ::video_platform::NotifyWorkerOfflineResponse* Arena::CreateMaybeMessage<::video_platform::NotifyWorkerOfflineResponse>(Arena*);
 template<> ::video_platform::RescheduleShardRequest* Arena::CreateMaybeMessage<::video_platform::RescheduleShardRequest>(Arena*);
 template<> ::video_platform::RescheduleShardResponse* Arena::CreateMaybeMessage<::video_platform::RescheduleShardResponse>(Arena*);
 template<> ::video_platform::ScheduleJobRequest* Arena::CreateMaybeMessage<::video_platform::ScheduleJobRequest>(Arena*);
@@ -807,6 +823,716 @@ class RescheduleShardResponse final :
   union { Impl_ _impl_; };
   friend struct ::TableStruct_scheduler_2eproto;
 };
+// -------------------------------------------------------------------
+
+class NotifyWorkerOfflineRequest final :
+    public ::PROTOBUF_NAMESPACE_ID::Message /* @@protoc_insertion_point(class_definition:video_platform.NotifyWorkerOfflineRequest) */ {
+ public:
+  inline NotifyWorkerOfflineRequest() : NotifyWorkerOfflineRequest(nullptr) {}
+  ~NotifyWorkerOfflineRequest() override;
+  explicit PROTOBUF_CONSTEXPR NotifyWorkerOfflineRequest(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized);
+
+  NotifyWorkerOfflineRequest(const NotifyWorkerOfflineRequest& from);
+  NotifyWorkerOfflineRequest(NotifyWorkerOfflineRequest&& from) noexcept
+    : NotifyWorkerOfflineRequest() {
+    *this = ::std::move(from);
+  }
+
+  inline NotifyWorkerOfflineRequest& operator=(const NotifyWorkerOfflineRequest& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline NotifyWorkerOfflineRequest& operator=(NotifyWorkerOfflineRequest&& from) noexcept {
+    if (this == &from) return *this;
+    if (GetOwningArena() == from.GetOwningArena()
+  #ifdef PROTOBUF_FORCE_COPY_IN_MOVE
+        && GetOwningArena() != nullptr
+  #endif  // !PROTOBUF_FORCE_COPY_IN_MOVE
+    ) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* descriptor() {
+    return GetDescriptor();
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Reflection* GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const NotifyWorkerOfflineRequest& default_instance() {
+    return *internal_default_instance();
+  }
+  static inline const NotifyWorkerOfflineRequest* internal_default_instance() {
+    return reinterpret_cast<const NotifyWorkerOfflineRequest*>(
+               &_NotifyWorkerOfflineRequest_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages =
+    4;
+
+  friend void swap(NotifyWorkerOfflineRequest& a, NotifyWorkerOfflineRequest& b) {
+    a.Swap(&b);
+  }
+  inline void Swap(NotifyWorkerOfflineRequest* other) {
+    if (other == this) return;
+  #ifdef PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() != nullptr &&
+        GetOwningArena() == other->GetOwningArena()) {
+   #else  // PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() == other->GetOwningArena()) {
+  #endif  // !PROTOBUF_FORCE_COPY_IN_SWAP
+      InternalSwap(other);
+    } else {
+      ::PROTOBUF_NAMESPACE_ID::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(NotifyWorkerOfflineRequest* other) {
+    if (other == this) return;
+    GOOGLE_DCHECK(GetOwningArena() == other->GetOwningArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  NotifyWorkerOfflineRequest* New(::PROTOBUF_NAMESPACE_ID::Arena* arena = nullptr) const final {
+    return CreateMaybeMessage<NotifyWorkerOfflineRequest>(arena);
+  }
+  using ::PROTOBUF_NAMESPACE_ID::Message::CopyFrom;
+  void CopyFrom(const NotifyWorkerOfflineRequest& from);
+  using ::PROTOBUF_NAMESPACE_ID::Message::MergeFrom;
+  void MergeFrom( const NotifyWorkerOfflineRequest& from) {
+    NotifyWorkerOfflineRequest::MergeImpl(*this, from);
+  }
+  private:
+  static void MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROTOBUF_NAMESPACE_ID::Message& from_msg);
+  public:
+  PROTOBUF_ATTRIBUTE_REINITIALIZES void Clear() final;
+  bool IsInitialized() const final;
+
+  size_t ByteSizeLong() const final;
+  const char* _InternalParse(const char* ptr, ::PROTOBUF_NAMESPACE_ID::internal::ParseContext* ctx) final;
+  uint8_t* _InternalSerialize(
+      uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const final;
+  int GetCachedSize() const final { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::PROTOBUF_NAMESPACE_ID::Arena* arena, bool is_message_owned);
+  void SharedDtor();
+  void SetCachedSize(int size) const final;
+  void InternalSwap(NotifyWorkerOfflineRequest* other);
+
+  private:
+  friend class ::PROTOBUF_NAMESPACE_ID::internal::AnyMetadata;
+  static ::PROTOBUF_NAMESPACE_ID::StringPiece FullMessageName() {
+    return "video_platform.NotifyWorkerOfflineRequest";
+  }
+  protected:
+  explicit NotifyWorkerOfflineRequest(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+                       bool is_message_owned = false);
+  public:
+
+  static const ClassData _class_data_;
+  const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*GetClassData() const final;
+
+  ::PROTOBUF_NAMESPACE_ID::Metadata GetMetadata() const final;
+
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+
+  enum : int {
+    kWorkerIdFieldNumber = 1,
+    kReasonFieldNumber = 2,
+  };
+  // string worker_id = 1;
+  void clear_worker_id();
+  const std::string& worker_id() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_worker_id(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_worker_id();
+  PROTOBUF_NODISCARD std::string* release_worker_id();
+  void set_allocated_worker_id(std::string* worker_id);
+  private:
+  const std::string& _internal_worker_id() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_worker_id(const std::string& value);
+  std::string* _internal_mutable_worker_id();
+  public:
+
+  // string reason = 2;
+  void clear_reason();
+  const std::string& reason() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_reason(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_reason();
+  PROTOBUF_NODISCARD std::string* release_reason();
+  void set_allocated_reason(std::string* reason);
+  private:
+  const std::string& _internal_reason() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_reason(const std::string& value);
+  std::string* _internal_mutable_reason();
+  public:
+
+  // @@protoc_insertion_point(class_scope:video_platform.NotifyWorkerOfflineRequest)
+ private:
+  class _Internal;
+
+  template <typename T> friend class ::PROTOBUF_NAMESPACE_ID::Arena::InternalHelper;
+  typedef void InternalArenaConstructable_;
+  typedef void DestructorSkippable_;
+  struct Impl_ {
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr worker_id_;
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr reason_;
+    mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
+  };
+  union { Impl_ _impl_; };
+  friend struct ::TableStruct_scheduler_2eproto;
+};
+// -------------------------------------------------------------------
+
+class NotifyWorkerOfflineResponse final :
+    public ::PROTOBUF_NAMESPACE_ID::Message /* @@protoc_insertion_point(class_definition:video_platform.NotifyWorkerOfflineResponse) */ {
+ public:
+  inline NotifyWorkerOfflineResponse() : NotifyWorkerOfflineResponse(nullptr) {}
+  ~NotifyWorkerOfflineResponse() override;
+  explicit PROTOBUF_CONSTEXPR NotifyWorkerOfflineResponse(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized);
+
+  NotifyWorkerOfflineResponse(const NotifyWorkerOfflineResponse& from);
+  NotifyWorkerOfflineResponse(NotifyWorkerOfflineResponse&& from) noexcept
+    : NotifyWorkerOfflineResponse() {
+    *this = ::std::move(from);
+  }
+
+  inline NotifyWorkerOfflineResponse& operator=(const NotifyWorkerOfflineResponse& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline NotifyWorkerOfflineResponse& operator=(NotifyWorkerOfflineResponse&& from) noexcept {
+    if (this == &from) return *this;
+    if (GetOwningArena() == from.GetOwningArena()
+  #ifdef PROTOBUF_FORCE_COPY_IN_MOVE
+        && GetOwningArena() != nullptr
+  #endif  // !PROTOBUF_FORCE_COPY_IN_MOVE
+    ) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* descriptor() {
+    return GetDescriptor();
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Reflection* GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const NotifyWorkerOfflineResponse& default_instance() {
+    return *internal_default_instance();
+  }
+  static inline const NotifyWorkerOfflineResponse* internal_default_instance() {
+    return reinterpret_cast<const NotifyWorkerOfflineResponse*>(
+               &_NotifyWorkerOfflineResponse_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages =
+    5;
+
+  friend void swap(NotifyWorkerOfflineResponse& a, NotifyWorkerOfflineResponse& b) {
+    a.Swap(&b);
+  }
+  inline void Swap(NotifyWorkerOfflineResponse* other) {
+    if (other == this) return;
+  #ifdef PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() != nullptr &&
+        GetOwningArena() == other->GetOwningArena()) {
+   #else  // PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() == other->GetOwningArena()) {
+  #endif  // !PROTOBUF_FORCE_COPY_IN_SWAP
+      InternalSwap(other);
+    } else {
+      ::PROTOBUF_NAMESPACE_ID::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(NotifyWorkerOfflineResponse* other) {
+    if (other == this) return;
+    GOOGLE_DCHECK(GetOwningArena() == other->GetOwningArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  NotifyWorkerOfflineResponse* New(::PROTOBUF_NAMESPACE_ID::Arena* arena = nullptr) const final {
+    return CreateMaybeMessage<NotifyWorkerOfflineResponse>(arena);
+  }
+  using ::PROTOBUF_NAMESPACE_ID::Message::CopyFrom;
+  void CopyFrom(const NotifyWorkerOfflineResponse& from);
+  using ::PROTOBUF_NAMESPACE_ID::Message::MergeFrom;
+  void MergeFrom( const NotifyWorkerOfflineResponse& from) {
+    NotifyWorkerOfflineResponse::MergeImpl(*this, from);
+  }
+  private:
+  static void MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROTOBUF_NAMESPACE_ID::Message& from_msg);
+  public:
+  PROTOBUF_ATTRIBUTE_REINITIALIZES void Clear() final;
+  bool IsInitialized() const final;
+
+  size_t ByteSizeLong() const final;
+  const char* _InternalParse(const char* ptr, ::PROTOBUF_NAMESPACE_ID::internal::ParseContext* ctx) final;
+  uint8_t* _InternalSerialize(
+      uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const final;
+  int GetCachedSize() const final { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::PROTOBUF_NAMESPACE_ID::Arena* arena, bool is_message_owned);
+  void SharedDtor();
+  void SetCachedSize(int size) const final;
+  void InternalSwap(NotifyWorkerOfflineResponse* other);
+
+  private:
+  friend class ::PROTOBUF_NAMESPACE_ID::internal::AnyMetadata;
+  static ::PROTOBUF_NAMESPACE_ID::StringPiece FullMessageName() {
+    return "video_platform.NotifyWorkerOfflineResponse";
+  }
+  protected:
+  explicit NotifyWorkerOfflineResponse(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+                       bool is_message_owned = false);
+  public:
+
+  static const ClassData _class_data_;
+  const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*GetClassData() const final;
+
+  ::PROTOBUF_NAMESPACE_ID::Metadata GetMetadata() const final;
+
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+
+  enum : int {
+    kErrorMsgFieldNumber = 2,
+    kErrorCodeFieldNumber = 1,
+    kRescheduledCountFieldNumber = 3,
+  };
+  // string error_msg = 2;
+  void clear_error_msg();
+  const std::string& error_msg() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_error_msg(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_error_msg();
+  PROTOBUF_NODISCARD std::string* release_error_msg();
+  void set_allocated_error_msg(std::string* error_msg);
+  private:
+  const std::string& _internal_error_msg() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_error_msg(const std::string& value);
+  std::string* _internal_mutable_error_msg();
+  public:
+
+  // int32 error_code = 1;
+  void clear_error_code();
+  int32_t error_code() const;
+  void set_error_code(int32_t value);
+  private:
+  int32_t _internal_error_code() const;
+  void _internal_set_error_code(int32_t value);
+  public:
+
+  // int32 rescheduled_count = 3;
+  void clear_rescheduled_count();
+  int32_t rescheduled_count() const;
+  void set_rescheduled_count(int32_t value);
+  private:
+  int32_t _internal_rescheduled_count() const;
+  void _internal_set_rescheduled_count(int32_t value);
+  public:
+
+  // @@protoc_insertion_point(class_scope:video_platform.NotifyWorkerOfflineResponse)
+ private:
+  class _Internal;
+
+  template <typename T> friend class ::PROTOBUF_NAMESPACE_ID::Arena::InternalHelper;
+  typedef void InternalArenaConstructable_;
+  typedef void DestructorSkippable_;
+  struct Impl_ {
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr error_msg_;
+    int32_t error_code_;
+    int32_t rescheduled_count_;
+    mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
+  };
+  union { Impl_ _impl_; };
+  friend struct ::TableStruct_scheduler_2eproto;
+};
+// -------------------------------------------------------------------
+
+class CancelJobShardsRequest final :
+    public ::PROTOBUF_NAMESPACE_ID::Message /* @@protoc_insertion_point(class_definition:video_platform.CancelJobShardsRequest) */ {
+ public:
+  inline CancelJobShardsRequest() : CancelJobShardsRequest(nullptr) {}
+  ~CancelJobShardsRequest() override;
+  explicit PROTOBUF_CONSTEXPR CancelJobShardsRequest(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized);
+
+  CancelJobShardsRequest(const CancelJobShardsRequest& from);
+  CancelJobShardsRequest(CancelJobShardsRequest&& from) noexcept
+    : CancelJobShardsRequest() {
+    *this = ::std::move(from);
+  }
+
+  inline CancelJobShardsRequest& operator=(const CancelJobShardsRequest& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline CancelJobShardsRequest& operator=(CancelJobShardsRequest&& from) noexcept {
+    if (this == &from) return *this;
+    if (GetOwningArena() == from.GetOwningArena()
+  #ifdef PROTOBUF_FORCE_COPY_IN_MOVE
+        && GetOwningArena() != nullptr
+  #endif  // !PROTOBUF_FORCE_COPY_IN_MOVE
+    ) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* descriptor() {
+    return GetDescriptor();
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Reflection* GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const CancelJobShardsRequest& default_instance() {
+    return *internal_default_instance();
+  }
+  static inline const CancelJobShardsRequest* internal_default_instance() {
+    return reinterpret_cast<const CancelJobShardsRequest*>(
+               &_CancelJobShardsRequest_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages =
+    6;
+
+  friend void swap(CancelJobShardsRequest& a, CancelJobShardsRequest& b) {
+    a.Swap(&b);
+  }
+  inline void Swap(CancelJobShardsRequest* other) {
+    if (other == this) return;
+  #ifdef PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() != nullptr &&
+        GetOwningArena() == other->GetOwningArena()) {
+   #else  // PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() == other->GetOwningArena()) {
+  #endif  // !PROTOBUF_FORCE_COPY_IN_SWAP
+      InternalSwap(other);
+    } else {
+      ::PROTOBUF_NAMESPACE_ID::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(CancelJobShardsRequest* other) {
+    if (other == this) return;
+    GOOGLE_DCHECK(GetOwningArena() == other->GetOwningArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  CancelJobShardsRequest* New(::PROTOBUF_NAMESPACE_ID::Arena* arena = nullptr) const final {
+    return CreateMaybeMessage<CancelJobShardsRequest>(arena);
+  }
+  using ::PROTOBUF_NAMESPACE_ID::Message::CopyFrom;
+  void CopyFrom(const CancelJobShardsRequest& from);
+  using ::PROTOBUF_NAMESPACE_ID::Message::MergeFrom;
+  void MergeFrom( const CancelJobShardsRequest& from) {
+    CancelJobShardsRequest::MergeImpl(*this, from);
+  }
+  private:
+  static void MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROTOBUF_NAMESPACE_ID::Message& from_msg);
+  public:
+  PROTOBUF_ATTRIBUTE_REINITIALIZES void Clear() final;
+  bool IsInitialized() const final;
+
+  size_t ByteSizeLong() const final;
+  const char* _InternalParse(const char* ptr, ::PROTOBUF_NAMESPACE_ID::internal::ParseContext* ctx) final;
+  uint8_t* _InternalSerialize(
+      uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const final;
+  int GetCachedSize() const final { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::PROTOBUF_NAMESPACE_ID::Arena* arena, bool is_message_owned);
+  void SharedDtor();
+  void SetCachedSize(int size) const final;
+  void InternalSwap(CancelJobShardsRequest* other);
+
+  private:
+  friend class ::PROTOBUF_NAMESPACE_ID::internal::AnyMetadata;
+  static ::PROTOBUF_NAMESPACE_ID::StringPiece FullMessageName() {
+    return "video_platform.CancelJobShardsRequest";
+  }
+  protected:
+  explicit CancelJobShardsRequest(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+                       bool is_message_owned = false);
+  public:
+
+  static const ClassData _class_data_;
+  const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*GetClassData() const final;
+
+  ::PROTOBUF_NAMESPACE_ID::Metadata GetMetadata() const final;
+
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+
+  enum : int {
+    kJobIdFieldNumber = 1,
+    kReasonFieldNumber = 2,
+  };
+  // string job_id = 1;
+  void clear_job_id();
+  const std::string& job_id() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_job_id(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_job_id();
+  PROTOBUF_NODISCARD std::string* release_job_id();
+  void set_allocated_job_id(std::string* job_id);
+  private:
+  const std::string& _internal_job_id() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_job_id(const std::string& value);
+  std::string* _internal_mutable_job_id();
+  public:
+
+  // string reason = 2;
+  void clear_reason();
+  const std::string& reason() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_reason(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_reason();
+  PROTOBUF_NODISCARD std::string* release_reason();
+  void set_allocated_reason(std::string* reason);
+  private:
+  const std::string& _internal_reason() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_reason(const std::string& value);
+  std::string* _internal_mutable_reason();
+  public:
+
+  // @@protoc_insertion_point(class_scope:video_platform.CancelJobShardsRequest)
+ private:
+  class _Internal;
+
+  template <typename T> friend class ::PROTOBUF_NAMESPACE_ID::Arena::InternalHelper;
+  typedef void InternalArenaConstructable_;
+  typedef void DestructorSkippable_;
+  struct Impl_ {
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr job_id_;
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr reason_;
+    mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
+  };
+  union { Impl_ _impl_; };
+  friend struct ::TableStruct_scheduler_2eproto;
+};
+// -------------------------------------------------------------------
+
+class CancelJobShardsResponse final :
+    public ::PROTOBUF_NAMESPACE_ID::Message /* @@protoc_insertion_point(class_definition:video_platform.CancelJobShardsResponse) */ {
+ public:
+  inline CancelJobShardsResponse() : CancelJobShardsResponse(nullptr) {}
+  ~CancelJobShardsResponse() override;
+  explicit PROTOBUF_CONSTEXPR CancelJobShardsResponse(::PROTOBUF_NAMESPACE_ID::internal::ConstantInitialized);
+
+  CancelJobShardsResponse(const CancelJobShardsResponse& from);
+  CancelJobShardsResponse(CancelJobShardsResponse&& from) noexcept
+    : CancelJobShardsResponse() {
+    *this = ::std::move(from);
+  }
+
+  inline CancelJobShardsResponse& operator=(const CancelJobShardsResponse& from) {
+    CopyFrom(from);
+    return *this;
+  }
+  inline CancelJobShardsResponse& operator=(CancelJobShardsResponse&& from) noexcept {
+    if (this == &from) return *this;
+    if (GetOwningArena() == from.GetOwningArena()
+  #ifdef PROTOBUF_FORCE_COPY_IN_MOVE
+        && GetOwningArena() != nullptr
+  #endif  // !PROTOBUF_FORCE_COPY_IN_MOVE
+    ) {
+      InternalSwap(&from);
+    } else {
+      CopyFrom(from);
+    }
+    return *this;
+  }
+
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* descriptor() {
+    return GetDescriptor();
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Descriptor* GetDescriptor() {
+    return default_instance().GetMetadata().descriptor;
+  }
+  static const ::PROTOBUF_NAMESPACE_ID::Reflection* GetReflection() {
+    return default_instance().GetMetadata().reflection;
+  }
+  static const CancelJobShardsResponse& default_instance() {
+    return *internal_default_instance();
+  }
+  static inline const CancelJobShardsResponse* internal_default_instance() {
+    return reinterpret_cast<const CancelJobShardsResponse*>(
+               &_CancelJobShardsResponse_default_instance_);
+  }
+  static constexpr int kIndexInFileMessages =
+    7;
+
+  friend void swap(CancelJobShardsResponse& a, CancelJobShardsResponse& b) {
+    a.Swap(&b);
+  }
+  inline void Swap(CancelJobShardsResponse* other) {
+    if (other == this) return;
+  #ifdef PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() != nullptr &&
+        GetOwningArena() == other->GetOwningArena()) {
+   #else  // PROTOBUF_FORCE_COPY_IN_SWAP
+    if (GetOwningArena() == other->GetOwningArena()) {
+  #endif  // !PROTOBUF_FORCE_COPY_IN_SWAP
+      InternalSwap(other);
+    } else {
+      ::PROTOBUF_NAMESPACE_ID::internal::GenericSwap(this, other);
+    }
+  }
+  void UnsafeArenaSwap(CancelJobShardsResponse* other) {
+    if (other == this) return;
+    GOOGLE_DCHECK(GetOwningArena() == other->GetOwningArena());
+    InternalSwap(other);
+  }
+
+  // implements Message ----------------------------------------------
+
+  CancelJobShardsResponse* New(::PROTOBUF_NAMESPACE_ID::Arena* arena = nullptr) const final {
+    return CreateMaybeMessage<CancelJobShardsResponse>(arena);
+  }
+  using ::PROTOBUF_NAMESPACE_ID::Message::CopyFrom;
+  void CopyFrom(const CancelJobShardsResponse& from);
+  using ::PROTOBUF_NAMESPACE_ID::Message::MergeFrom;
+  void MergeFrom( const CancelJobShardsResponse& from) {
+    CancelJobShardsResponse::MergeImpl(*this, from);
+  }
+  private:
+  static void MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROTOBUF_NAMESPACE_ID::Message& from_msg);
+  public:
+  PROTOBUF_ATTRIBUTE_REINITIALIZES void Clear() final;
+  bool IsInitialized() const final;
+
+  size_t ByteSizeLong() const final;
+  const char* _InternalParse(const char* ptr, ::PROTOBUF_NAMESPACE_ID::internal::ParseContext* ctx) final;
+  uint8_t* _InternalSerialize(
+      uint8_t* target, ::PROTOBUF_NAMESPACE_ID::io::EpsCopyOutputStream* stream) const final;
+  int GetCachedSize() const final { return _impl_._cached_size_.Get(); }
+
+  private:
+  void SharedCtor(::PROTOBUF_NAMESPACE_ID::Arena* arena, bool is_message_owned);
+  void SharedDtor();
+  void SetCachedSize(int size) const final;
+  void InternalSwap(CancelJobShardsResponse* other);
+
+  private:
+  friend class ::PROTOBUF_NAMESPACE_ID::internal::AnyMetadata;
+  static ::PROTOBUF_NAMESPACE_ID::StringPiece FullMessageName() {
+    return "video_platform.CancelJobShardsResponse";
+  }
+  protected:
+  explicit CancelJobShardsResponse(::PROTOBUF_NAMESPACE_ID::Arena* arena,
+                       bool is_message_owned = false);
+  public:
+
+  static const ClassData _class_data_;
+  const ::PROTOBUF_NAMESPACE_ID::Message::ClassData*GetClassData() const final;
+
+  ::PROTOBUF_NAMESPACE_ID::Metadata GetMetadata() const final;
+
+  // nested types ----------------------------------------------------
+
+  // accessors -------------------------------------------------------
+
+  enum : int {
+    kErrorMsgFieldNumber = 2,
+    kErrorCodeFieldNumber = 1,
+    kTotalShardsFieldNumber = 3,
+    kNotifiedCountFieldNumber = 4,
+    kSkippedCountFieldNumber = 5,
+  };
+  // string error_msg = 2;
+  void clear_error_msg();
+  const std::string& error_msg() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_error_msg(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_error_msg();
+  PROTOBUF_NODISCARD std::string* release_error_msg();
+  void set_allocated_error_msg(std::string* error_msg);
+  private:
+  const std::string& _internal_error_msg() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_error_msg(const std::string& value);
+  std::string* _internal_mutable_error_msg();
+  public:
+
+  // int32 error_code = 1;
+  void clear_error_code();
+  int32_t error_code() const;
+  void set_error_code(int32_t value);
+  private:
+  int32_t _internal_error_code() const;
+  void _internal_set_error_code(int32_t value);
+  public:
+
+  // int32 total_shards = 3;
+  void clear_total_shards();
+  int32_t total_shards() const;
+  void set_total_shards(int32_t value);
+  private:
+  int32_t _internal_total_shards() const;
+  void _internal_set_total_shards(int32_t value);
+  public:
+
+  // int32 notified_count = 4;
+  void clear_notified_count();
+  int32_t notified_count() const;
+  void set_notified_count(int32_t value);
+  private:
+  int32_t _internal_notified_count() const;
+  void _internal_set_notified_count(int32_t value);
+  public:
+
+  // int32 skipped_count = 5;
+  void clear_skipped_count();
+  int32_t skipped_count() const;
+  void set_skipped_count(int32_t value);
+  private:
+  int32_t _internal_skipped_count() const;
+  void _internal_set_skipped_count(int32_t value);
+  public:
+
+  // @@protoc_insertion_point(class_scope:video_platform.CancelJobShardsResponse)
+ private:
+  class _Internal;
+
+  template <typename T> friend class ::PROTOBUF_NAMESPACE_ID::Arena::InternalHelper;
+  typedef void InternalArenaConstructable_;
+  typedef void DestructorSkippable_;
+  struct Impl_ {
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr error_msg_;
+    int32_t error_code_;
+    int32_t total_shards_;
+    int32_t notified_count_;
+    int32_t skipped_count_;
+    mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
+  };
+  union { Impl_ _impl_; };
+  friend struct ::TableStruct_scheduler_2eproto;
+};
 // ===================================================================
 
 class SchedulerService_Stub;
@@ -829,6 +1555,14 @@ class SchedulerService : public ::PROTOBUF_NAMESPACE_ID::Service {
   virtual void RescheduleShard(::PROTOBUF_NAMESPACE_ID::RpcController* controller,
                        const ::video_platform::RescheduleShardRequest* request,
                        ::video_platform::RescheduleShardResponse* response,
+                       ::google::protobuf::Closure* done);
+  virtual void NotifyWorkerOffline(::PROTOBUF_NAMESPACE_ID::RpcController* controller,
+                       const ::video_platform::NotifyWorkerOfflineRequest* request,
+                       ::video_platform::NotifyWorkerOfflineResponse* response,
+                       ::google::protobuf::Closure* done);
+  virtual void CancelJobShards(::PROTOBUF_NAMESPACE_ID::RpcController* controller,
+                       const ::video_platform::CancelJobShardsRequest* request,
+                       ::video_platform::CancelJobShardsResponse* response,
                        ::google::protobuf::Closure* done);
 
   // implements Service ----------------------------------------------
@@ -866,6 +1600,14 @@ class SchedulerService_Stub : public SchedulerService {
   void RescheduleShard(::PROTOBUF_NAMESPACE_ID::RpcController* controller,
                        const ::video_platform::RescheduleShardRequest* request,
                        ::video_platform::RescheduleShardResponse* response,
+                       ::google::protobuf::Closure* done);
+  void NotifyWorkerOffline(::PROTOBUF_NAMESPACE_ID::RpcController* controller,
+                       const ::video_platform::NotifyWorkerOfflineRequest* request,
+                       ::video_platform::NotifyWorkerOfflineResponse* response,
+                       ::google::protobuf::Closure* done);
+  void CancelJobShards(::PROTOBUF_NAMESPACE_ID::RpcController* controller,
+                       const ::video_platform::CancelJobShardsRequest* request,
+                       ::video_platform::CancelJobShardsResponse* response,
                        ::google::protobuf::Closure* done);
  private:
   ::PROTOBUF_NAMESPACE_ID::RpcChannel* channel_;
@@ -1419,9 +2161,453 @@ inline void RescheduleShardResponse::set_accepted(bool value) {
   // @@protoc_insertion_point(field_set:video_platform.RescheduleShardResponse.accepted)
 }
 
+// -------------------------------------------------------------------
+
+// NotifyWorkerOfflineRequest
+
+// string worker_id = 1;
+inline void NotifyWorkerOfflineRequest::clear_worker_id() {
+  _impl_.worker_id_.ClearToEmpty();
+}
+inline const std::string& NotifyWorkerOfflineRequest::worker_id() const {
+  // @@protoc_insertion_point(field_get:video_platform.NotifyWorkerOfflineRequest.worker_id)
+  return _internal_worker_id();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void NotifyWorkerOfflineRequest::set_worker_id(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.worker_id_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:video_platform.NotifyWorkerOfflineRequest.worker_id)
+}
+inline std::string* NotifyWorkerOfflineRequest::mutable_worker_id() {
+  std::string* _s = _internal_mutable_worker_id();
+  // @@protoc_insertion_point(field_mutable:video_platform.NotifyWorkerOfflineRequest.worker_id)
+  return _s;
+}
+inline const std::string& NotifyWorkerOfflineRequest::_internal_worker_id() const {
+  return _impl_.worker_id_.Get();
+}
+inline void NotifyWorkerOfflineRequest::_internal_set_worker_id(const std::string& value) {
+  
+  _impl_.worker_id_.Set(value, GetArenaForAllocation());
+}
+inline std::string* NotifyWorkerOfflineRequest::_internal_mutable_worker_id() {
+  
+  return _impl_.worker_id_.Mutable(GetArenaForAllocation());
+}
+inline std::string* NotifyWorkerOfflineRequest::release_worker_id() {
+  // @@protoc_insertion_point(field_release:video_platform.NotifyWorkerOfflineRequest.worker_id)
+  return _impl_.worker_id_.Release();
+}
+inline void NotifyWorkerOfflineRequest::set_allocated_worker_id(std::string* worker_id) {
+  if (worker_id != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.worker_id_.SetAllocated(worker_id, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.worker_id_.IsDefault()) {
+    _impl_.worker_id_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:video_platform.NotifyWorkerOfflineRequest.worker_id)
+}
+
+// string reason = 2;
+inline void NotifyWorkerOfflineRequest::clear_reason() {
+  _impl_.reason_.ClearToEmpty();
+}
+inline const std::string& NotifyWorkerOfflineRequest::reason() const {
+  // @@protoc_insertion_point(field_get:video_platform.NotifyWorkerOfflineRequest.reason)
+  return _internal_reason();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void NotifyWorkerOfflineRequest::set_reason(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.reason_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:video_platform.NotifyWorkerOfflineRequest.reason)
+}
+inline std::string* NotifyWorkerOfflineRequest::mutable_reason() {
+  std::string* _s = _internal_mutable_reason();
+  // @@protoc_insertion_point(field_mutable:video_platform.NotifyWorkerOfflineRequest.reason)
+  return _s;
+}
+inline const std::string& NotifyWorkerOfflineRequest::_internal_reason() const {
+  return _impl_.reason_.Get();
+}
+inline void NotifyWorkerOfflineRequest::_internal_set_reason(const std::string& value) {
+  
+  _impl_.reason_.Set(value, GetArenaForAllocation());
+}
+inline std::string* NotifyWorkerOfflineRequest::_internal_mutable_reason() {
+  
+  return _impl_.reason_.Mutable(GetArenaForAllocation());
+}
+inline std::string* NotifyWorkerOfflineRequest::release_reason() {
+  // @@protoc_insertion_point(field_release:video_platform.NotifyWorkerOfflineRequest.reason)
+  return _impl_.reason_.Release();
+}
+inline void NotifyWorkerOfflineRequest::set_allocated_reason(std::string* reason) {
+  if (reason != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.reason_.SetAllocated(reason, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.reason_.IsDefault()) {
+    _impl_.reason_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:video_platform.NotifyWorkerOfflineRequest.reason)
+}
+
+// -------------------------------------------------------------------
+
+// NotifyWorkerOfflineResponse
+
+// int32 error_code = 1;
+inline void NotifyWorkerOfflineResponse::clear_error_code() {
+  _impl_.error_code_ = 0;
+}
+inline int32_t NotifyWorkerOfflineResponse::_internal_error_code() const {
+  return _impl_.error_code_;
+}
+inline int32_t NotifyWorkerOfflineResponse::error_code() const {
+  // @@protoc_insertion_point(field_get:video_platform.NotifyWorkerOfflineResponse.error_code)
+  return _internal_error_code();
+}
+inline void NotifyWorkerOfflineResponse::_internal_set_error_code(int32_t value) {
+  
+  _impl_.error_code_ = value;
+}
+inline void NotifyWorkerOfflineResponse::set_error_code(int32_t value) {
+  _internal_set_error_code(value);
+  // @@protoc_insertion_point(field_set:video_platform.NotifyWorkerOfflineResponse.error_code)
+}
+
+// string error_msg = 2;
+inline void NotifyWorkerOfflineResponse::clear_error_msg() {
+  _impl_.error_msg_.ClearToEmpty();
+}
+inline const std::string& NotifyWorkerOfflineResponse::error_msg() const {
+  // @@protoc_insertion_point(field_get:video_platform.NotifyWorkerOfflineResponse.error_msg)
+  return _internal_error_msg();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void NotifyWorkerOfflineResponse::set_error_msg(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.error_msg_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:video_platform.NotifyWorkerOfflineResponse.error_msg)
+}
+inline std::string* NotifyWorkerOfflineResponse::mutable_error_msg() {
+  std::string* _s = _internal_mutable_error_msg();
+  // @@protoc_insertion_point(field_mutable:video_platform.NotifyWorkerOfflineResponse.error_msg)
+  return _s;
+}
+inline const std::string& NotifyWorkerOfflineResponse::_internal_error_msg() const {
+  return _impl_.error_msg_.Get();
+}
+inline void NotifyWorkerOfflineResponse::_internal_set_error_msg(const std::string& value) {
+  
+  _impl_.error_msg_.Set(value, GetArenaForAllocation());
+}
+inline std::string* NotifyWorkerOfflineResponse::_internal_mutable_error_msg() {
+  
+  return _impl_.error_msg_.Mutable(GetArenaForAllocation());
+}
+inline std::string* NotifyWorkerOfflineResponse::release_error_msg() {
+  // @@protoc_insertion_point(field_release:video_platform.NotifyWorkerOfflineResponse.error_msg)
+  return _impl_.error_msg_.Release();
+}
+inline void NotifyWorkerOfflineResponse::set_allocated_error_msg(std::string* error_msg) {
+  if (error_msg != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.error_msg_.SetAllocated(error_msg, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.error_msg_.IsDefault()) {
+    _impl_.error_msg_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:video_platform.NotifyWorkerOfflineResponse.error_msg)
+}
+
+// int32 rescheduled_count = 3;
+inline void NotifyWorkerOfflineResponse::clear_rescheduled_count() {
+  _impl_.rescheduled_count_ = 0;
+}
+inline int32_t NotifyWorkerOfflineResponse::_internal_rescheduled_count() const {
+  return _impl_.rescheduled_count_;
+}
+inline int32_t NotifyWorkerOfflineResponse::rescheduled_count() const {
+  // @@protoc_insertion_point(field_get:video_platform.NotifyWorkerOfflineResponse.rescheduled_count)
+  return _internal_rescheduled_count();
+}
+inline void NotifyWorkerOfflineResponse::_internal_set_rescheduled_count(int32_t value) {
+  
+  _impl_.rescheduled_count_ = value;
+}
+inline void NotifyWorkerOfflineResponse::set_rescheduled_count(int32_t value) {
+  _internal_set_rescheduled_count(value);
+  // @@protoc_insertion_point(field_set:video_platform.NotifyWorkerOfflineResponse.rescheduled_count)
+}
+
+// -------------------------------------------------------------------
+
+// CancelJobShardsRequest
+
+// string job_id = 1;
+inline void CancelJobShardsRequest::clear_job_id() {
+  _impl_.job_id_.ClearToEmpty();
+}
+inline const std::string& CancelJobShardsRequest::job_id() const {
+  // @@protoc_insertion_point(field_get:video_platform.CancelJobShardsRequest.job_id)
+  return _internal_job_id();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void CancelJobShardsRequest::set_job_id(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.job_id_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:video_platform.CancelJobShardsRequest.job_id)
+}
+inline std::string* CancelJobShardsRequest::mutable_job_id() {
+  std::string* _s = _internal_mutable_job_id();
+  // @@protoc_insertion_point(field_mutable:video_platform.CancelJobShardsRequest.job_id)
+  return _s;
+}
+inline const std::string& CancelJobShardsRequest::_internal_job_id() const {
+  return _impl_.job_id_.Get();
+}
+inline void CancelJobShardsRequest::_internal_set_job_id(const std::string& value) {
+  
+  _impl_.job_id_.Set(value, GetArenaForAllocation());
+}
+inline std::string* CancelJobShardsRequest::_internal_mutable_job_id() {
+  
+  return _impl_.job_id_.Mutable(GetArenaForAllocation());
+}
+inline std::string* CancelJobShardsRequest::release_job_id() {
+  // @@protoc_insertion_point(field_release:video_platform.CancelJobShardsRequest.job_id)
+  return _impl_.job_id_.Release();
+}
+inline void CancelJobShardsRequest::set_allocated_job_id(std::string* job_id) {
+  if (job_id != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.job_id_.SetAllocated(job_id, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.job_id_.IsDefault()) {
+    _impl_.job_id_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:video_platform.CancelJobShardsRequest.job_id)
+}
+
+// string reason = 2;
+inline void CancelJobShardsRequest::clear_reason() {
+  _impl_.reason_.ClearToEmpty();
+}
+inline const std::string& CancelJobShardsRequest::reason() const {
+  // @@protoc_insertion_point(field_get:video_platform.CancelJobShardsRequest.reason)
+  return _internal_reason();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void CancelJobShardsRequest::set_reason(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.reason_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:video_platform.CancelJobShardsRequest.reason)
+}
+inline std::string* CancelJobShardsRequest::mutable_reason() {
+  std::string* _s = _internal_mutable_reason();
+  // @@protoc_insertion_point(field_mutable:video_platform.CancelJobShardsRequest.reason)
+  return _s;
+}
+inline const std::string& CancelJobShardsRequest::_internal_reason() const {
+  return _impl_.reason_.Get();
+}
+inline void CancelJobShardsRequest::_internal_set_reason(const std::string& value) {
+  
+  _impl_.reason_.Set(value, GetArenaForAllocation());
+}
+inline std::string* CancelJobShardsRequest::_internal_mutable_reason() {
+  
+  return _impl_.reason_.Mutable(GetArenaForAllocation());
+}
+inline std::string* CancelJobShardsRequest::release_reason() {
+  // @@protoc_insertion_point(field_release:video_platform.CancelJobShardsRequest.reason)
+  return _impl_.reason_.Release();
+}
+inline void CancelJobShardsRequest::set_allocated_reason(std::string* reason) {
+  if (reason != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.reason_.SetAllocated(reason, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.reason_.IsDefault()) {
+    _impl_.reason_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:video_platform.CancelJobShardsRequest.reason)
+}
+
+// -------------------------------------------------------------------
+
+// CancelJobShardsResponse
+
+// int32 error_code = 1;
+inline void CancelJobShardsResponse::clear_error_code() {
+  _impl_.error_code_ = 0;
+}
+inline int32_t CancelJobShardsResponse::_internal_error_code() const {
+  return _impl_.error_code_;
+}
+inline int32_t CancelJobShardsResponse::error_code() const {
+  // @@protoc_insertion_point(field_get:video_platform.CancelJobShardsResponse.error_code)
+  return _internal_error_code();
+}
+inline void CancelJobShardsResponse::_internal_set_error_code(int32_t value) {
+  
+  _impl_.error_code_ = value;
+}
+inline void CancelJobShardsResponse::set_error_code(int32_t value) {
+  _internal_set_error_code(value);
+  // @@protoc_insertion_point(field_set:video_platform.CancelJobShardsResponse.error_code)
+}
+
+// string error_msg = 2;
+inline void CancelJobShardsResponse::clear_error_msg() {
+  _impl_.error_msg_.ClearToEmpty();
+}
+inline const std::string& CancelJobShardsResponse::error_msg() const {
+  // @@protoc_insertion_point(field_get:video_platform.CancelJobShardsResponse.error_msg)
+  return _internal_error_msg();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void CancelJobShardsResponse::set_error_msg(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.error_msg_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:video_platform.CancelJobShardsResponse.error_msg)
+}
+inline std::string* CancelJobShardsResponse::mutable_error_msg() {
+  std::string* _s = _internal_mutable_error_msg();
+  // @@protoc_insertion_point(field_mutable:video_platform.CancelJobShardsResponse.error_msg)
+  return _s;
+}
+inline const std::string& CancelJobShardsResponse::_internal_error_msg() const {
+  return _impl_.error_msg_.Get();
+}
+inline void CancelJobShardsResponse::_internal_set_error_msg(const std::string& value) {
+  
+  _impl_.error_msg_.Set(value, GetArenaForAllocation());
+}
+inline std::string* CancelJobShardsResponse::_internal_mutable_error_msg() {
+  
+  return _impl_.error_msg_.Mutable(GetArenaForAllocation());
+}
+inline std::string* CancelJobShardsResponse::release_error_msg() {
+  // @@protoc_insertion_point(field_release:video_platform.CancelJobShardsResponse.error_msg)
+  return _impl_.error_msg_.Release();
+}
+inline void CancelJobShardsResponse::set_allocated_error_msg(std::string* error_msg) {
+  if (error_msg != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.error_msg_.SetAllocated(error_msg, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.error_msg_.IsDefault()) {
+    _impl_.error_msg_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:video_platform.CancelJobShardsResponse.error_msg)
+}
+
+// int32 total_shards = 3;
+inline void CancelJobShardsResponse::clear_total_shards() {
+  _impl_.total_shards_ = 0;
+}
+inline int32_t CancelJobShardsResponse::_internal_total_shards() const {
+  return _impl_.total_shards_;
+}
+inline int32_t CancelJobShardsResponse::total_shards() const {
+  // @@protoc_insertion_point(field_get:video_platform.CancelJobShardsResponse.total_shards)
+  return _internal_total_shards();
+}
+inline void CancelJobShardsResponse::_internal_set_total_shards(int32_t value) {
+  
+  _impl_.total_shards_ = value;
+}
+inline void CancelJobShardsResponse::set_total_shards(int32_t value) {
+  _internal_set_total_shards(value);
+  // @@protoc_insertion_point(field_set:video_platform.CancelJobShardsResponse.total_shards)
+}
+
+// int32 notified_count = 4;
+inline void CancelJobShardsResponse::clear_notified_count() {
+  _impl_.notified_count_ = 0;
+}
+inline int32_t CancelJobShardsResponse::_internal_notified_count() const {
+  return _impl_.notified_count_;
+}
+inline int32_t CancelJobShardsResponse::notified_count() const {
+  // @@protoc_insertion_point(field_get:video_platform.CancelJobShardsResponse.notified_count)
+  return _internal_notified_count();
+}
+inline void CancelJobShardsResponse::_internal_set_notified_count(int32_t value) {
+  
+  _impl_.notified_count_ = value;
+}
+inline void CancelJobShardsResponse::set_notified_count(int32_t value) {
+  _internal_set_notified_count(value);
+  // @@protoc_insertion_point(field_set:video_platform.CancelJobShardsResponse.notified_count)
+}
+
+// int32 skipped_count = 5;
+inline void CancelJobShardsResponse::clear_skipped_count() {
+  _impl_.skipped_count_ = 0;
+}
+inline int32_t CancelJobShardsResponse::_internal_skipped_count() const {
+  return _impl_.skipped_count_;
+}
+inline int32_t CancelJobShardsResponse::skipped_count() const {
+  // @@protoc_insertion_point(field_get:video_platform.CancelJobShardsResponse.skipped_count)
+  return _internal_skipped_count();
+}
+inline void CancelJobShardsResponse::_internal_set_skipped_count(int32_t value) {
+  
+  _impl_.skipped_count_ = value;
+}
+inline void CancelJobShardsResponse::set_skipped_count(int32_t value) {
+  _internal_set_skipped_count(value);
+  // @@protoc_insertion_point(field_set:video_platform.CancelJobShardsResponse.skipped_count)
+}
+
 #ifdef __GNUC__
   #pragma GCC diagnostic pop
 #endif  // __GNUC__
+// -------------------------------------------------------------------
+
+// -------------------------------------------------------------------
+
+// -------------------------------------------------------------------
+
+// -------------------------------------------------------------------
+
 // -------------------------------------------------------------------
 
 // -------------------------------------------------------------------

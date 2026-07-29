@@ -16,22 +16,46 @@
 using namespace video_platform;
 
 // ============================================================================
-// SchedulerService — 任务切分与分配（阶段 4：mock 调度闭环）
+// SchedulerService — 任务切分、调度与故障恢复（阶段 5：完整重试链路）
 // ============================================================================
+//
+// Scheduler 是系统中最核心的调度节点。它负责：
+// 1. ScheduleJob：接收 JobService 提交的 job，按时间切片拆分为 N 个 shard
+// 2. RescheduleShard：接收来自 ResultCollector（Worker 执行失败）或
+//    NotifyWorkerOffline（Worker 心跳超时）的重调度请求
+// 3. NotifyWorkerOffline：Worker 心跳超时后，批量重调度该 Worker 的 RUNNING shard
+// 4. SchedulingLoop（后台线程）：Pull 模式循环扫描 WAITING shard，
+//    从 WorkerManager 拉取 ONLINE Worker，贪心匹配并 AssignShard
+//
+// 阶段 5 核心增强：
+// - RescheduleShard 完整实现：
+//   retry_count >= max_retry → 永久 SHARD_FAILED → CheckAndMarkJobFailed → 可能 JOB_FAILED
+//   retry_count <  max_retry → retry_count++ → SHARD_RETRYING → SHARD_WAITING → 下一轮重分配
+// - NotifyWorkerOffline：遍历该 Worker 的所有 ASSIGNED/RUNNING shard，逐个执行重调度
+// - 启动恢复：SchedulingLoop 首次运行时扫描残留的 ASSIGNED/RUNNING shard，
+//   重置为 WAITING（不增加 retry_count，因为是 Scheduler 崩溃，不是 Worker 故障）
+// - CheckAndMarkJobFailed：当 RescheduleShard 标记 SHARD_FAILED 后，
+//   检查该 job 所有 shard 是否都进入终态，若是且有 FAILED → JOB_FAILED
+// - NotifyJobServiceStatus：提取为独立方法，Scheduler 侧统一通过
+//   JobService.UpdateJobStatus RPC 推送状态变更
+//
+// ⚠️ 跨进程存储：JobStore/ShardStore 是进程内单例，Scheduler 进程的数据
+// 与其他服务进程完全隔离。状态同步通过 RPC（UpdateJobStatus/NotifyJobServiceStatus）完成。
 
 /// @brief SchedulerService RPC 实现
 ///
-/// 阶段 4 实现：
-/// - ScheduleJob：将 job 按时间切片拆分为 N 个 shard，写入 ShardStore，
-///   更新 Job 状态 → JOB_SPLITTING → JOB_SCHEDULING
-/// - RescheduleShard：将 shard 重新标记为 WAITING（阶段 5 完善重试逻辑）
+/// 阶段 5 实现：
+/// - ScheduleJob：将 job 按时间切片拆分为 N 个 shard，写入 ShardStore
+/// - RescheduleShard：完整重试逻辑（retry_count vs max_retry → FAILED 或 WAITING）
+/// - NotifyWorkerOffline：Worker 心跳超时后，重调度该 Worker 的 RUNNING shard
 ///
 /// 后台线程 SchedulingLoop 周期扫描 WAITING shard，匹配 ONLINE Worker
 /// 并通过直连调用 WorkerService.AssignShard 分配。
 ///
-/// ⚠️ 跨进程存储备注：
-/// JobStore / ShardStore 是进程内单例，Scheduler 需要从 RPC 请求参数
-/// 构造本地副本。详见业务日志第 3 篇「踩坑记录」节。
+/// 启动恢复：SchedulingLoop 首次运行时扫描残留的 ASSIGNED/RUNNING shard，
+/// 重置为 WAITING（不增加 retry_count），应对 Scheduler 自身崩溃。
+///
+/// ⚠️ 跨进程存储：JobStore/ShardStore 是进程内单例。
 class SchedulerServiceImpl : public SchedulerService {
 public:
     /// @brief 对 job 进行切分并启动调度
@@ -185,7 +209,8 @@ public:
                 si->set_created_at(s.created_at);
                 si->set_updated_at(s.updated_at);
             }
-
+            
+            // 调用对方函数，把信息同步过去
             UpdateJobStatusResponse update_resp;
             MprpcController update_ctrl;
             update_ctrl.SetTimeoutMs(3000);
@@ -205,7 +230,7 @@ public:
                                               : update_resp.error_msg().c_str());
             }
         }
-
+        // 把shard切片信息传回去
         response->set_error_code(0);
         response->set_error_msg("");
         response->set_accepted(true);
@@ -233,14 +258,15 @@ public:
         done->Run();
     }
 
-    /// @brief 重新调度一个 shard（失败 / 超时后触发）
+    /// @brief 重新调度一个 shard（失败 / 超时后触发 — 阶段 5 完整实现）
     ///
-    /// 当前调用方：阶段 5 将由 ResultCollector（shard 执行失败）或
-    /// WorkerManager（心跳超时）调用。
+    /// 调用方：
+    /// - ResultCollector::ReportShardResult（Worker 返回执行失败）
+    /// - WorkerManager::HeartbeatTimeoutCheck（通过 NotifyWorkerOffline）
     ///
-    /// 阶段 4 行为：将 shard 重置为 WAITING，retry_count++，
-    /// 由后台 SchedulingLoop 下一轮扫描时自动重新分配。
-    /// 阶段 5 将增加：retry_count > max_retry 时直接标记 SHARD_FAILED。
+    /// 逻辑：
+    /// 1. retry_count >= max_retry → 标记 SHARD_FAILED（终态），检查 job 是否 JOB_FAILED
+    /// 2. retry_count < max_retry → retry_count++，重置为 WAITING，由 SchedulingLoop 重新分配
     void RescheduleShard(::google::protobuf::RpcController* controller,
                          const ::RescheduleShardRequest* request,
                          ::RescheduleShardResponse* response,
@@ -262,23 +288,383 @@ public:
             return;
         }
 
-        // 阶段 4：简单重置为 WAITING，由调度循环重新分配
-        // 阶段 5 将在此处检查 retry_count 是否超过 max_retry
         auto shard = shard_opt.value();
-        shard.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
+
+        // ── 检查是否已达最大重试次数 ────────────────────────────
+        if (shard.retry_count >= shard.max_retry)
+        {
+            LOG_WARN("SchedulerService::RescheduleShard shard_id=%s reached max retry "
+                     "(%d/%d), marking SHARD_FAILED",
+                     shard_id.c_str(), shard.retry_count, shard.max_retry);
+
+            shard.status = static_cast<int32_t>(ShardStatus::SHARD_FAILED);
+            shard.updated_at = NowMs();
+            ShardStore::GetInstance().Update(shard_id, shard);
+
+            // 检查该 job 是否需要标记为 JOB_FAILED
+            CheckAndMarkJobFailed(shard.job_id);
+
+            response->set_error_code(0);
+            response->set_error_msg("max retry exceeded, shard marked FAILED");
+            response->set_accepted(false);
+            done->Run();
+            return;
+        }
+
+        // ── 未超次：增加重试计数，重置为 WAITING ──────────────
+        shard.retry_count++;
+        shard.status = static_cast<int32_t>(ShardStatus::SHARD_RETRYING);
         shard.assigned_worker_id.clear();
         shard.attempt_id.clear();
-        shard.retry_count++;
         shard.updated_at = NowMs();
         ShardStore::GetInstance().Update(shard_id, shard);
 
-        LOG_INFO("SchedulerService::RescheduleShard shard_id=%s reset to WAITING (retry=%d/%d)",
+        LOG_INFO("SchedulerService::RescheduleShard shard_id=%s retry=%d/%d → RETRYING",
+                 shard_id.c_str(), shard.retry_count, shard.max_retry);
+
+        // 立即转为 WAITING，让 SchedulingLoop 下一轮扫描时分配
+        shard.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
+        ShardStore::GetInstance().Update(shard_id, shard);
+
+        LOG_INFO("SchedulerService::RescheduleShard shard_id=%s → WAITING (retry=%d/%d)",
                  shard_id.c_str(), shard.retry_count, shard.max_retry);
 
         response->set_error_code(0);
         response->set_error_msg("");
         response->set_accepted(true);
         done->Run();
+    }
+
+    /// @brief Worker 心跳超时通知 — 重调度该 Worker 上所有运行中的 shard
+    ///
+    /// 由 WorkerManager 在检测到 Worker 心跳超时后调用。
+    /// 在本地 ShardStore 中查找该 Worker 的 ASSIGNED/RUNNING shard，
+    /// 逐个执行重调度逻辑（内联，避免递归 RPC）。
+    void NotifyWorkerOffline(::google::protobuf::RpcController* controller,
+                             const ::NotifyWorkerOfflineRequest* request,
+                             ::NotifyWorkerOfflineResponse* response,
+                             ::google::protobuf::Closure* done) override
+    {
+        const std::string& worker_id = request->worker_id();
+        LOG_INFO("SchedulerService::NotifyWorkerOffline worker_id=%s, reason=%s",
+                 worker_id.c_str(), request->reason().c_str());
+
+        auto shards = ShardStore::GetInstance().ListByWorker(worker_id);
+        int rescheduled = 0;
+
+        for (const auto& s : shards)
+        {
+            int st = s.status;
+            if (st != static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED)
+                && st != static_cast<int32_t>(ShardStatus::SHARD_RUNNING))
+                continue;
+
+            auto fresh_opt = ShardStore::GetInstance().Get(s.shard_id);
+            if (!fresh_opt.has_value()) continue;
+            auto shard = fresh_opt.value();
+
+            if (shard.retry_count >= shard.max_retry)
+            {
+                // 已达最大重试次数 → 永久失败
+                shard.status = static_cast<int32_t>(ShardStatus::SHARD_FAILED);
+                shard.updated_at = NowMs();
+                ShardStore::GetInstance().Update(s.shard_id, shard);
+                LOG_WARN("SchedulerService::NotifyWorkerOffline: shard %s max retry "
+                         "(%d/%d) → FAILED",
+                         s.shard_id.c_str(), shard.retry_count, shard.max_retry);
+                CheckAndMarkJobFailed(shard.job_id);
+            }
+            else
+            {
+                // 增加重试计数，重置为 WAITING
+                shard.retry_count++;
+                shard.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
+                shard.assigned_worker_id.clear();
+                shard.attempt_id.clear();
+                shard.updated_at = NowMs();
+                ShardStore::GetInstance().Update(s.shard_id, shard);
+                ++rescheduled;
+                LOG_INFO("SchedulerService::NotifyWorkerOffline: shard %s → WAITING "
+                         "(retry=%d/%d)",
+                         s.shard_id.c_str(), shard.retry_count, shard.max_retry);
+            }
+        }
+
+        LOG_INFO("SchedulerService::NotifyWorkerOffline worker_id=%s: %d shards "
+                 "rescheduled (of %zu)",
+                 worker_id.c_str(), rescheduled, shards.size());
+
+        response->set_error_code(0);
+        response->set_error_msg("");
+        response->set_rescheduled_count(rescheduled);
+        done->Run();
+    }
+
+    /// @brief 取消 job 的所有 shard 并 best-effort 通知 Worker
+    ///
+    /// 由 JobService.CancelJob 调用。Scheduler 在本地 ShardStore 中查找
+    /// 该 job 的 shard，对 RUNNING/ASSIGNED 状态的 shard 直连 Worker
+    /// 发送 CancelShard RPC。
+    ///
+    /// 最佳努力语义：
+    /// - Worker 通知失败只打 WARN 日志，不返回错误
+    /// - WorkerManager.ListWorkers RPC 失败则跳过通知阶段
+    /// - 不修改本地 shard 状态（由 JobService 负责标记 CANCELED）
+    void CancelJobShards(::google::protobuf::RpcController* controller,
+                          const ::CancelJobShardsRequest* request,
+                          ::CancelJobShardsResponse* response,
+                          ::google::protobuf::Closure* done) override
+    {
+        const std::string& job_id = request->job_id();
+        const std::string& reason = request->reason().empty()
+                                    ? "USER_CANCEL" : request->reason();
+        LOG_INFO("SchedulerService::CancelJobShards job_id=%s, reason=%s",
+                 job_id.c_str(), reason.c_str());
+
+        // 1. 列出该 job 的所有 shard
+        auto shards = ShardStore::GetInstance().ListByJob(job_id);
+        int total = static_cast<int>(shards.size());
+        int notified = 0;
+        int skipped = 0;
+
+        if (shards.empty())
+        {
+            LOG_INFO("SchedulerService::CancelJobShards job_id=%s: "
+                     "no shards found in local store", job_id.c_str());
+            response->set_error_code(0);
+            response->set_error_msg("");
+            response->set_total_shards(0);
+            response->set_notified_count(0);
+            response->set_skipped_count(0);
+            done->Run();
+            return;
+        }
+
+        // 2. 收集需要通知的 shard（RUNNING/ASSIGNED 且有分配 worker）
+        std::vector<std::pair<std::string, std::string>> shards_to_notify;
+        int32_t s_running  = static_cast<int32_t>(ShardStatus::SHARD_RUNNING);
+        int32_t s_assigned = static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED);
+
+        for (const auto& s : shards)
+        {
+            if ((s.status == s_running || s.status == s_assigned)
+                && !s.assigned_worker_id.empty())
+            {
+                shards_to_notify.emplace_back(s.shard_id, s.assigned_worker_id);
+            }
+            else
+            {
+                ++skipped;
+            }
+        }
+
+        if (shards_to_notify.empty())
+        {
+            LOG_INFO("SchedulerService::CancelJobShards job_id=%s: "
+                     "no active shards to notify (total=%d, skipped=%d)",
+                     job_id.c_str(), total, skipped);
+            response->set_error_code(0);
+            response->set_error_msg("");
+            response->set_total_shards(total);
+            response->set_notified_count(0);
+            response->set_skipped_count(skipped);
+            done->Run();
+            return;
+        }
+
+        // 3. 查询 WorkerManager 获取 worker ip:port 映射
+        MprpcChannel wm_channel;
+        WorkerManagerService_Stub wm_stub(&wm_channel);
+
+        ListWorkersRequest lw_req;
+        lw_req.set_filter_status(WorkerStatus::WORKER_STATUS_UNKNOWN);
+
+        ListWorkersResponse lw_resp;
+        MprpcController lw_ctrl;
+        lw_ctrl.SetTimeoutMs(3000);
+
+        wm_stub.ListWorkers(&lw_ctrl, &lw_req, &lw_resp, nullptr);
+
+        if (lw_ctrl.Failed() || lw_resp.error_code() != 0)
+        {
+            LOG_WARN("SchedulerService::CancelJobShards job_id=%s: "
+                     "ListWorkers RPC failed, skipping worker notification "
+                     "for %zu shards: %s",
+                     job_id.c_str(), shards_to_notify.size(),
+                     lw_ctrl.Failed() ? lw_ctrl.ErrorText().c_str()
+                                      : lw_resp.error_msg().c_str());
+            response->set_error_code(0);
+            response->set_error_msg("");
+            response->set_total_shards(total);
+            response->set_notified_count(0);
+            response->set_skipped_count(skipped + static_cast<int>(shards_to_notify.size()));
+            done->Run();
+            return;
+        }
+
+        // 4. 构建 worker_id → (ip, port) 映射
+        std::unordered_map<std::string,
+                           std::pair<std::string, uint16_t>> worker_map;
+        for (const auto& w : lw_resp.workers())
+        {
+            worker_map[w.worker_id()] = {w.ip(),
+                                         static_cast<uint16_t>(w.port())};
+        }
+
+        // 5. 直连每个 Worker 发送 CancelShard（best-effort）
+        for (const auto& kv : shards_to_notify)
+        {
+            const std::string& shard_id  = kv.first;
+            const std::string& worker_id = kv.second;
+
+            auto it = worker_map.find(worker_id);
+            if (it == worker_map.end())
+            {
+                LOG_WARN("SchedulerService::CancelJobShards job_id=%s: "
+                         "worker %s not found in ListWorkers result, "
+                         "skipping shard %s",
+                         job_id.c_str(), worker_id.c_str(), shard_id.c_str());
+                ++skipped;
+                continue;
+            }
+
+            const auto& ip   = it->second.first;
+            uint16_t    port = it->second.second;
+
+            MprpcChannel worker_channel(ip, port);
+            WorkerService_Stub worker_stub(&worker_channel);
+
+            CancelShardRequest cs_req;
+            cs_req.set_shard_id(shard_id);
+            cs_req.set_reason(reason);
+
+            CancelShardResponse cs_resp;
+            MprpcController cs_ctrl;
+            cs_ctrl.SetTimeoutMs(3000);
+
+            worker_stub.CancelShard(&cs_ctrl, &cs_req, &cs_resp, nullptr);
+
+            if (!cs_ctrl.Failed() && cs_resp.canceled())
+            {
+                ++notified;
+                LOG_INFO("SchedulerService::CancelJobShards: notified "
+                         "worker %s (%s:%d) to cancel shard %s",
+                         worker_id.c_str(), ip.c_str(), port, shard_id.c_str());
+            }
+            else
+            {
+                ++skipped;
+                LOG_WARN("SchedulerService::CancelJobShards: CancelShard "
+                         "to worker %s (%s:%d) for shard %s failed: %s",
+                         worker_id.c_str(), ip.c_str(), port, shard_id.c_str(),
+                         cs_ctrl.Failed() ? cs_ctrl.ErrorText().c_str()
+                                          : cs_resp.error_msg().c_str());
+            }
+        }
+
+        LOG_INFO("SchedulerService::CancelJobShards job_id=%s: done "
+                 "(total=%d, notified=%d, skipped=%d)",
+                 job_id.c_str(), total, notified, skipped);
+
+        response->set_error_code(0);
+        response->set_error_msg("");
+        response->set_total_shards(total);
+        response->set_notified_count(notified);
+        response->set_skipped_count(skipped);
+        done->Run();
+    }
+
+private:
+    /// @brief 检查 job 下所有 shard 是否都已进入终态，
+    ///        若有 FAILED 且无进行中的 shard，标记 JOB_FAILED
+    ///
+    /// 在 RescheduleShard 标记 SHARD_FAILED 后调用。
+    void CheckAndMarkJobFailed(const std::string& job_id)
+    {
+        auto shards = ShardStore::GetInstance().ListByJob(job_id);
+        if (shards.empty()) return;
+
+        bool all_terminal = true;
+        bool any_failed = false;
+        for (const auto& s : shards)
+        {
+            int st = s.status;
+            int s_success  = static_cast<int32_t>(ShardStatus::SHARD_SUCCESS);
+            int s_failed   = static_cast<int32_t>(ShardStatus::SHARD_FAILED);
+            int s_canceled = static_cast<int32_t>(ShardStatus::SHARD_CANCELED);
+            if (st != s_success && st != s_failed && st != s_canceled)
+            {
+                all_terminal = false;
+                break;
+            }
+            if (st == s_failed) any_failed = true;
+        }
+
+        if (!all_terminal || !any_failed) return;
+
+        // 所有 shard 都在终态且至少有一个 FAILED → JOB_FAILED
+        auto job_opt = JobStore::GetInstance().Get(job_id);
+        if (job_opt.has_value())
+        {
+            auto job = job_opt.value();
+            job.status = static_cast<int32_t>(JobStatus::JOB_FAILED);
+            job.updated_at = NowMs();
+            JobStore::GetInstance().Update(job_id, job);
+        }
+
+        LOG_WARN("SchedulerService: job %s marked JOB_FAILED (all shards terminal, "
+                 "has FAILED)", job_id.c_str());
+
+        // ── 反向通知 JobService ──────────────────────────────────
+        NotifyJobServiceStatus(job_id, JobStatus::JOB_FAILED);
+    }
+
+    /// @brief 通过 RPC 通知 JobService 更新 job 状态（跨进程同步）
+    ///
+    /// 复用 UpdateJobStatus RPC，将 Scheduler 进程的 job 状态变更
+    /// 推送到 JobService 进程。
+    void NotifyJobServiceStatus(const std::string& job_id, JobStatus status)
+    {
+        MprpcChannel js_channel;
+        JobService_Stub js_stub(&js_channel);
+
+        UpdateJobStatusRequest update_req;
+        update_req.set_job_id(job_id);
+        update_req.set_status(status);
+
+        // 携带 shard 状态快照
+        auto shards = ShardStore::GetInstance().ListByJob(job_id);
+        for (const auto& s : shards)
+        {
+            auto* si = update_req.add_shards();
+            si->set_shard_id(s.shard_id);
+            si->set_job_id(s.job_id);
+            si->set_shard_index(s.shard_index);
+            si->set_status(static_cast<ShardStatus>(s.status));
+            si->set_assigned_worker_id(s.assigned_worker_id);
+            si->set_attempt_id(s.attempt_id);
+            si->set_retry_count(s.retry_count);
+            si->set_output_path(s.output_path);
+        }
+
+        UpdateJobStatusResponse update_resp;
+        MprpcController update_ctrl;
+        update_ctrl.SetTimeoutMs(3000);
+
+        js_stub.UpdateJobStatus(&update_ctrl, &update_req, &update_resp, nullptr);
+
+        if (!update_ctrl.Failed() && update_resp.error_code() == 0)
+        {
+            LOG_INFO("SchedulerService: notified JobService job=%s → %d",
+                     job_id.c_str(), static_cast<int>(status));
+        }
+        else
+        {
+            LOG_WARN("SchedulerService: failed to notify JobService for job=%s: %s",
+                     job_id.c_str(),
+                     update_ctrl.Failed() ? update_ctrl.ErrorText().c_str()
+                                          : update_resp.error_msg().c_str());
+        }
     }
 };
 
@@ -317,6 +703,65 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
 
     // 等待 Provider 启动完成
     std::this_thread::sleep_for(std::chrono::seconds(1));
+
+    // ── 启动恢复：扫描残留的 ASSIGNED/RUNNING shard ─────────────────
+    // 场景：Scheduler 进程崩溃（kill -9、OOM、段错误），然后被监控系统重启。
+    // 崩溃前可能已经通过 AssignShard 将 shard 分配给了 Worker，shard 状态为
+    // ASSIGNED 或 RUNNING。重启后 SchedulingLoop 只扫描 WAITING 状态，
+    // 这些 shard 永远不会被重新调度——成为永久的"孤儿 shard"。
+    //
+    // 恢复策略：启动时将残留的 ASSIGNED/RUNNING shard 重置为 WAITING。
+    // - 不增加 retry_count（这是 Scheduler 崩溃，不是 Worker 执行失败）
+    // - 清除 assigned_worker_id 和 attempt_id（旧 Worker 可能已不存在）
+    // - reset 后 SchedulingLoop 下一轮扫描时会自动重新分配
+    // - 若旧 Worker 仍在运行且正在执行该 shard，它会正常上报结果；
+    //   ResultCollector 的 attempt_id 校验会处理新旧 attempt 的冲突
+    //
+    // 注意：两个 ListByStatus 返回的是快照副本，所以每次更新前重新 Get() 一次。
+    // 这是阶段 4 #S4 bug 的防御措施——防止快照覆盖并发修改。
+    {
+        LOG_INFO("SchedulingLoop: running startup recovery scan...");
+        auto assigned_shards = ShardStore::GetInstance().ListByStatus(
+            static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED));
+        auto running_shards  = ShardStore::GetInstance().ListByStatus(
+            static_cast<int32_t>(ShardStatus::SHARD_RUNNING));
+
+        int recovered = 0;
+        for (const auto& s : assigned_shards)
+        {
+            auto fresh_opt = ShardStore::GetInstance().Get(s.shard_id);
+            if (!fresh_opt.has_value()) continue;
+            auto fresh = fresh_opt.value();
+            fresh.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
+            fresh.assigned_worker_id.clear();
+            fresh.attempt_id.clear();
+            fresh.updated_at = NowMs();
+            ShardStore::GetInstance().Update(s.shard_id, fresh);
+            ++recovered;
+            LOG_INFO("SchedulingLoop: startup recovery: reset %s ASSIGNED → WAITING",
+                     s.shard_id.c_str());
+        }
+        for (const auto& s : running_shards)
+        {
+            auto fresh_opt = ShardStore::GetInstance().Get(s.shard_id);
+            if (!fresh_opt.has_value()) continue;
+            auto fresh = fresh_opt.value();
+            fresh.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
+            fresh.assigned_worker_id.clear();
+            fresh.attempt_id.clear();
+            fresh.updated_at = NowMs();
+            ShardStore::GetInstance().Update(s.shard_id, fresh);
+            ++recovered;
+            LOG_INFO("SchedulingLoop: startup recovery: reset %s RUNNING → WAITING",
+                     s.shard_id.c_str());
+        }
+
+        if (recovered > 0)
+        {
+            LOG_INFO("SchedulingLoop: startup recovery complete, %d shards reset to WAITING",
+                     recovered);
+        }
+    }
 
     // WorkerManager 通过 ZK 发现
     WorkerManagerService_Stub wm_stub(new MprpcChannel());

@@ -4,7 +4,10 @@
 #include <atomic>
 #include <chrono>
 #include "worker.pb.h"
+#include "scheduler.pb.h"
 #include "mprpcapplication.h"
+#include "mprpcchannel.h"
+#include "mprpccontroller.h"
 #include "rpcprovider.h"
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
@@ -22,7 +25,8 @@ using namespace video_platform;
 /// - Heartbeat：Worker 周期性上报负载，更新 heartbeat 时间戳和运行状态
 /// - ListWorkers：让 Scheduler 查询可用的 ONLINE Worker
 ///
-/// 阶段 3 将增加心跳超时检测（定时扫描 last_heartbeat，超时标 OFFLINE）。
+/// 阶段 5 增强：心跳超时后通知 Scheduler 重调度该 Worker 上的 RUNNING shard
+/// （通过 SchedulerService.NotifyWorkerOffline RPC）。
 class WorkerManagerServiceImpl : public WorkerManagerService {
 public:
     /// @brief Worker 注册
@@ -133,8 +137,30 @@ public:
 };
 
 // ============================================================================
-// HeartbeatTimeoutCheck — 心跳超时检测线程
+// HeartbeatTimeoutCheck — 心跳超时检测线程（阶段 5：自动故障恢复）
 // ============================================================================
+//
+// 本线程周期扫描所有 ONLINE Worker 的 last_heartbeat，检测超时并触发恢复。
+//
+// 阶段 5 端到端恢复流程（核心链路）：
+//   1. HeartbeatTimeoutCheck 检测到 Worker 超时（10 秒无心跳）
+//   2. WorkerStore::MarkOfflineIfTimeout 原子标记 OFFLINE
+//      （与 Heartbeat RPC 的 UpdateHeartbeat 互斥，消除 TOCTOU）
+//   3. RPC → SchedulerService::NotifyWorkerOffline(worker_id, "TIMEOUT")
+//   4. Scheduler 在本地 ShardStore 中 ListByWorker(worker_id)，
+//      找到所有 ASSIGNED/RUNNING 的 shard
+//   5. 逐个 shard 执行重调度：
+//      - retry_count >= max_retry → SHARD_FAILED → 可能 JOB_FAILED
+//      - retry_count <  max_retry → retry_count++ → SHARD_WAITING
+//   6. SchedulingLoop 在后续扫描中将 WAITING shard 分配给其他 ONLINE Worker
+//
+// 设计要点：
+// - WorkerManager 不直接操作 ShardStore（那是 Scheduler 进程的数据），
+//   而是通过 RPC 通知 Scheduler 自主处理。保持各服务的 Store 边界清晰。
+// - NotifyWorkerOffline RPC 失败时不重试——心跳超时检查每 2 秒运行一次，
+//   如果 Scheduler 暂时不可用，下一轮会再次检测并重试通知。
+// - Worker 已经 OFFLINE 的情况下再次触发 MarkOfflineIfTimeout 为 no-op，
+//   不会重复通知 Scheduler。
 
 static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
 {
@@ -165,11 +191,43 @@ static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
             if (WorkerStore::GetInstance().MarkOfflineIfTimeout(
                     w.worker_id, now, kHeartbeatTimeoutMs))
             {
-                LOG_WARN("WorkerManager: worker_id=%s marked OFFLINE (heartbeat timeout, last=%lld, now=%lld, gap=%lldms)",
+                LOG_WARN("WorkerManager: worker_id=%s marked OFFLINE (heartbeat timeout, "
+                         "last=%lld, now=%lld, gap=%lldms)",
                          w.worker_id.c_str(),
                          (long long)w.last_heartbeat,
                          (long long)now,
                          (long long)(now - w.last_heartbeat));
+
+                // ── 通知 Scheduler 重调度该 Worker 上的 RUNNING shard ─
+                // Worker 进程退出后，其正在执行的 shard 需要被重新分配给其他 Worker。
+                // 通过 SchedulerService.NotifyWorkerOffline RPC 触发。
+                {
+                    MprpcChannel sched_channel;
+                    SchedulerService_Stub sched_stub(&sched_channel);
+
+                    NotifyWorkerOfflineRequest nw_req;
+                    nw_req.set_worker_id(w.worker_id);
+                    nw_req.set_reason("TIMEOUT");
+
+                    NotifyWorkerOfflineResponse nw_resp;
+                    MprpcController nw_ctrl;
+                    nw_ctrl.SetTimeoutMs(5000);
+
+                    sched_stub.NotifyWorkerOffline(&nw_ctrl, &nw_req, &nw_resp, nullptr);
+
+                    if (!nw_ctrl.Failed() && nw_resp.error_code() == 0)
+                    {
+                        LOG_INFO("WorkerManager: NotifyWorkerOffline for %s: %d shards rescheduled",
+                                 w.worker_id.c_str(), nw_resp.rescheduled_count());
+                    }
+                    else
+                    {
+                        LOG_WARN("WorkerManager: NotifyWorkerOffline RPC failed for %s: %s",
+                                 w.worker_id.c_str(),
+                                 nw_ctrl.Failed() ? nw_ctrl.ErrorText().c_str()
+                                                  : nw_resp.error_msg().c_str());
+                    }
+                }
             }
         }
     }

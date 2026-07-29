@@ -46,7 +46,7 @@ target_link_libraries(video_common PUBLIC mprpc protobuf)
 
 # JobService (port 9001)
 add_executable(job_service
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/job_service/job_service.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/result_collector/job_service/job_service.cpp
 )
 target_link_libraries(job_service video_common)
 
@@ -76,6 +76,6 @@ target_link_libraries(result_collector video_common)
 
 # JobClient — 提交任务的命令行客户端工具
 add_executable(job_client
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/job_service/job_client.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/result_collector/job_service/job_client.cpp
 )
 target_link_libraries(job_client video_common)

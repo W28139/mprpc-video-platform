@@ -42,9 +42,45 @@ message RescheduleShardResponse {
     bool   accepted   = 3;  // 是否接受重调度请求
 }
 
+// ── NotifyWorkerOffline ──────────────────────────────────────────────────────
+// 由 WorkerManager 在检测到 Worker 心跳超时后调用，
+// 通知 Scheduler 将该 Worker 上的所有 RUNNING/ASSIGNED shard 重新调度。
+
+message NotifyWorkerOfflineRequest {
+    string worker_id = 1;  // 已离线的 Worker ID
+    string reason    = 2;  // 离线原因：TIMEOUT / GRACEFUL_SHUTDOWN
+}
+
+message NotifyWorkerOfflineResponse {
+    int32  error_code        = 1;  // 0=成功
+    string error_msg         = 2;  // 错误描述
+    int32  rescheduled_count = 3;  // 被重新调度的 shard 数量
+}
+
+// ── CancelJobShards ─────────────────────────────────────────────────────────
+// 由 JobService.CancelJob 调用，通知 Scheduler 取消某个 job 的所有 shard。
+// Scheduler 在本地 ShardStore 中查找该 job 的 RUNNING/ASSIGNED shard，
+// 然后直连 Worker 调用 CancelShard RPC（best-effort）。
+// 本 RPC 永远返回 error_code=0 —— 调用方不应将 worker 通知失败视为 CancelJob 失败。
+
+message CancelJobShardsRequest {
+    string job_id = 1;  // 要取消的 job ID
+    string reason = 2;  // 取消原因，透传给 Worker.CancelShard
+}
+
+message CancelJobShardsResponse {
+    int32  error_code     = 1;  // 始终为 0（仅协议层格式错误时非零）
+    string error_msg      = 2;
+    int32  total_shards   = 3;  // 该 job 在本地 ShardStore 中的 shard 总数
+    int32  notified_count = 4;  // 成功向 Worker 发送 CancelShard RPC 的数量
+    int32  skipped_count  = 5;  // 无需通知的 shard 数（终态或无 worker 分配）
+}
+
 // ── Service ────────────────────────────────────────────────────────────────
 
 service SchedulerService {
     rpc ScheduleJob(ScheduleJobRequest) returns (ScheduleJobResponse);          // 对 job 进行切分并开始调度
     rpc RescheduleShard(RescheduleShardRequest) returns (RescheduleShardResponse); // 重新调度失败的 shard
+    rpc NotifyWorkerOffline(NotifyWorkerOfflineRequest) returns (NotifyWorkerOfflineResponse); // Worker 心跳超时通知
+    rpc CancelJobShards(CancelJobShardsRequest) returns (CancelJobShardsResponse);              // 取消 job 并通知 Worker
 }

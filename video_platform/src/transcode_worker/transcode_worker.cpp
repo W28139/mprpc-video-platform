@@ -6,6 +6,7 @@
 #include <mutex>
 #include <unordered_map>
 #include <memory>
+#include <random>
 #include "worker.pb.h"
 #include "result.pb.h"
 #include "mprpcapplication.h"
@@ -18,16 +19,40 @@
 using namespace video_platform;
 
 // ============================================================================
-// WorkerService — TranscodeWorker 端 RPC 接口（阶段 4：mock 执行器）
+// WorkerService — TranscodeWorker 端 RPC 接口（阶段 5：故障注入 + 重试验证）
 // ============================================================================
+//
+// TranscodeWorker 是整个调度链路中实际"干活"的节点。它同时作为 RPC Provider
+// （接收 Scheduler 的 AssignShard/CancelShard 命令）和 RPC Consumer
+// （向 WorkerManager 注册/心跳、向 ResultCollector 上报进度和结果）。
+//
+// 阶段 5 新增能力：
+// 1. mock_fail_ratio 配置项：通过随机数模拟 shard 执行失败，用于测试重试机制
+//    和故障恢复流程。0=全部成功，100=全部失败，中间值=按百分比随机失败。
+// 2. 失败时携带 exit_code 和 error_msg 上报，让 ResultCollector 能区分
+//    真实失败和网络故障，并触发 RescheduleShard 重试。
+//
+// 线程安全设计：
+// - running_shards_ map 由 mutex_ 保护（std::mutex，非读写锁）
+// - progress 和 cancelled 是 std::atomic，允许 MockExecute 线程写入、
+//   QueryShard RPC 和心跳线程同时无锁读取
+// - 检查+插入合并在同一锁区间内，消除阶段 4 发现的 TOCTOU 竞态窗口
+// - 线程启动在锁外执行，避免与 CancelShard/CleanupShard 形成 AB-BA 死锁
 
 /// @brief 运行中的 shard 追踪结构
 ///
-/// 每个通过 AssignShard 接收到的 shard 都会创建一个 RunningShard 对象，
-/// 生命周期由 shared_ptr 管理（AssignShard 和 MockExecute 线程共享所有权）。
+/// 每个通过 AssignShard 接收到的 shard 都会创建一个 RunningShard 对象。
+/// 生命周期由 shared_ptr 管理——AssignShard（IO 线程）和 MockExecute
+///（执行线程）共享所有权。当双方都不再引用时，对象自动析构。
 ///
-/// progress 和 cancelled 是 std::atomic，允许 MockExecute 线程写入、
-/// QueryShard RPC（在 IO 线程）和心跳线程同时无锁读取。
+/// 字段说明：
+/// - info: proto ShardInfo 的拷贝，包含 shard_id/job_id/shard_index/时间范围等
+/// - attempt_id: 格式 "{shard_id}_attempt_{N}"，N 从 AssignShard 请求中的
+///   retry_count 获取。Worker 用它来标识本次执行是第几次尝试，ResultCollector
+///   用它来做新旧 attempt 的幂等校验
+/// - progress: 0-100，MockExecute 每秒更新一次，QueryShard 和心跳线程无锁读取
+/// - cancelled: CancelShard RPC 设置为 true，MockExecute 在下个 sleep 周期检测
+/// - executor_thread: 持有 MockExecute 线程的句柄，CleanupShard 时 detach
 struct RunningShard {
     ShardInfo   info;                      ///< shard 元信息（proto 拷贝）
     std::string attempt_id;               ///< 执行尝试 ID，格式 "{shard_id}_attempt_{N}"
@@ -43,19 +68,21 @@ struct RunningShard {
 ///
 /// TranscodeWorker 双重角色：
 /// 1. Provider — 接收 Scheduler 下发的调度命令：
-///    - AssignShard：接收 shard → 校验无重复 → 启动 mock 线程
+///    - AssignShard：接收 shard → 校验无重复（同一锁内检查+插入）→ 锁外启动 mock 线程
 ///    - CancelShard：设置 cancelled 标志，mock 线程在下个 sleep 周期检测并退出
 ///    - QueryShard：返回 shard 实时 progress（0-100 或 -1=不存在）
 ///
 /// 2. Consumer — 主动调用其他服务（不在本类中，由独立函数实现）：
-///    - RunHeartbeatLoop：周期调用 WorkerManager.RegisterWorker / Heartbeat
-///    - MockExecute：shard 执行线程内调用 ResultCollector.ReportProgress / ReportResult
+///    - RunHeartbeatLoop：启动时 RegisterWorker + 周期 3s Heartbeat
+///    - MockExecute：shard 执行线程内周期 ReportProgress + 最终 ReportResult
 ///
-/// 线程模型：
-///   running_shards_ map 由 mutex_ 保护，
-///   AssignShard / CancelShard / QueryShard 在 IO 线程（或 work 线程）执行，
-///   MockExecute 在独立 std::thread 中执行，
-///   心跳线程 RunHeartbeatLoop 通过 RunningShardCount() 只读访问（持锁遍历）。
+/// 线程模型（5 类线程同时运行）：
+///   - main 线程：RpcProvider::Run() 阻塞等待连接
+///   - IO 线程池（io_threads 个）：处理 AssignShard / CancelShard / QueryShard
+///   - Work 线程池（work_threads 个）：处理 RPC 业务逻辑
+///   - MockExecute 线程（每个 shard 一个）：sleep 模拟执行
+///   - 心跳线程（1 个）：RunHeartbeatLoop
+///   running_shards_ map 由 mutex_ 保护，所有跨线程访问都经过锁。
 class WorkerServiceImpl : public WorkerService {
 public:
     /// @brief 获取当前运行中 shard 数量（供心跳线程使用）
@@ -194,19 +221,29 @@ private:
     ///
     /// 在 AssignShard 创建的独立 std::thread 中运行，不阻塞 RPC 响应。
     ///
-    /// 执行流程：
-    ///   FOR step = 1 .. total_steps:
-    ///     sleep(1s)
-    ///     IF cancelled → CleanupShard → RETURN
-    ///     progress = step * 100 / total_steps
-    ///     RPC: ResultCollector.ReportShardProgress(progress%)
-    ///   RPC: ResultCollector.ReportShardResult(is_success=true)
-    ///   CleanupShard
+    /// 阶段 5 增强：mock 随机失败注入
+    /// - 通过配置文件 mock_fail_ratio (0-100) 控制失败概率
+    /// - 使用 thread_local std::mt19937 保证线程安全且每次执行独立随机
+    /// - 失败时设置 is_success=false, exit_code=-1，携带错误描述
+    /// - ResultCollector 收到 FAILED 后会调用 Scheduler.RescheduleShard 触发重试
+    ///
+    /// 执行流程（阶段 4/5）：
+    ///   1. 读取 mock 配置（执行时长 + 故障率）
+    ///   2. FOR step = 1 .. total_steps:
+    ///        sleep(1s)
+    ///        IF cancelled → CleanupShard → RETURN
+    ///        progress = step * 100 / total_steps
+    ///        RPC: ResultCollector.ReportShardProgress(progress%, attempt_id)
+    ///   3. 随机决定 mock_success（阶段 5 新增）
+    ///   4. RPC: ResultCollector.ReportShardResult(is_success, exit_code, error_msg)
+    ///      （带 3 次重试，防止网络抖动导致结果永久丢失）
+    ///   5. 若 3 次上报均失败 → 保留在 running_shards_ 中，等待心跳恢复
+    ///   6. CleanupShard
     ///
     /// 错误处理策略：
-    /// - 进度上报失败：只打 WARN 日志，不中断执行（下一轮继续重试）
-    /// - 结果上报失败：打 ERROR 日志，shard 实际已执行完成；
-    ///   阶段 5 的重试机制可以通过 RescheduleShard 兜底
+    /// - 进度上报失败：只打 WARN，不中断执行（下轮继续重试）
+    /// - 结果上报成功但 is_success=false：由 ResultCollector → Scheduler 走重试链路
+    /// - 结果上报 RPC 失败（3 次）：保留在 running_shards_，心跳线程可发现并重试
     ///
     /// @param rs  RunningShard 的 shared_ptr，保证本线程和 Provider 线程共享所有权
     /// @param mock_execution_ms  mock 执行总时长（毫秒），从配置文件读取
@@ -270,6 +307,41 @@ private:
         // 执行完成，上报最终结果（带重试，防止网络抖动导致结果永久丢失）
         rs->progress = 100;
 
+        // ── mock 随机失败注入（阶段 5） ──────────────────────────────
+        // 设计思路：在 mock 执行完成（sleep 结束）后、上报 ResultCollector 之前，
+        // 根据配置的概率随机决定本次执行是成功还是失败。这样在不引入真实 FFmpeg
+        // 的前提下，就能完整测试 RescheduleShard → retry → max_retry → FAILED
+        // → JOB_FAILED 的整个重试恢复链路。
+        //
+        // 配置：mock_fail_ratio=0（默认）表示全部成功，100 表示全部失败。
+        // 测试建议：
+        //   - 30~50：验证部分 shard 重试后最终成功
+        //   - 100：验证超过 max_retry(3) 后 shard 变为 FAILED，job 变为 JOB_FAILED
+        //
+        // 线程安全：使用 thread_local mt19937，每个 MockExecute 线程有独立生成器。
+        // 用 std::random_device 做种子（每次线程创建时初始化一次），避免伪随机序列
+        // 在不同线程间共享导致可预测的失败模式。
+        int mock_fail_ratio = MprpcApplication::GetConfig().LoadInt("mock_fail_ratio", 0, 0, 100);
+        bool mock_success = true;
+        std::string mock_error_msg;
+        if (mock_fail_ratio > 0)
+        {
+            thread_local std::mt19937 rng(std::random_device{}());
+            int roll = std::uniform_int_distribution<int>(0, 99)(rng);
+            mock_success = (roll >= mock_fail_ratio);  // roll=0~99, fail_ratio=40 → roll<40 失败
+            if (!mock_success)
+            {
+                mock_error_msg = "mock random failure (ratio="
+                    + std::to_string(mock_fail_ratio) + "%, roll="
+                    + std::to_string(roll) + ")";
+            }
+        }
+
+        // ── 上报最终结果（带 3 次重试） ──────────────────────────
+        // 网络抖动可能导致 ReportShardResult RPC 失败。若 3 次重试都失败，
+        // 保留 shard 在 running_shards_ 中——心跳线程会持续上报 running_shards，
+        // WorkerManager 能看到这个 shard，阶段 5 的心跳恢复机制可兜底。
+        // 若 RPC 成功但 is_success=false，由 ResultCollector 走 RescheduleShard 链路。
         bool result_reported = false;
         for (int retry = 0; retry < 3 && !result_reported; ++retry)
         {
@@ -281,9 +353,9 @@ private:
             result_req.set_job_id(job_id);
             result_req.set_worker_id(worker_id);
             result_req.set_attempt_id(rs->attempt_id);
-            result_req.set_is_success(true);
-            result_req.set_exit_code(0);
-            result_req.set_error_msg("");
+            result_req.set_is_success(mock_success);
+            result_req.set_exit_code(mock_success ? 0 : -1);
+            result_req.set_error_msg(mock_success ? "" : mock_error_msg);
             result_req.set_output_path(rs->info.output_path());
             result_req.set_elapsed_ms(mock_execution_ms);
             result_req.set_shard_index(rs->info.shard_index());
@@ -295,8 +367,10 @@ private:
 
             if (!ctrl.Failed() && result_resp.accepted())
             {
-                LOG_INFO("MockExecute: shard=%s SUCCESS, job_done=%d (attempt %d)",
-                         shard_id.c_str(), result_resp.job_done(), retry + 1);
+                LOG_INFO("MockExecute: shard=%s %s, job_done=%d (attempt %d)",
+                         shard_id.c_str(),
+                         mock_success ? "SUCCESS" : "FAILED (mock)",
+                         result_resp.job_done(), retry + 1);
                 result_reported = true;
             }
             else
