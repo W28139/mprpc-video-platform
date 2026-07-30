@@ -287,7 +287,7 @@ public:
             done->Run();
             return;
         }
-
+        // 通过shard_id 拿到对应的shard
         auto shard = shard_opt.value();
 
         // ── 检查是否已达最大重试次数 ────────────────────────────
@@ -348,7 +348,8 @@ public:
         const std::string& worker_id = request->worker_id();
         LOG_INFO("SchedulerService::NotifyWorkerOffline worker_id=%s, reason=%s",
                  worker_id.c_str(), request->reason().c_str());
-
+        
+        // 拿到该work里的所有片,置为wait,让其他空闲work调用
         auto shards = ShardStore::GetInstance().ListByWorker(worker_id);
         int rescheduled = 0;
 
@@ -445,6 +446,7 @@ public:
         int32_t s_running  = static_cast<int32_t>(ShardStatus::SHARD_RUNNING);
         int32_t s_assigned = static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED);
 
+        // 拿到所有分片以及对应的work_id
         for (const auto& s : shards)
         {
             if ((s.status == s_running || s.status == s_assigned)
@@ -512,6 +514,7 @@ public:
         }
 
         // 5. 直连每个 Worker 发送 CancelShard（best-effort）
+        // 根据分片—分片所在work_id 与 work_id-对应ip_port信息，找到分片对应的具体哪个work
         for (const auto& kv : shards_to_notify)
         {
             const std::string& shard_id  = kv.first;

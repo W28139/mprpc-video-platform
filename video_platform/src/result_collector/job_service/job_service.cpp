@@ -258,7 +258,7 @@ public:
 
     /// @brief 取消任务（含分布式传播）
     ///
-    /// 阶段 4 改进：除标记 JobStore 外，同步标记所有 shard 为 CANCELED，
+    /// 阶段 4 改进：除标记 JobStore 外，同步标记所有 shard 为 CANCELED，把未切分和已切分的任务都标记为取消
     /// 防止 SchedulingLoop 继续扫描分配给已取消 job 的 WAITING shard。
     /// 对已分配的 shard 尝试通知 Worker 取消执行（best-effort）。
     void CancelJob(::google::protobuf::RpcController* controller,
@@ -300,8 +300,8 @@ public:
 
         // ── Best-effort 委托 Scheduler 向 Worker 传播取消 ───────────
         // 本地 ShardStore 不持有 assigned_worker_id（数据在 Scheduler 进程），
-        // 因此通过 Scheduler.CancelJobShards RPC 让 Scheduler 直连 Worker
-        // 发送 CancelShard。无论成功与否都不影响 CancelJob 本身的返回结果。
+        // 因此通过 Scheduler.CancelJobShards RPC 让 Scheduler 直连 Worker送 CancelShard。
+        // 无论成功与否都不影响 CancelJob 本身的返回结果。
         {
             MprpcChannel sched_channel;
             SchedulerService_Stub sched_stub(&sched_channel);
@@ -350,7 +350,8 @@ public:
     ///
     /// 调用方：
     /// - Scheduler.ScheduleJob（切分完成后更新 shard_count + status→SCHEDULING）
-    /// - ResultCollector.CheckJobDone（全部 shard 完成后更新 status→SUCCESS）
+    /// - ResultCollector.CheckJobDone（全部 shard 完成后更新 status→SUCCESS）‘
+    // 调用方调用这个函数，通过request把参数传回job_server所在进程，更新数据（巧妙设计）
     void UpdateJobStatus(::google::protobuf::RpcController* controller,
                          const ::UpdateJobStatusRequest* request,
                          ::UpdateJobStatusResponse* response,

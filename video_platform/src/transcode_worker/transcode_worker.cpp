@@ -96,6 +96,23 @@ public:
     }
 
     /// @brief 接收 Scheduler 分配的 shard，启动 mock 执行线程
+    ///
+    /// 这是 Worker 被调度分配的入口。由 Scheduler 的 SchedulingLoop 后台线程
+    /// 通过直连 RPC（MprpcChannel(ip, port)）调用，不经过 ZK 服务发现。
+    ///
+    /// 1. 从请求中提取 ShardInfo 和 retry_count，生成 attempt_id
+    /// 2. 加锁检查 running_shards_ 中是否已存在同一 shard_id 且未被取消：
+    ///    - 若存在 → 拒绝分配（返回 accepted=false），防止同一 shard 双倍执行
+    ///    - 若不存在 → 创建 RunningShard 对象并插入 map（检查+插入在同一锁内）
+    /// 3. 解锁，异步启动 MockExecute 线程（锁外启动，避免与 CancelShard 死锁）
+    /// 4. 返回 accepted=true，Scheduler 将 shard 状态置为 ASSIGNED
+    ///
+    /// @note 本方法只负责接收和创建追踪，不阻塞等待执行完成。
+    ///       实际转码（mock）在 MockExecute 线程中进行。
+    ///
+    /// @see MockExecute  🌐 异步 mock 执行线程
+    /// @see CancelShard  🛑 取消正在执行的 shard
+    /// @see CleanupShard 🧹 执行完成后清理追踪状态
     void AssignShard(::google::protobuf::RpcController* controller,
                      const ::AssignShardRequest* request,
                      ::AssignShardResponse* response,
@@ -267,13 +284,13 @@ private:
         for (int step = 1; step <= total_steps; ++step)
         {
             std::this_thread::sleep_for(std::chrono::milliseconds(report_interval_ms));
-
+            // 检查 cancel 标志是否为 true(检测这个shark有没有被取消)
             if (rs->cancelled)
             {
                 LOG_INFO("MockExecute: shard=%s cancelled at progress=%d%%",
                          shard_id.c_str(), rs->progress.load());
-                CleanupShard(shard_id);
-                return;
+                CleanupShard(shard_id);     // 从 running_shards_ 中移除自己
+                return;                     // 线程直接结束，不再继续执行
             }
 
             int progress = step * 100 / total_steps;
@@ -430,10 +447,34 @@ private:
 // RunHeartbeatLoop — Worker 注册与心跳后台线程
 // ============================================================================
 
-/// @brief 在后台线程中执行 RegisterWorker → Heartbeat 循环
+/// @brief Worker 注册与心跳后台线程（RegisterWorker + Heartbeat 循环）
 ///
-/// 阶段 4 改进：心跳上报真实的 current_running_shards（从 WorkerServiceImpl 获取），
-/// 不再硬编码为 0。
+/// Worker 作为 Consumer 主动与 WorkerManager 通信，维持自己的在线状态。
+/// WorkerManager 通过心跳超时判断 Worker 离线，触发故障恢复链路。
+///
+/// === 流程 ===
+/// 阶段一 — RegisterWorker（最多重试 3 次）：
+///   读取本地 ip:port → 调用 WorkerManager.RegisterWorker(资源信息)
+///   成功 → 进入阶段二；3 次全失败 → 线程退出（Worker 无法上线）
+///
+/// 阶段二 — Heartbeat 循环（每 3 秒）：
+///   从 WorkerServiceImpl 获取真实 running_shards 数 →
+///   填充负载信息 → 调用 WorkerManager.Heartbeat
+///   alive=false 时打 WARN（WorkerManager 标记已死亡）
+///
+/// === 关键设计 ===
+/// - RegisterWorker 带重试：解决 WorkerManager 未就绪的启动时序问题
+/// - 上报真实 running_shards（非硬编码 0）：阶段 7 资源感知调度的基础
+/// - 心跳是故障检测信号：心跳超时 → NotifyWorkerOffline → RescheduleShard
+///
+/// @param worker_id         Worker 唯一标识
+/// @param cpu_cores,memory_mb,max_running_shards  注册时上报的资源信息
+/// @param worker_service    用于获取真实 running_shards 数
+/// @param stop_flag         主线程设置的停止标志
+///
+/// @see RunningShardCount  🔢 获取当前运行中的 shard 数量
+/// @see RegisterWorker     📝 Worker 上线注册 RPC
+/// @see Heartbeat          💓 Worker 心跳保活 RPC
 static void RunHeartbeatLoop(std::string worker_id,
                               int cpu_cores,
                               int memory_mb,
