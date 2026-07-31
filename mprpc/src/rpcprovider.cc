@@ -7,8 +7,6 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
-#include <algorithm>
-#include <thread>
 
 namespace
 {
@@ -164,12 +162,11 @@ bool RpcProvider::Run()
     }
     uint16_t port = static_cast<uint16_t>(portValue);
 
-    int ioThreads = config.LoadInt("rpcserverio_threads", 16, 1, 128);
-    // 默认 work pool 保持中等规模，避免测试机 CPU 核数很大时一次性启动过多业务线程。
-    int defaultWorkThreads = static_cast<int>(
-        std::min(8u, std::max(2u, std::thread::hardware_concurrency())));
+    int ioThreads = config.LoadInt("rpcserverio_threads", 2, 1, 128);
+    // 默认 work pool 保持小规模，WSL/测试环境友好，生产环境按需调大
+    int defaultWorkThreads = 2;
     int workThreads = config.LoadInt("rpcserverwork_threads",
-                                     static_cast<int>(defaultWorkThreads), 0, 256);
+                                     defaultWorkThreads, 0, 256);
 
     // 创建 TcpServer 对象（wevix_muduo 内部自动管理 EventLoop）
     // 构造函数：(ip, port, threadNum)，IO 线程数可通过 rpcserverio_threads 配置。

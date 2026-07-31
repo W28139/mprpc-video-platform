@@ -9,6 +9,7 @@
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <fcntl.h>
 #include <signal.h>
 #include "wevix_muduo/AsyncLogger.h"
 
@@ -105,8 +106,16 @@ FfmpegResult FfmpegExecutor::ExecuteCommand(const std::string& cmd,
 
     if (pid == 0)
     {
-        // ── 子进程：重定向 stdout+stderr 到管道写端，执行命令 ──
+        // ── 子进程：重定向 stdout+stderr 到管道写端，stdin 到 /dev/null ──
         close(pipefd[0]);  // 关闭读端
+
+        // 重定向 stdin 到 /dev/null，防止子进程继承终端输入导致 SIGTSTP
+        int devnull = open("/dev/null", O_RDONLY);
+        if (devnull >= 0)
+        {
+            dup2(devnull, STDIN_FILENO);
+            close(devnull);
+        }
 
         // 重定向 stdout 和 stderr 到管道写端
         dup2(pipefd[1], STDOUT_FILENO);
