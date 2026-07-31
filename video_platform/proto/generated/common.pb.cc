@@ -55,6 +55,7 @@ PROTOBUF_CONSTEXPR ShardInfo::ShardInfo(
   , /*decltype(_impl_.attempt_id_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.input_path_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.output_path_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+  , /*decltype(_impl_.target_resolution_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.start_ms_)*/int64_t{0}
   , /*decltype(_impl_.shard_index_)*/0
   , /*decltype(_impl_.status_)*/0
@@ -63,6 +64,7 @@ PROTOBUF_CONSTEXPR ShardInfo::ShardInfo(
   , /*decltype(_impl_.max_retry_)*/0
   , /*decltype(_impl_.created_at_)*/int64_t{0}
   , /*decltype(_impl_.updated_at_)*/int64_t{0}
+  , /*decltype(_impl_.target_bitrate_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct ShardInfoDefaultTypeInternal {
   PROTOBUF_CONSTEXPR ShardInfoDefaultTypeInternal()
@@ -85,6 +87,8 @@ PROTOBUF_CONSTEXPR WorkerInfo::WorkerInfo(
   , /*decltype(_impl_.max_running_shards_)*/0
   , /*decltype(_impl_.last_heartbeat_)*/int64_t{0}
   , /*decltype(_impl_.status_)*/0
+  , /*decltype(_impl_.cpu_usage_)*/0
+  , /*decltype(_impl_.memory_usage_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct WorkerInfoDefaultTypeInternal {
   PROTOBUF_CONSTEXPR WorkerInfoDefaultTypeInternal()
@@ -160,6 +164,8 @@ const uint32_t TableStruct_common_2eproto::offsets[] PROTOBUF_SECTION_VARIABLE(p
   PROTOBUF_FIELD_OFFSET(::video_platform::ShardInfo, _impl_.output_path_),
   PROTOBUF_FIELD_OFFSET(::video_platform::ShardInfo, _impl_.created_at_),
   PROTOBUF_FIELD_OFFSET(::video_platform::ShardInfo, _impl_.updated_at_),
+  PROTOBUF_FIELD_OFFSET(::video_platform::ShardInfo, _impl_.target_resolution_),
+  PROTOBUF_FIELD_OFFSET(::video_platform::ShardInfo, _impl_.target_bitrate_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::video_platform::WorkerInfo, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -176,6 +182,8 @@ const uint32_t TableStruct_common_2eproto::offsets[] PROTOBUF_SECTION_VARIABLE(p
   PROTOBUF_FIELD_OFFSET(::video_platform::WorkerInfo, _impl_.max_running_shards_),
   PROTOBUF_FIELD_OFFSET(::video_platform::WorkerInfo, _impl_.status_),
   PROTOBUF_FIELD_OFFSET(::video_platform::WorkerInfo, _impl_.last_heartbeat_),
+  PROTOBUF_FIELD_OFFSET(::video_platform::WorkerInfo, _impl_.cpu_usage_),
+  PROTOBUF_FIELD_OFFSET(::video_platform::WorkerInfo, _impl_.memory_usage_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::video_platform::WorkerLoad, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -193,8 +201,8 @@ const uint32_t TableStruct_common_2eproto::offsets[] PROTOBUF_SECTION_VARIABLE(p
 static const ::_pbi::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) = {
   { 0, -1, -1, sizeof(::video_platform::JobInfo)},
   { 20, -1, -1, sizeof(::video_platform::ShardInfo)},
-  { 40, -1, -1, sizeof(::video_platform::WorkerInfo)},
-  { 56, -1, -1, sizeof(::video_platform::WorkerLoad)},
+  { 42, -1, -1, sizeof(::video_platform::WorkerInfo)},
+  { 60, -1, -1, sizeof(::video_platform::WorkerLoad)},
 };
 
 static const ::_pb::Message* const file_default_instances[] = {
@@ -214,7 +222,7 @@ const char descriptor_table_protodef_common_2eproto[] PROTOBUF_SECTION_VARIABLE(
   "\030\n \001(\0162\031.video_platform.JobStatus\022\023\n\013sha"
   "rd_count\030\013 \001(\005\022\022\n\ncreated_at\030\014 \001(\003\022\022\n\nup"
   "dated_at\030\r \001(\003\022\032\n\022shard_duration_sec\030\016 \001"
-  "(\005\"\277\002\n\tShardInfo\022\020\n\010shard_id\030\001 \001(\t\022\016\n\006jo"
+  "(\005\"\362\002\n\tShardInfo\022\020\n\010shard_id\030\001 \001(\t\022\016\n\006jo"
   "b_id\030\002 \001(\t\022\023\n\013shard_index\030\003 \001(\005\022\020\n\010start"
   "_ms\030\004 \001(\003\022\023\n\013duration_ms\030\005 \001(\003\022+\n\006status"
   "\030\006 \001(\0162\033.video_platform.ShardStatus\022\032\n\022a"
@@ -222,33 +230,35 @@ const char descriptor_table_protodef_common_2eproto[] PROTOBUF_SECTION_VARIABLE(
   "\001(\t\022\023\n\013retry_count\030\t \001(\005\022\021\n\tmax_retry\030\n "
   "\001(\005\022\022\n\ninput_path\030\013 \001(\t\022\023\n\013output_path\030\014"
   " \001(\t\022\022\n\ncreated_at\030\r \001(\003\022\022\n\nupdated_at\030\016"
-  " \001(\003\"\364\001\n\nWorkerInfo\022\021\n\tworker_id\030\001 \001(\t\022\n"
-  "\n\002ip\030\002 \001(\t\022\014\n\004port\030\003 \001(\005\022\021\n\tcpu_cores\030\004 "
-  "\001(\005\022\021\n\tmemory_mb\030\005 \001(\005\022\021\n\tgpu_count\030\006 \001("
-  "\005\022\036\n\026current_running_shards\030\007 \001(\005\022\032\n\022max"
-  "_running_shards\030\010 \001(\005\022,\n\006status\030\t \001(\0162\034."
-  "video_platform.WorkerStatus\022\026\n\016last_hear"
-  "tbeat\030\n \001(\003\"\243\001\n\nWorkerLoad\022\021\n\tworker_id\030"
-  "\001 \001(\t\022\021\n\tcpu_usage\030\002 \001(\005\022\024\n\014memory_usage"
-  "\030\003 \001(\005\022\026\n\016running_shards\030\004 \001(\005\022\027\n\017finish"
-  "ed_shards\030\005 \001(\005\022\025\n\rfailed_shards\030\006 \001(\005\022\021"
-  "\n\ttimestamp\030\007 \001(\003*\260\001\n\tJobStatus\022\026\n\022JOB_S"
-  "TATUS_UNKNOWN\020\000\022\017\n\013JOB_PENDING\020\001\022\021\n\rJOB_"
-  "SPLITTING\020\002\022\022\n\016JOB_SCHEDULING\020\003\022\017\n\013JOB_R"
-  "UNNING\020\004\022\017\n\013JOB_MERGING\020\005\022\017\n\013JOB_SUCCESS"
-  "\020\006\022\016\n\nJOB_FAILED\020\007\022\020\n\014JOB_CANCELED\020\010*\301\001\n"
-  "\013ShardStatus\022\030\n\024SHARD_STATUS_UNKNOWN\020\000\022\021"
-  "\n\rSHARD_CREATED\020\001\022\021\n\rSHARD_WAITING\020\002\022\022\n\016"
-  "SHARD_ASSIGNED\020\003\022\021\n\rSHARD_RUNNING\020\004\022\021\n\rS"
-  "HARD_SUCCESS\020\005\022\020\n\014SHARD_FAILED\020\006\022\022\n\016SHAR"
-  "D_RETRYING\020\007\022\022\n\016SHARD_CANCELED\020\010*e\n\014Work"
-  "erStatus\022\031\n\025WORKER_STATUS_UNKNOWN\020\000\022\021\n\rW"
-  "ORKER_ONLINE\020\001\022\022\n\016WORKER_OFFLINE\020\002\022\023\n\017WO"
-  "RKER_DRAINING\020\003b\006proto3"
+  " \001(\003\022\031\n\021target_resolution\030\017 \001(\t\022\026\n\016targe"
+  "t_bitrate\030\020 \001(\005\"\235\002\n\nWorkerInfo\022\021\n\tworker"
+  "_id\030\001 \001(\t\022\n\n\002ip\030\002 \001(\t\022\014\n\004port\030\003 \001(\005\022\021\n\tc"
+  "pu_cores\030\004 \001(\005\022\021\n\tmemory_mb\030\005 \001(\005\022\021\n\tgpu"
+  "_count\030\006 \001(\005\022\036\n\026current_running_shards\030\007"
+  " \001(\005\022\032\n\022max_running_shards\030\010 \001(\005\022,\n\006stat"
+  "us\030\t \001(\0162\034.video_platform.WorkerStatus\022\026"
+  "\n\016last_heartbeat\030\n \001(\003\022\021\n\tcpu_usage\030\013 \001("
+  "\005\022\024\n\014memory_usage\030\014 \001(\005\"\243\001\n\nWorkerLoad\022\021"
+  "\n\tworker_id\030\001 \001(\t\022\021\n\tcpu_usage\030\002 \001(\005\022\024\n\014"
+  "memory_usage\030\003 \001(\005\022\026\n\016running_shards\030\004 \001"
+  "(\005\022\027\n\017finished_shards\030\005 \001(\005\022\025\n\rfailed_sh"
+  "ards\030\006 \001(\005\022\021\n\ttimestamp\030\007 \001(\003*\260\001\n\tJobSta"
+  "tus\022\026\n\022JOB_STATUS_UNKNOWN\020\000\022\017\n\013JOB_PENDI"
+  "NG\020\001\022\021\n\rJOB_SPLITTING\020\002\022\022\n\016JOB_SCHEDULIN"
+  "G\020\003\022\017\n\013JOB_RUNNING\020\004\022\017\n\013JOB_MERGING\020\005\022\017\n"
+  "\013JOB_SUCCESS\020\006\022\016\n\nJOB_FAILED\020\007\022\020\n\014JOB_CA"
+  "NCELED\020\010*\301\001\n\013ShardStatus\022\030\n\024SHARD_STATUS"
+  "_UNKNOWN\020\000\022\021\n\rSHARD_CREATED\020\001\022\021\n\rSHARD_W"
+  "AITING\020\002\022\022\n\016SHARD_ASSIGNED\020\003\022\021\n\rSHARD_RU"
+  "NNING\020\004\022\021\n\rSHARD_SUCCESS\020\005\022\020\n\014SHARD_FAIL"
+  "ED\020\006\022\022\n\016SHARD_RETRYING\020\007\022\022\n\016SHARD_CANCEL"
+  "ED\020\010*e\n\014WorkerStatus\022\031\n\025WORKER_STATUS_UN"
+  "KNOWN\020\000\022\021\n\rWORKER_ONLINE\020\001\022\022\n\016WORKER_OFF"
+  "LINE\020\002\022\023\n\017WORKER_DRAINING\020\003b\006proto3"
   ;
 static ::_pbi::once_flag descriptor_table_common_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_common_2eproto = {
-    false, false, 1583, descriptor_table_protodef_common_2eproto,
+    false, false, 1675, descriptor_table_protodef_common_2eproto,
     "common.proto",
     &descriptor_table_common_2eproto_once, nullptr, 0, 4,
     schemas, file_default_instances, TableStruct_common_2eproto::offsets,
@@ -1003,6 +1013,7 @@ ShardInfo::ShardInfo(const ShardInfo& from)
     , decltype(_impl_.attempt_id_){}
     , decltype(_impl_.input_path_){}
     , decltype(_impl_.output_path_){}
+    , decltype(_impl_.target_resolution_){}
     , decltype(_impl_.start_ms_){}
     , decltype(_impl_.shard_index_){}
     , decltype(_impl_.status_){}
@@ -1011,6 +1022,7 @@ ShardInfo::ShardInfo(const ShardInfo& from)
     , decltype(_impl_.max_retry_){}
     , decltype(_impl_.created_at_){}
     , decltype(_impl_.updated_at_){}
+    , decltype(_impl_.target_bitrate_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -1062,9 +1074,17 @@ ShardInfo::ShardInfo(const ShardInfo& from)
     _this->_impl_.output_path_.Set(from._internal_output_path(), 
       _this->GetArenaForAllocation());
   }
+  _impl_.target_resolution_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.target_resolution_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_target_resolution().empty()) {
+    _this->_impl_.target_resolution_.Set(from._internal_target_resolution(), 
+      _this->GetArenaForAllocation());
+  }
   ::memcpy(&_impl_.start_ms_, &from._impl_.start_ms_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.updated_at_) -
-    reinterpret_cast<char*>(&_impl_.start_ms_)) + sizeof(_impl_.updated_at_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.target_bitrate_) -
+    reinterpret_cast<char*>(&_impl_.start_ms_)) + sizeof(_impl_.target_bitrate_));
   // @@protoc_insertion_point(copy_constructor:video_platform.ShardInfo)
 }
 
@@ -1079,6 +1099,7 @@ inline void ShardInfo::SharedCtor(
     , decltype(_impl_.attempt_id_){}
     , decltype(_impl_.input_path_){}
     , decltype(_impl_.output_path_){}
+    , decltype(_impl_.target_resolution_){}
     , decltype(_impl_.start_ms_){int64_t{0}}
     , decltype(_impl_.shard_index_){0}
     , decltype(_impl_.status_){0}
@@ -1087,6 +1108,7 @@ inline void ShardInfo::SharedCtor(
     , decltype(_impl_.max_retry_){0}
     , decltype(_impl_.created_at_){int64_t{0}}
     , decltype(_impl_.updated_at_){int64_t{0}}
+    , decltype(_impl_.target_bitrate_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.shard_id_.InitDefault();
@@ -1113,6 +1135,10 @@ inline void ShardInfo::SharedCtor(
   #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
     _impl_.output_path_.Set("", GetArenaForAllocation());
   #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  _impl_.target_resolution_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.target_resolution_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
 }
 
 ShardInfo::~ShardInfo() {
@@ -1132,6 +1158,7 @@ inline void ShardInfo::SharedDtor() {
   _impl_.attempt_id_.Destroy();
   _impl_.input_path_.Destroy();
   _impl_.output_path_.Destroy();
+  _impl_.target_resolution_.Destroy();
 }
 
 void ShardInfo::SetCachedSize(int size) const {
@@ -1150,9 +1177,10 @@ void ShardInfo::Clear() {
   _impl_.attempt_id_.ClearToEmpty();
   _impl_.input_path_.ClearToEmpty();
   _impl_.output_path_.ClearToEmpty();
+  _impl_.target_resolution_.ClearToEmpty();
   ::memset(&_impl_.start_ms_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.updated_at_) -
-      reinterpret_cast<char*>(&_impl_.start_ms_)) + sizeof(_impl_.updated_at_));
+      reinterpret_cast<char*>(&_impl_.target_bitrate_) -
+      reinterpret_cast<char*>(&_impl_.start_ms_)) + sizeof(_impl_.target_bitrate_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -1283,6 +1311,24 @@ const char* ShardInfo::_InternalParse(const char* ptr, ::_pbi::ParseContext* ctx
       case 14:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 112)) {
           _impl_.updated_at_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // string target_resolution = 15;
+      case 15:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 122)) {
+          auto str = _internal_mutable_target_resolution();
+          ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+          CHK_(::_pbi::VerifyUTF8(str, "video_platform.ShardInfo.target_resolution"));
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 target_bitrate = 16;
+      case 16:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 128)) {
+          _impl_.target_bitrate_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -1425,6 +1471,22 @@ uint8_t* ShardInfo::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt64ToArray(14, this->_internal_updated_at(), target);
   }
 
+  // string target_resolution = 15;
+  if (!this->_internal_target_resolution().empty()) {
+    ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::VerifyUtf8String(
+      this->_internal_target_resolution().data(), static_cast<int>(this->_internal_target_resolution().length()),
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::SERIALIZE,
+      "video_platform.ShardInfo.target_resolution");
+    target = stream->WriteStringMaybeAliased(
+        15, this->_internal_target_resolution(), target);
+  }
+
+  // int32 target_bitrate = 16;
+  if (this->_internal_target_bitrate() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(16, this->_internal_target_bitrate(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -1483,6 +1545,13 @@ size_t ShardInfo::ByteSizeLong() const {
         this->_internal_output_path());
   }
 
+  // string target_resolution = 15;
+  if (!this->_internal_target_resolution().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::StringSize(
+        this->_internal_target_resolution());
+  }
+
   // int64 start_ms = 4;
   if (this->_internal_start_ms() != 0) {
     total_size += ::_pbi::WireFormatLite::Int64SizePlusOne(this->_internal_start_ms());
@@ -1524,6 +1593,13 @@ size_t ShardInfo::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::Int64SizePlusOne(this->_internal_updated_at());
   }
 
+  // int32 target_bitrate = 16;
+  if (this->_internal_target_bitrate() != 0) {
+    total_size += 2 +
+      ::_pbi::WireFormatLite::Int32Size(
+        this->_internal_target_bitrate());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -1560,6 +1636,9 @@ void ShardInfo::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROT
   if (!from._internal_output_path().empty()) {
     _this->_internal_set_output_path(from._internal_output_path());
   }
+  if (!from._internal_target_resolution().empty()) {
+    _this->_internal_set_target_resolution(from._internal_target_resolution());
+  }
   if (from._internal_start_ms() != 0) {
     _this->_internal_set_start_ms(from._internal_start_ms());
   }
@@ -1583,6 +1662,9 @@ void ShardInfo::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROT
   }
   if (from._internal_updated_at() != 0) {
     _this->_internal_set_updated_at(from._internal_updated_at());
+  }
+  if (from._internal_target_bitrate() != 0) {
+    _this->_internal_set_target_bitrate(from._internal_target_bitrate());
   }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
@@ -1627,9 +1709,13 @@ void ShardInfo::InternalSwap(ShardInfo* other) {
       &_impl_.output_path_, lhs_arena,
       &other->_impl_.output_path_, rhs_arena
   );
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &_impl_.target_resolution_, lhs_arena,
+      &other->_impl_.target_resolution_, rhs_arena
+  );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(ShardInfo, _impl_.updated_at_)
-      + sizeof(ShardInfo::_impl_.updated_at_)
+      PROTOBUF_FIELD_OFFSET(ShardInfo, _impl_.target_bitrate_)
+      + sizeof(ShardInfo::_impl_.target_bitrate_)
       - PROTOBUF_FIELD_OFFSET(ShardInfo, _impl_.start_ms_)>(
           reinterpret_cast<char*>(&_impl_.start_ms_),
           reinterpret_cast<char*>(&other->_impl_.start_ms_));
@@ -1667,6 +1753,8 @@ WorkerInfo::WorkerInfo(const WorkerInfo& from)
     , decltype(_impl_.max_running_shards_){}
     , decltype(_impl_.last_heartbeat_){}
     , decltype(_impl_.status_){}
+    , decltype(_impl_.cpu_usage_){}
+    , decltype(_impl_.memory_usage_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -1687,8 +1775,8 @@ WorkerInfo::WorkerInfo(const WorkerInfo& from)
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.port_, &from._impl_.port_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.status_) -
-    reinterpret_cast<char*>(&_impl_.port_)) + sizeof(_impl_.status_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.memory_usage_) -
+    reinterpret_cast<char*>(&_impl_.port_)) + sizeof(_impl_.memory_usage_));
   // @@protoc_insertion_point(copy_constructor:video_platform.WorkerInfo)
 }
 
@@ -1707,6 +1795,8 @@ inline void WorkerInfo::SharedCtor(
     , decltype(_impl_.max_running_shards_){0}
     , decltype(_impl_.last_heartbeat_){int64_t{0}}
     , decltype(_impl_.status_){0}
+    , decltype(_impl_.cpu_usage_){0}
+    , decltype(_impl_.memory_usage_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.worker_id_.InitDefault();
@@ -1747,8 +1837,8 @@ void WorkerInfo::Clear() {
   _impl_.worker_id_.ClearToEmpty();
   _impl_.ip_.ClearToEmpty();
   ::memset(&_impl_.port_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.status_) -
-      reinterpret_cast<char*>(&_impl_.port_)) + sizeof(_impl_.status_));
+      reinterpret_cast<char*>(&_impl_.memory_usage_) -
+      reinterpret_cast<char*>(&_impl_.port_)) + sizeof(_impl_.memory_usage_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -1839,6 +1929,22 @@ const char* WorkerInfo::_InternalParse(const char* ptr, ::_pbi::ParseContext* ct
       case 10:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 80)) {
           _impl_.last_heartbeat_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 cpu_usage = 11;
+      case 11:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 88)) {
+          _impl_.cpu_usage_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
+          CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // int32 memory_usage = 12;
+      case 12:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 96)) {
+          _impl_.memory_usage_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -1941,6 +2047,18 @@ uint8_t* WorkerInfo::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt64ToArray(10, this->_internal_last_heartbeat(), target);
   }
 
+  // int32 cpu_usage = 11;
+  if (this->_internal_cpu_usage() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(11, this->_internal_cpu_usage(), target);
+  }
+
+  // int32 memory_usage = 12;
+  if (this->_internal_memory_usage() != 0) {
+    target = stream->EnsureSpace(target);
+    target = ::_pbi::WireFormatLite::WriteInt32ToArray(12, this->_internal_memory_usage(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -2012,6 +2130,16 @@ size_t WorkerInfo::ByteSizeLong() const {
       ::_pbi::WireFormatLite::EnumSize(this->_internal_status());
   }
 
+  // int32 cpu_usage = 11;
+  if (this->_internal_cpu_usage() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_cpu_usage());
+  }
+
+  // int32 memory_usage = 12;
+  if (this->_internal_memory_usage() != 0) {
+    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_memory_usage());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -2060,6 +2188,12 @@ void WorkerInfo::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PRO
   if (from._internal_status() != 0) {
     _this->_internal_set_status(from._internal_status());
   }
+  if (from._internal_cpu_usage() != 0) {
+    _this->_internal_set_cpu_usage(from._internal_cpu_usage());
+  }
+  if (from._internal_memory_usage() != 0) {
+    _this->_internal_set_memory_usage(from._internal_memory_usage());
+  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -2088,8 +2222,8 @@ void WorkerInfo::InternalSwap(WorkerInfo* other) {
       &other->_impl_.ip_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(WorkerInfo, _impl_.status_)
-      + sizeof(WorkerInfo::_impl_.status_)
+      PROTOBUF_FIELD_OFFSET(WorkerInfo, _impl_.memory_usage_)
+      + sizeof(WorkerInfo::_impl_.memory_usage_)
       - PROTOBUF_FIELD_OFFSET(WorkerInfo, _impl_.port_)>(
           reinterpret_cast<char*>(&_impl_.port_),
           reinterpret_cast<char*>(&other->_impl_.port_));

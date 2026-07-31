@@ -84,6 +84,8 @@ message ShardInfo {
     string output_path        = 12; // 输出文件路径（转码后的结果文件）
     int64  created_at         = 13; // shard 创建时间戳（毫秒）
     int64  updated_at         = 14; // 最后状态更新时间戳（毫秒）
+    string target_resolution  = 15; // 目标分辨率（如 "1280x720"），从 JobInfo 透传
+    int32  target_bitrate     = 16; // 目标码率（kbps），0=保持原码率，从 JobInfo 透传
 }
 
 // Worker 节点完整信息 — WorkerManager 维护，Scheduler 查询
@@ -98,6 +100,8 @@ message WorkerInfo {
     int32  max_running_shards     = 8;  // Worker 允许的最大并发 shard 数
     WorkerStatus status           = 9;  // 当前状态（ONLINE / OFFLINE / DRAINING）
     int64  last_heartbeat         = 10; // 最后一次心跳时间戳（毫秒），用于超时判断
+    int32  cpu_usage              = 11; // CPU 使用率（0-100 百分比），阶段 7 资源感知调度
+    int32  memory_usage           = 12; // 内存使用率（0-100 百分比），阶段 7 资源感知调度
 }
 
 // Worker 实时负载快照 — 心跳上报用

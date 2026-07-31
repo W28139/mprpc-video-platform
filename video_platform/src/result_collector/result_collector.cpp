@@ -1,5 +1,6 @@
 #include <string>
 #include <cstdlib>
+#include <algorithm>
 #include "result.pb.h"
 #include "job.pb.h"
 #include "scheduler.pb.h"
@@ -9,6 +10,7 @@
 #include "rpcprovider.h"
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
+#include "video_platform/ffmpeg_executor.h"
 
 using namespace video_platform;
 
@@ -138,9 +140,10 @@ public:
             shard_copy.attempt_id    = attempt_id;
             shard_copy.retry_count   = parseRetryFromAttempt(attempt_id);
             shard_copy.max_retry     = 3;
-            shard_copy.output_path   = request->output_path();
-            shard_copy.created_at    = NowMs();
-            shard_copy.updated_at    = NowMs();
+            shard_copy.output_path     = request->output_path();
+            shard_copy.screenshot_path = request->screenshot_path();
+            shard_copy.created_at      = NowMs();
+            shard_copy.updated_at      = NowMs();
             ShardStore::GetInstance().Insert(shard_copy);
             shard_opt = ShardStore::GetInstance().Get(shard_id);
             LOG_INFO("ResultCollectorService: created local shard copy shard_id=%s", shard_id.c_str());
@@ -189,6 +192,7 @@ public:
         shard.attempt_id = attempt_id;
         shard.assigned_worker_id = worker_id;
         shard.output_path = request->output_path();
+        shard.screenshot_path = request->screenshot_path();
         shard.updated_at = NowMs();
         ShardStore::GetInstance().Update(shard_id, shard);
 
@@ -413,6 +417,79 @@ private:
             JobStore::GetInstance().Insert(local_job);
         }
 
+        // ── JOB_SUCCESS 时合并所有 shard 输出为完整视频（阶段 6 遗留项 1） ──
+        if (status == JobStatus::JOB_SUCCESS)
+        {
+            auto shards = ShardStore::GetInstance().ListByJob(job_id);
+
+            // 按 shard_index 升序排列
+            std::sort(shards.begin(), shards.end(),
+                      [](const ShardRecord& a, const ShardRecord& b) {
+                          return a.shard_index < b.shard_index;
+                      });
+
+            // 收集所有有效的 output_path
+            std::vector<std::string> merge_inputs;
+            for (const auto& s : shards)
+            {
+                if (!s.output_path.empty())
+                {
+                    merge_inputs.push_back(s.output_path);
+                }
+            }
+
+            if (!merge_inputs.empty() && job_opt.has_value())
+            {
+                // 确定合并输出目录（优先级：job.output_path > shard 所在目录 > ffmpeg_work_dir）
+                std::string output_dir = job_opt->output_path;
+                if (output_dir.empty() && !merge_inputs.empty())
+                {
+                    // 从第一个 shard 的 output_path 反推目录
+                    const auto& first = merge_inputs[0];
+                    size_t pos = first.find_last_of('/');
+                    if (pos != std::string::npos)
+                        output_dir = first.substr(0, pos);
+                }
+                if (output_dir.empty())
+                {
+                    output_dir = MprpcApplication::GetConfig().Load("ffmpeg_work_dir");
+                    if (output_dir.empty()) output_dir = "/tmp/transcode_worker";
+                }
+                std::string merged_output = output_dir + "/" + job_id + "_merged.mp4";
+                LOG_INFO("ResultCollectorService: merging %zu shards for job=%s → %s",
+                         merge_inputs.size(), job_id.c_str(), merged_output.c_str());
+
+                auto merge_result = FfmpegExecutor::Merge(merge_inputs, merged_output);
+                if (merge_result.success)
+                {
+                    LOG_INFO("ResultCollectorService: merge SUCCESS for job=%s, output=%s "
+                             "(elapsed=%lldms)",
+                             job_id.c_str(), merged_output.c_str(),
+                             (long long)merge_result.elapsed_ms);
+
+                    // 清理中间切片文件（已合并，不再需要）
+                    for (const auto& path : merge_inputs)
+                    {
+                        if (std::remove(path.c_str()) == 0)
+                            LOG_DEBUG("ResultCollectorService: removed shard file %s", path.c_str());
+                        else
+                            LOG_WARN("ResultCollectorService: failed to remove shard file %s: %s",
+                                     path.c_str(), std::strerror(errno));
+                    }
+                }
+                else
+                {
+                    LOG_WARN("ResultCollectorService: merge FAILED for job=%s: %s",
+                             job_id.c_str(), merge_result.error_msg.c_str());
+                }
+            }
+            else
+            {
+                LOG_WARN("ResultCollectorService: no output paths to merge for job=%s",
+                         job_id.c_str());
+            }
+        }
+
         // ── 反向通知 JobService（跨进程同步） ─────────────────
         {
             MprpcChannel js_channel;
@@ -435,6 +512,8 @@ private:
                 si->set_attempt_id(s.attempt_id);
                 si->set_retry_count(s.retry_count);
                 si->set_output_path(s.output_path);
+                si->set_target_resolution(s.target_resolution);
+                si->set_target_bitrate(s.target_bitrate);
             }
 
             UpdateJobStatusResponse update_resp;

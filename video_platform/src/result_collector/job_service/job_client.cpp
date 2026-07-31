@@ -168,14 +168,19 @@ int main(int argc, char** argv) {
 
     signal(SIGPIPE, SIG_IGN);
 
-    // 解析 --query 和 --watch 参数
+    // 解析 --query / --watch / -i 参数
     std::string query_job_id;
+    std::string config_path;
     bool watch_mode = false;
 
     int real_argc = 0;
     const char* real_argv[16] = {};
     for (int i = 0; i < argc && real_argc < 15; ++i) {
-        if (std::strcmp(argv[i], "--query") == 0 && i + 1 < argc) {
+        if (std::strcmp(argv[i], "-i") == 0 && i + 1 < argc) {
+            config_path = argv[++i];          // 记住配置文件路径
+            real_argv[real_argc++] = argv[i - 1];
+            real_argv[real_argc++] = argv[i];
+        } else if (std::strcmp(argv[i], "--query") == 0 && i + 1 < argc) {
             query_job_id = argv[++i];
         } else if (std::strcmp(argv[i], "--watch") == 0) {
             watch_mode = true;
@@ -294,11 +299,12 @@ int main(int argc, char** argv) {
                 std::cout << "  Status: " << jobStatusStr(info.status()) << std::endl;
                 std::cout << "  Created at: " << info.created_at() << std::endl;
             }
+            std::string cfg = config_path.empty() ? "<config>" : config_path;
             std::cout << "\n  Query progress:" << std::endl;
-            std::cout << "    " << argv[0] << " -i <config> --query "
+            std::cout << "    " << argv[0] << " -i " << cfg << " --query "
                       << response.job_id() << std::endl;
             std::cout << "  Watch until done:" << std::endl;
-            std::cout << "    " << argv[0] << " -i <config> --query "
+            std::cout << "    " << argv[0] << " -i " << cfg << " --query "
                       << response.job_id() << " --watch" << std::endl;
             LOG_INFO("SubmitJob success: job_id=%s", response.job_id().c_str());
         } else {

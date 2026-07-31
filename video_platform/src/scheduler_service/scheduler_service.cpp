@@ -12,6 +12,7 @@
 #include "rpcprovider.h"
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
+#include "video_platform/ffmpeg_executor.h"
 
 using namespace video_platform;
 
@@ -64,7 +65,7 @@ public:
     ///
     /// 步骤：
     /// 1. 从请求的 JobInfo 构造/获取本地 JobRecord 副本（首次调用时本地不存在）
-    /// 2. 读取 mock 配置（mock_job_duration_sec / mock_shard_duration_sec）
+    /// 2. ffprobe 探测真实视频时长，失败则回退到 job_duration_fallback_sec
     /// 3. 计算 shard_count = job_duration / shard_duration，最少 1 个
     /// 4. 创建 ShardRecord 写入 ShardStore（status=WAITING，由 SchedulingLoop 异步分配）
     /// 5. 更新 Job 状态 → SCHEDULING，回填 shard_count
@@ -119,48 +120,91 @@ public:
                      job_id.c_str());
         }
 
-        // 2. 读取 mock 配置
+        // 2. 探测视频真实时长，确定切分参数
         auto& config = MprpcApplication::GetConfig();
-        int mock_job_duration_sec = config.LoadInt("mock_job_duration_sec", 60, 1, 86400);
-        int mock_shard_duration_sec = config.LoadInt("mock_shard_duration_sec", 20, 1, 3600);
 
-        // 使用本地副本中记录的 shard_duration_sec，否则用配置默认值
-        int shard_dur = (local_job.shard_duration_sec > 0)
-                        ? local_job.shard_duration_sec : mock_shard_duration_sec;
+        // 用 ffprobe 探测输入视频的真实时长（阶段 6）
+        int64_t job_duration_ms = 0;
+        {
+            auto video_info = FfmpegExecutor::Probe(local_job.input_path);
+            if (video_info.valid && video_info.duration_ms > 0)
+            {
+                job_duration_ms = video_info.duration_ms;
+                LOG_INFO("SchedulerService::ScheduleJob job_id=%s: probed video duration=%lldms "
+                         "(%dx%d, codec=%s)",
+                         job_id.c_str(), (long long)job_duration_ms,
+                         video_info.width, video_info.height,
+                         video_info.codec_name.c_str());
+            }
+            else
+            {
+                // 探测失败时回退到配置默认值（兼容非视频输入）
+                int fallback_sec = config.LoadInt("job_duration_fallback_sec", 60, 1, 86400);
+                job_duration_ms = static_cast<int64_t>(fallback_sec) * 1000;
+                LOG_WARN("SchedulerService::ScheduleJob job_id=%s: ffprobe failed, "
+                         "using fallback duration=%lldms",
+                         job_id.c_str(), (long long)job_duration_ms);
+            }
+        }
 
-        int shard_count = (mock_job_duration_sec + shard_dur - 1) / shard_dur;  // 向上取整
+        // shard 时长：优先用户指定 > 配置默认值 20s
+        int shard_dur_sec = (local_job.shard_duration_sec > 0)
+                            ? local_job.shard_duration_sec
+                            : config.LoadInt("shard_duration_sec", 20, 1, 3600);
+        int64_t shard_duration_ms = static_cast<int64_t>(shard_dur_sec) * 1000;
+
+        // 按真实时长计算 shard 数量
+        int shard_count = static_cast<int>((job_duration_ms + shard_duration_ms - 1)
+                                           / shard_duration_ms);
         if (shard_count < 1) shard_count = 1;
 
         LOG_INFO("SchedulerService::ScheduleJob job_id=%s: splitting into %d shards "
-                 "(job_duration=%ds, shard_duration=%ds)",
-                 job_id.c_str(), shard_count, mock_job_duration_sec, shard_dur);
+                 "(job_duration=%lldms, shard_duration=%lldms)",
+                 job_id.c_str(), shard_count,
+                 (long long)job_duration_ms, (long long)shard_duration_ms);
 
-        // 3. 更新 Job 状态 → SPLITTING(切分状态)
+        // 3. 更新 Job 状态 → SPLITTING，回填真实时长
         local_job.status = static_cast<int32_t>(JobStatus::JOB_SPLITTING);
+        local_job.duration_sec = job_duration_ms / 1000;
         local_job.updated_at = NowMs();
         // JobStore类中，是存放所有JobRecord,用哈希表存放，提供多种更新方法
         JobStore::GetInstance().Update(job_id, local_job);
 
         // 4. 按时间切片创建 ShardRecord
-        int64_t shard_duration_ms = static_cast<int64_t>(shard_dur) * 1000;
         std::vector<ShardRecord> created_shards;
         for (int i = 0; i < shard_count; ++i)
         {
+            int64_t shard_start = static_cast<int64_t>(i) * shard_duration_ms;
+            // 最后一个 shard 时长取剩余部分（可能小于 shard_duration_ms）
+            int64_t shard_dur = (i == shard_count - 1)
+                                ? (job_duration_ms - shard_start)
+                                : shard_duration_ms;
+            if (shard_dur <= 0) shard_dur = shard_duration_ms;  // 防御
+
             ShardRecord shard;
             shard.shard_id    = job_id + "_shard_" + std::to_string(i);
             shard.job_id      = job_id;
             shard.shard_index = i;
-            shard.start_ms    = static_cast<int64_t>(i) * shard_duration_ms;
-            shard.duration_ms = shard_duration_ms;
+            shard.start_ms    = shard_start;
+            shard.duration_ms = shard_dur;
             shard.status      = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
             shard.assigned_worker_id.clear();
             shard.attempt_id.clear();
             shard.retry_count = 0;
             shard.max_retry   = 3;
-            shard.input_path  = local_job.input_path;  // mock: 复用原始输入路径
-            shard.output_path = local_job.output_path + "/" + shard.shard_id + ".mp4";
-            shard.created_at  = NowMs();
-            shard.updated_at  = NowMs();
+            shard.input_path       = local_job.input_path;
+            // 若 job 未指定 output_path，回退到 ffmpeg_work_dir
+            std::string shard_out_dir = local_job.output_path;
+            if (shard_out_dir.empty())
+            {
+                shard_out_dir = MprpcApplication::GetConfig().Load("ffmpeg_work_dir");
+                if (shard_out_dir.empty()) shard_out_dir = "/tmp/transcode_worker";
+            }
+            shard.output_path      = shard_out_dir + "/" + shard.shard_id + ".mp4";
+            shard.target_resolution = local_job.target_resolution;
+            shard.target_bitrate    = local_job.target_bitrate;
+            shard.created_at       = NowMs();
+            shard.updated_at       = NowMs();
 
             ShardStore::GetInstance().Insert(shard);
             created_shards.push_back(shard);
@@ -206,10 +250,12 @@ public:
                 si->set_output_path(s.output_path);
                 si->set_retry_count(s.retry_count);
                 si->set_max_retry(s.max_retry);
+                si->set_target_resolution(s.target_resolution);
+                si->set_target_bitrate(s.target_bitrate);
                 si->set_created_at(s.created_at);
                 si->set_updated_at(s.updated_at);
             }
-            
+
             // 调用对方函数，把信息同步过去
             UpdateJobStatusResponse update_resp;
             MprpcController update_ctrl;
@@ -251,6 +297,8 @@ public:
             si->set_output_path(s.output_path);
             si->set_retry_count(s.retry_count);
             si->set_max_retry(s.max_retry);
+            si->set_target_resolution(s.target_resolution);
+            si->set_target_bitrate(s.target_bitrate);
             si->set_created_at(s.created_at);
             si->set_updated_at(s.updated_at);
         }
@@ -648,6 +696,8 @@ private:
             si->set_attempt_id(s.attempt_id);
             si->set_retry_count(s.retry_count);
             si->set_output_path(s.output_path);
+            si->set_target_resolution(s.target_resolution);
+            si->set_target_bitrate(s.target_bitrate);
         }
 
         UpdateJobStatusResponse update_resp;
@@ -769,10 +819,16 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
     // WorkerManager 通过 ZK 发现
     WorkerManagerService_Stub wm_stub(new MprpcChannel());
 
+    // ── 阶段 7：Metrics 计数器 ────────────────────────────────────────
+    int64_t metrics_round    = 0;
+    int64_t shards_assigned  = 0;
+
     while (!stop_flag)
     {
         std::this_thread::sleep_for(std::chrono::milliseconds(kScheduleIntervalMs));
         if (stop_flag) break;
+
+        ++metrics_round;
 
         // ── 1. 扫描 WAITING shard ─────────────────────────────────────
         auto waiting_shards = ShardStore::GetInstance().ListByStatus(
@@ -807,29 +863,70 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
 
         LOG_INFO("SchedulingLoop: %d ONLINE workers", lw_resp.workers_size());
 
-        // ── 3. 对每个 WAITING shard 分配 Worker ─────────────────────
+        // ── 3. 按优先级排序 WAITING shard（阶段 7：优先级队列） ──────
+        // priority 越大越优先，同优先级按创建时间 FIFO
+        // 批量查询 job 优先级并缓存，避免 N 次 JobStore::Get
+        std::unordered_map<std::string, int32_t> job_priority_cache;
+        for (const auto& s : waiting_shards)
+        {
+            if (job_priority_cache.find(s.job_id) == job_priority_cache.end())
+            {
+                auto job_opt = JobStore::GetInstance().Get(s.job_id);
+                job_priority_cache[s.job_id] = job_opt.has_value()
+                    ? job_opt->priority : 0;
+            }
+        }
+        std::sort(waiting_shards.begin(), waiting_shards.end(),
+                  [&job_priority_cache](const ShardRecord& a, const ShardRecord& b) {
+                      int pa = job_priority_cache[a.job_id];
+                      int pb = job_priority_cache[b.job_id];
+                      if (pa != pb)
+                          return pa > pb;  // 高优先级在前
+                      return a.created_at < b.created_at;  // 同优先级 FIFO
+                  });
+
+        // ── 4. 对每个 WAITING shard 分配 Worker ─────────────────────
+        // 本地槽位计数：防止同一轮内对同一 Worker 超额分配
+        // key = worker_id, value = 本回合已分配的 shard 数（从 0 累加）
+        std::unordered_map<std::string, int> round_assigned;
+
         for (auto& shard : waiting_shards)
         {
-            // 选择有可用槽位的 Worker
+            // 阶段 7：加权评分选择 Worker
+            // score = available_slots * 10 - cpu_usage * 0.5 - memory_usage * 0.2
+            // 空闲槽位越多、负载越低的 Worker 得分越高
             const WorkerInfo* best_worker = nullptr;
-            int best_slots = -1;
+            double best_score = -999.0;
 
             for (const auto& w : lw_resp.workers())
             {
-                int available = w.max_running_shards() - w.current_running_shards();
-                if (available > best_slots)
+                int already = round_assigned[w.worker_id()];  // 本回合已分配
+                int available = w.max_running_shards()
+                              - w.current_running_shards()
+                              - already;
+                if (available <= 0) continue;  // 无空槽位，跳过
+
+                double score = available * 10.0
+                             - w.cpu_usage() * 0.5
+                             - w.memory_usage() * 0.2;
+
+                if (score > best_score)
                 {
-                    best_slots = available;
+                    best_score = score;
                     best_worker = &w;
                 }
             }
 
-            if (best_worker == nullptr || best_slots <= 0)
+            if (best_worker == nullptr)
             {
-                LOG_WARN("SchedulingLoop: no worker with available slots for shard %s",
-                         shard.shard_id.c_str());
+                LOG_WARN("SchedulingLoop: no worker with available slots for shard %s "
+                         "(queue=%zu)",
+                         shard.shard_id.c_str(), waiting_shards.size());
                 continue;  // 下一轮再试
             }
+
+            // 本地槽位计数 +1
+            round_assigned[best_worker->worker_id()]++;
 
             // ── 4. 直连 Worker 的 AssignShard ─────────────────────────
             MprpcChannel worker_channel(best_worker->ip(),
@@ -848,6 +945,8 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
             si->set_output_path(shard.output_path);
             si->set_created_at(shard.created_at);
             si->set_retry_count(shard.retry_count);  // 透传 retry_count 给 Worker
+            si->set_target_resolution(shard.target_resolution);  // 透传转码参数
+            si->set_target_bitrate(shard.target_bitrate);
 
             AssignShardResponse as_resp;
             MprpcController as_ctrl;
@@ -878,8 +977,8 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                 ShardStore::GetInstance().Update(fresh.shard_id, fresh);
             }
 
-            // ── 6. 递减本地可用槽位（防止同一 Worker 超额分配） ───
-            --best_slots;
+            // ── 6. 本地槽位已在 round_assigned map 中追踪，无需额外递减 ──
+            ++shards_assigned;
 
             // ── 7. 更新 job 状态 → RUNNING（若是首次分配） ─────────────
             auto job_opt = JobStore::GetInstance().Get(shard.job_id);
@@ -913,12 +1012,39 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                 }
             }
 
-            LOG_INFO("SchedulingLoop: assigned shard %s to worker %s (%s:%d), slots_left=%d",
+            int remaining = best_worker->max_running_shards()
+                          - best_worker->current_running_shards()
+                          - round_assigned[best_worker->worker_id()];
+            LOG_INFO("SchedulingLoop: assigned shard %s to worker %s (%s:%d), "
+                     "score=%.1f, cpu=%d%%, mem=%d%%, slots_left=%d",
                      shard.shard_id.c_str(),
                      best_worker->worker_id().c_str(),
                      best_worker->ip().c_str(),
                      best_worker->port(),
-                     best_slots);
+                     best_score,
+                     best_worker->cpu_usage(),
+                     best_worker->memory_usage(),
+                     remaining);
+        }
+
+        // ── 阶段 7：Metrics 输出（每 5 轮 ≈ 10 秒） ──────────────────
+        if (metrics_round % 5 == 0)
+        {
+            // 聚合所有 ONLINE Worker 的运行中 shard 总数
+            int total_running = 0;
+            int total_max     = 0;
+            for (const auto& w : lw_resp.workers())
+            {
+                total_running += w.current_running_shards();
+                total_max     += w.max_running_shards();
+            }
+            LOG_INFO("[SchedulerMetrics] round=%lld | queue=%zu | running=%d/%d | "
+                     "workers=%d | assigned=%lld",
+                     (long long)metrics_round,
+                     waiting_shards.size(),
+                     total_running, total_max,
+                     lw_resp.workers_size(),
+                     (long long)shards_assigned);
         }
     }
 

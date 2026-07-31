@@ -7,6 +7,9 @@
 #include <unordered_map>
 #include <memory>
 #include <random>
+#include <fstream>
+#include <sstream>
+#include <sys/stat.h>
 #include "worker.pb.h"
 #include "result.pb.h"
 #include "mprpcapplication.h"
@@ -15,8 +18,13 @@
 #include "rpcprovider.h"
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
+#include "video_platform/ffmpeg_executor.h"
 
 using namespace video_platform;
+
+// 前向声明（阶段 7：CPU/内存采集函数，定义在 RunHeartbeatLoop 之前）
+static int CollectCpuUsage();
+static int CollectMemUsage();
 
 // ============================================================================
 // WorkerService — TranscodeWorker 端 RPC 接口（阶段 5：故障注入 + 重试验证）
@@ -131,9 +139,38 @@ public:
         std::string attempt_id = shard.shard_id() + "_attempt_"
             + std::to_string(shard.retry_count());
 
-        // 读取 mock 执行时长配置
+        // 读取 mock 执行时长配置（mock 模式用）
         int mock_execution_ms = MprpcApplication::GetConfig().LoadInt(
             "mock_execution_time_ms", 5000, 500, 120000);
+
+        // ── 按 executor_mode 选择执行器 ──────────────────────────
+        // "ffmpeg" = 真实 ffmpeg 转码（阶段 6）
+        // "mock" 或其他值 = sleep 模拟（阶段 4/5）
+        std::string executor_mode = MprpcApplication::GetConfig().Load("executor_mode");
+
+        // ── 阶段 7：Worker 过载保护 ────────────────────────────────
+        // Worker 负载过高时拒绝新 shard，由 Scheduler 在下一轮分配给其他 Worker
+        int current_cpu = CollectCpuUsage();
+        {
+            std::lock_guard<std::mutex> lock(mutex_);
+            int running = 0;
+            for (const auto& kv : running_shards_) {
+                if (!kv.second->cancelled) ++running;
+            }
+            int max_shards = MprpcApplication::GetConfig().LoadInt(
+                "max_running_shards", 2, 1, 1024);
+            if (running >= max_shards || current_cpu > 90)
+            {
+                LOG_WARN("WorkerService::AssignShard shard %s rejected: overloaded "
+                         "(running=%d/%d, cpu=%d%%)",
+                         shard.shard_id().c_str(), running, max_shards, current_cpu);
+                response->set_error_code(2);
+                response->set_error_msg("worker overloaded");
+                response->set_accepted(false);
+                done->Run();
+                return;
+            }
+        }
 
         std::shared_ptr<RunningShard> rs;
 
@@ -157,12 +194,21 @@ public:
             running_shards_[shard.shard_id()] = rs;
         }
 
-        // 锁外启动 mock 执行线程，避免与 CancelShard/CleanupShard 死锁
-        rs->executor_thread = std::thread(&WorkerServiceImpl::MockExecute,
-                                          this, rs, mock_execution_ms);
-
-        LOG_INFO("WorkerService::AssignShard shard=%s attempt=%s started (mock_exec=%dms)",
-                 shard.shard_id().c_str(), attempt_id.c_str(), mock_execution_ms);
+        // 锁外启动执行线程，避免与 CancelShard/CleanupShard 死锁
+        if (executor_mode == "ffmpeg")
+        {
+            rs->executor_thread = std::thread(&WorkerServiceImpl::FfmpegExecute,
+                                              this, rs);
+            LOG_INFO("WorkerService::AssignShard shard=%s attempt=%s started (ffmpeg mode)",
+                     shard.shard_id().c_str(), attempt_id.c_str());
+        }
+        else
+        {
+            rs->executor_thread = std::thread(&WorkerServiceImpl::MockExecute,
+                                              this, rs, mock_execution_ms);
+            LOG_INFO("WorkerService::AssignShard shard=%s attempt=%s started (mock_exec=%dms)",
+                     shard.shard_id().c_str(), attempt_id.c_str(), mock_execution_ms);
+        }
 
         response->set_error_code(0);
         response->set_error_msg("");
@@ -412,6 +458,257 @@ private:
         CleanupShard(shard_id);
     }
 
+    // ── FfmpegExecute：真实 FFmpeg 执行器（阶段 6） ──────────────────────
+
+    /// @brief FFmpeg 执行器：调用真实 ffmpeg 命令执行视频切片+转码
+    ///
+    /// 与 MockExecute 共用相同的进度上报/结果上报/cancel 检测架构。
+    /// 区别在于执行环节：不再 sleep，而是启动 ffmpeg 子进程，
+    /// 通过解析 ffmpeg stderr 的 time= 输出获取真实转码进度。
+    ///
+    /// 工作目录结构：
+    ///   {ffmpeg_work_dir}/{shard_id}/
+    ///     ├── slice_input.mp4    ← 切片结果（如果有切片步骤）
+    ///     └── transcode_out.mp4  ← 转码输出
+    ///
+    /// 子进程管理：
+    ///   使用 fork() + execvp() + pipe() 启动 ffmpeg，记录子进程 PID。
+    ///   进度回调中检测 rs->cancelled → kill(pid, SIGTERM) 终止子进程。
+    ///   父进程在 waitpid() 后获取退出码。
+    ///
+    /// @see FfmpegExecutor    封装 ffmpeg 命令行调用
+    /// @see MockExecute       对应的 mock 实现
+    /// @see CleanupShard      执行完成后清理追踪状态
+    void FfmpegExecute(std::shared_ptr<RunningShard> rs)
+    {
+        const std::string& shard_id = rs->info.shard_id();
+        const std::string& job_id   = rs->info.job_id();
+        std::string worker_id = MprpcApplication::GetConfig().Load("worker_id");
+
+        // 读取 FFmpeg 相关配置
+        std::string work_dir = MprpcApplication::GetConfig().Load("ffmpeg_work_dir");
+        if (work_dir.empty()) work_dir = "/tmp/transcode_worker";
+
+        LOG_INFO("FfmpegExecute: shard=%s started, work_dir=%s",
+                 shard_id.c_str(), work_dir.c_str());
+
+        // ── 1. 创建工作目录 ──────────────────────────────────────────
+        std::string shard_work_dir = work_dir + "/" + shard_id;
+        mkdir(shard_work_dir.c_str(), 0755);  // 忽略 EEXIST（目录已存在）
+
+        // 确定输入和输出路径
+        std::string input_path = rs->info.input_path();
+        std::string output_path = rs->info.output_path();
+        if (output_path.empty())
+        {
+            output_path = shard_work_dir + "/output.mp4";
+        }
+
+        int64_t start_ms = rs->info.start_ms();
+        int64_t duration_ms = rs->info.duration_ms();
+
+        LOG_INFO("FfmpegExecute: shard=%s input=%s, output=%s, start=%lldms, dur=%lldms",
+                 shard_id.c_str(), input_path.c_str(), output_path.c_str(),
+                 (long long)start_ms, (long long)duration_ms);
+
+        // ── 2. 转码（切片+转码合一，-ss/-t 直接传给 ffmpeg） ──────
+        // 转码参数从 ShardInfo 透传（阶段 6 遗留项 2），不再读本地配置
+        std::string target_resolution = rs->info.target_resolution();
+        int target_bitrate = rs->info.target_bitrate();
+
+        // ResultCollector stub（用于进度上报）
+        MprpcChannel rc_channel;
+        ResultCollectorService_Stub rc_stub(&rc_channel);
+
+        // 进度回调：更新 rs->progress 并上报 ResultCollector
+        auto progress_cb = [&](int progress) {
+            if (progress < 0) return;
+            if (progress > 100) progress = 100;
+
+            rs->progress = progress;
+
+            if (rs->cancelled)
+            {
+                LOG_INFO("FfmpegExecute: shard=%s cancelled at progress=%d%%",
+                         shard_id.c_str(), progress);
+                return;
+            }
+
+            ReportShardProgressRequest prog_req;
+            prog_req.set_shard_id(shard_id);
+            prog_req.set_job_id(job_id);
+            prog_req.set_worker_id(worker_id);
+            prog_req.set_attempt_id(rs->attempt_id);
+            prog_req.set_progress(progress);
+
+            ReportShardProgressResponse prog_resp;
+            MprpcController ctrl;
+            rc_stub.ReportShardProgress(&ctrl, &prog_req, &prog_resp, nullptr);
+
+            if (ctrl.Failed() || !prog_resp.recorded())
+            {
+                LOG_WARN("FfmpegExecute: shard=%s progress=%d%% report failed: %s",
+                         shard_id.c_str(), progress,
+                         ctrl.Failed() ? ctrl.ErrorText().c_str() : prog_resp.error_msg().c_str());
+            }
+        };
+
+        LOG_INFO("FfmpegExecute: transcoding shard=%s, input=%s, output=%s, "
+                 "start=%lldms, dur=%lldms, resolution=%s, bitrate=%d",
+                 shard_id.c_str(), input_path.c_str(), output_path.c_str(),
+                 (long long)start_ms, (long long)duration_ms,
+                 target_resolution.c_str(), target_bitrate);
+
+        auto ts_start = std::chrono::steady_clock::now();
+        // cancel 检查回调：检测 rs->cancelled 标志，触发时 fork+exec 子进程被 kill
+        auto cancel_cb = [&rs]() -> bool { return rs->cancelled.load(); };
+
+        auto transcode_result = FfmpegExecutor::Transcode(
+            input_path, output_path,
+            target_resolution, target_bitrate,
+            start_ms, duration_ms,
+            progress_cb, cancel_cb);
+        auto ts_end = std::chrono::steady_clock::now();
+        int64_t transcode_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+            ts_end - ts_start).count();
+
+        // ── 4. 处理 cancel 情况 ──────────────────────────────────────
+        if (rs->cancelled)
+        {
+            LOG_INFO("FfmpegExecute: shard=%s cancelled during transcode", shard_id.c_str());
+            CleanupShard(shard_id);
+            return;
+        }
+
+        // ── 4.5 截图：转码成功后截取视频中点帧（阶段 6 遗留项 5） ──
+        std::string screenshot_path;
+        if (transcode_result.success)
+        {
+            int64_t midpoint_ms = start_ms + duration_ms / 2;
+            screenshot_path = shard_work_dir + "/screenshot.jpg";
+            auto ss_result = FfmpegExecutor::Screenshot(input_path, midpoint_ms,
+                                                         screenshot_path);
+            if (ss_result.success)
+            {
+                LOG_INFO("FfmpegExecute: shard=%s screenshot saved to %s",
+                         shard_id.c_str(), screenshot_path.c_str());
+            }
+            else
+            {
+                LOG_WARN("FfmpegExecute: shard=%s screenshot failed: %s",
+                         shard_id.c_str(), ss_result.error_msg.c_str());
+                screenshot_path.clear();  // 失败时清空，不上报无效路径
+            }
+        }
+
+        // ── 5. 上报最终结果（带重试，与 MockExecute 相同逻辑） ────────
+        bool is_success = transcode_result.success;
+        int exit_code = transcode_result.exit_code;
+        std::string error_msg = transcode_result.error_msg;
+
+        rs->progress = 100;
+        int64_t total_elapsed = transcode_elapsed;
+
+        bool result_reported = false;
+        for (int retry = 0; retry < 3 && !result_reported; ++retry)
+        {
+            if (retry > 0)
+                std::this_thread::sleep_for(std::chrono::seconds(1));
+
+            ReportShardResultRequest result_req;
+            result_req.set_shard_id(shard_id);
+            result_req.set_job_id(job_id);
+            result_req.set_worker_id(worker_id);
+            result_req.set_attempt_id(rs->attempt_id);
+            result_req.set_is_success(is_success);
+            result_req.set_exit_code(exit_code);
+            result_req.set_error_msg(error_msg);
+            result_req.set_output_path(output_path);
+            result_req.set_elapsed_ms(total_elapsed);
+            result_req.set_shard_index(rs->info.shard_index());
+            result_req.set_screenshot_path(screenshot_path);
+
+            ReportShardResultResponse result_resp;
+            MprpcController ctrl;
+            rc_stub.ReportShardResult(&ctrl, &result_req, &result_resp, nullptr);
+
+            if (!ctrl.Failed() && result_resp.accepted())
+            {
+                LOG_INFO("FfmpegExecute: shard=%s %s (exit=%d, elapsed=%lldms, attempt %d)",
+                         shard_id.c_str(),
+                         is_success ? "SUCCESS" : "FAILED",
+                         exit_code,
+                         (long long)total_elapsed,
+                         retry + 1);
+                result_reported = true;
+            }
+            else
+            {
+                LOG_ERROR("FfmpegExecute: shard=%s result report failed (attempt %d/3): %s",
+                          shard_id.c_str(), retry + 1,
+                          ctrl.Failed() ? ctrl.ErrorText().c_str()
+                                        : result_resp.error_msg().c_str());
+            }
+        }
+
+        if (!result_reported)
+        {
+            LOG_ERROR("FfmpegExecute: shard=%s result report FAILED after 3 retries, "
+                      "keeping in running_shards for heartbeat-based recovery",
+                      shard_id.c_str());
+            return;
+        }
+
+        CleanupShard(shard_id);
+    }
+
+    /// @brief 辅助方法：上报 shard 执行结果
+    ///
+    /// 封装 ReportShardResult RPC 调用，供 FfmpegExecute 在切片失败时直接上报。
+    /// 单次调用，不带重试（调用方负责重试逻辑）。
+    void ReportShardResult(const std::string& shard_id,
+                           const std::string& job_id,
+                           const std::string& worker_id,
+                           const std::string& attempt_id,
+                           bool is_success,
+                           int exit_code,
+                           const std::string& error_msg,
+                           const std::string& output_path,
+                           int64_t elapsed_ms,
+                           int32_t shard_index)
+    {
+        MprpcChannel rc_channel;
+        ResultCollectorService_Stub rc_stub(&rc_channel);
+
+        ReportShardResultRequest result_req;
+        result_req.set_shard_id(shard_id);
+        result_req.set_job_id(job_id);
+        result_req.set_worker_id(worker_id);
+        result_req.set_attempt_id(attempt_id);
+        result_req.set_is_success(is_success);
+        result_req.set_exit_code(exit_code);
+        result_req.set_error_msg(error_msg);
+        result_req.set_output_path(output_path);
+        result_req.set_elapsed_ms(elapsed_ms);
+        result_req.set_shard_index(shard_index);
+
+        ReportShardResultResponse result_resp;
+        MprpcController ctrl;
+        rc_stub.ReportShardResult(&ctrl, &result_req, &result_resp, nullptr);
+
+        if (!ctrl.Failed() && result_resp.accepted())
+        {
+            LOG_INFO("ReportShardResult: shard=%s %s",
+                     shard_id.c_str(), is_success ? "SUCCESS" : "FAILED");
+        }
+        else
+        {
+            LOG_ERROR("ReportShardResult: shard=%s report FAILED: %s",
+                      shard_id.c_str(),
+                      ctrl.Failed() ? ctrl.ErrorText().c_str() : result_resp.error_msg().c_str());
+        }
+    }
+
     /// @brief 从 running_shards_ map 中移除已完成的 shard
     ///
     /// ⚠️ 线程安全要点：
@@ -442,6 +739,80 @@ private:
     mutable std::mutex mutex_;
     std::unordered_map<std::string, std::shared_ptr<RunningShard>> running_shards_;
 };
+
+// ============================================================================
+// 系统资源采集（阶段 7：资源感知调度）
+// ============================================================================
+
+/// @brief 从 /proc/stat 读取 CPU 时间并计算使用率
+///
+/// 两次调用间计算差值百分比。首次调用返回 0（需要两个采样点）。
+/// 线程安全：使用 thread_local 保存上次采样值，每个心跳线程独立采集。
+///
+/// @return CPU 使用率 0-100，首次调用返回 0
+static int CollectCpuUsage()
+{
+    thread_local uint64_t prev_total = 0;
+    thread_local uint64_t prev_idle  = 0;
+
+    std::ifstream stat_file("/proc/stat");
+    if (!stat_file.is_open()) return 0;
+
+    std::string line;
+    std::getline(stat_file, line);  // 第一行: cpu  user nice system idle iowait irq softirq steal ...
+
+    std::istringstream iss(line);
+    std::string cpu_label;
+    uint64_t user, nice, system, idle, iowait, irq, softirq, steal;
+    iss >> cpu_label >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal;
+
+    uint64_t total = user + nice + system + idle + iowait + irq + softirq + steal;
+    uint64_t idle_sum = idle + iowait;
+
+    int usage = 0;
+    if (prev_total > 0)
+    {
+        uint64_t total_delta = total - prev_total;
+        uint64_t idle_delta  = idle_sum - prev_idle;
+        if (total_delta > 0)
+            usage = static_cast<int>((total_delta - idle_delta) * 100 / total_delta);
+    }
+
+    prev_total = total;
+    prev_idle  = idle_sum;
+    return usage;
+}
+
+/// @brief 从 /proc/meminfo 读取内存使用率
+///
+/// @return 内存使用率 0-100
+static int CollectMemUsage()
+{
+    std::ifstream mem_file("/proc/meminfo");
+    if (!mem_file.is_open()) return 0;
+
+    uint64_t mem_total = 0, mem_available = 0;
+    std::string line;
+    while (std::getline(mem_file, line))
+    {
+        if (line.find("MemTotal:") == 0)
+        {
+            std::istringstream iss(line);
+            std::string label;
+            iss >> label >> mem_total;  // 单位 kB
+        }
+        else if (line.find("MemAvailable:") == 0)
+        {
+            std::istringstream iss(line);
+            std::string label;
+            iss >> label >> mem_available;
+        }
+        if (mem_total > 0 && mem_available > 0) break;
+    }
+
+    if (mem_total == 0) return 0;
+    return static_cast<int>((mem_total - mem_available) * 100 / mem_total);
+}
 
 // ============================================================================
 // RunHeartbeatLoop — Worker 注册与心跳后台线程
@@ -545,12 +916,14 @@ static void RunHeartbeatLoop(std::string worker_id,
         if (stop_flag) break;
 
         int running = worker_service ? worker_service->RunningShardCount() : 0;
+        int cpu    = CollectCpuUsage();
+        int mem    = CollectMemUsage();
 
         HeartbeatRequest hb_req;
         auto* load = hb_req.mutable_load();
         load->set_worker_id(worker_id);
-        load->set_cpu_usage(0);          // 阶段 4 暂未接入真实 CPU 采集
-        load->set_memory_usage(0);
+        load->set_cpu_usage(cpu);        // 阶段 7：真实 CPU 采集
+        load->set_memory_usage(mem);     // 阶段 7：真实内存采集
         load->set_running_shards(running);
         load->set_finished_shards(0);
         load->set_failed_shards(0);
@@ -647,6 +1020,16 @@ int main(int argc, char** argv)
 
     LOG_INFO("TranscodeWorker config: worker_id=%s, cores=%d, mem=%dMB, max_shards=%d",
              worker_id.c_str(), cpu_cores, memory_mb, max_running_shards);
+
+    // ── FFmpeg 启动检查（阶段 6 遗留项 4） ─────────────────────────
+    std::string executor_mode = config.Load("executor_mode");
+    if (executor_mode == "ffmpeg" && !FfmpegExecutor::CheckAvailable())
+    {
+        LOG_ERROR("executor_mode=ffmpeg but ffmpeg/ffprobe not found in PATH, "
+                  "refusing to start. Install ffmpeg or set executor_mode=mock.");
+        wevix_muduo::AsyncLogger::GetInstance().stop();
+        return EXIT_FAILURE;
+    }
 
     // ── 创建 WorkerServiceImpl ──────────────────────────────────────
     auto* worker_service = new WorkerServiceImpl();

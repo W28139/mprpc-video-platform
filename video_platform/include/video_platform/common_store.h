@@ -109,6 +109,9 @@ struct ShardRecord {
     int32_t     max_retry = 3;         ///< 最大重试次数（默认 3）
     std::string input_path;            ///< 输入文件路径（通常与 job 相同或切片路径）
     std::string output_path;           ///< 输出文件路径
+    std::string screenshot_path;       ///< 截图文件路径（转码成功后自动截取）
+    std::string target_resolution;     ///< 目标分辨率（如 "1280x720"），从 JobInfo 透传
+    int32_t     target_bitrate = 0;    ///< 目标码率（kbps），0=保持原码率，从 JobInfo 透传
     int64_t     created_at = 0;        ///< 创建时间戳（毫秒）
     int64_t     updated_at = 0;        ///< 最后更新时间戳（毫秒）
 };
@@ -182,6 +185,8 @@ struct WorkerRecord {
     int32_t     gpu_count = 0;           ///< GPU 数量，0 表示无 GPU
     int32_t     current_running_shards = 0; ///< 当前正在执行的 shard 数
     int32_t     max_running_shards = 0;     ///< Worker 允许的最大并发 shard 数
+    int32_t     cpu_usage = 0;              ///< CPU 使用率（0-100 百分比），心跳上报
+    int32_t     memory_usage = 0;           ///< 内存使用率（0-100 百分比），心跳上报
     int32_t     status = 0;              ///< 当前状态，对应 WorkerStatus 枚举值
     int64_t     last_heartbeat = 0;      ///< 最后一次心跳时间戳（毫秒）
 };
@@ -209,10 +214,11 @@ public:
 
     // ── 原子方法（在 unique_lock 内完成读-改-写，消除 TOCTOU 竞争） ──
 
-    /// @brief 原子更新心跳时间戳和运行中 shard 数。
-    /// 在 unique_lock 内完成：查找 → 更新 last_heartbeat/status/running_shards。
+    /// @brief 原子更新心跳时间戳、运行中 shard 数、CPU/内存使用率。
+    /// 在 unique_lock 内完成：查找 → 更新 last_heartbeat/status/running_shards/cpu/mem。
     /// @return true 表示 worker_id 存在且已更新，false 表示未找到。
-    bool UpdateHeartbeat(const std::string& worker_id, int32_t running_shards);
+    bool UpdateHeartbeat(const std::string& worker_id, int32_t running_shards,
+                         int32_t cpu_usage = 0, int32_t memory_usage = 0);
 
     /// @brief 原子检查心跳超时并标记 OFFLINE。
     /// 在 unique_lock 内完成：查找 → 检查 status==ONLINE → 检查 now-last_heartbeat>timeout

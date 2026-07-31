@@ -62,6 +62,7 @@ PROTOBUF_CONSTEXPR ReportShardResultRequest::ReportShardResultRequest(
   , /*decltype(_impl_.attempt_id_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.error_msg_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.output_path_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+  , /*decltype(_impl_.screenshot_path_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.is_success_)*/false
   , /*decltype(_impl_.exit_code_)*/0
   , /*decltype(_impl_.elapsed_ms_)*/int64_t{0}
@@ -135,6 +136,7 @@ const uint32_t TableStruct_result_2eproto::offsets[] PROTOBUF_SECTION_VARIABLE(p
   PROTOBUF_FIELD_OFFSET(::video_platform::ReportShardResultRequest, _impl_.output_path_),
   PROTOBUF_FIELD_OFFSET(::video_platform::ReportShardResultRequest, _impl_.elapsed_ms_),
   PROTOBUF_FIELD_OFFSET(::video_platform::ReportShardResultRequest, _impl_.shard_index_),
+  PROTOBUF_FIELD_OFFSET(::video_platform::ReportShardResultRequest, _impl_.screenshot_path_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::video_platform::ReportShardResultResponse, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -150,7 +152,7 @@ static const ::_pbi::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protode
   { 0, -1, -1, sizeof(::video_platform::ReportShardProgressRequest)},
   { 12, -1, -1, sizeof(::video_platform::ReportShardProgressResponse)},
   { 21, -1, -1, sizeof(::video_platform::ReportShardResultRequest)},
-  { 37, -1, -1, sizeof(::video_platform::ReportShardResultResponse)},
+  { 38, -1, -1, sizeof(::video_platform::ReportShardResultResponse)},
 };
 
 static const ::_pb::Message* const file_default_instances[] = {
@@ -167,29 +169,29 @@ const char descriptor_table_protodef_result_2eproto[] PROTOBUF_SECTION_VARIABLE(
   "id\030\003 \001(\t\022\022\n\nattempt_id\030\004 \001(\t\022\020\n\010progress"
   "\030\005 \001(\005\022\017\n\007message\030\006 \001(\t\"V\n\033ReportShardPr"
   "ogressResponse\022\022\n\nerror_code\030\001 \001(\005\022\021\n\ter"
-  "ror_msg\030\002 \001(\t\022\020\n\010recorded\030\003 \001(\010\"\333\001\n\030Repo"
+  "ror_msg\030\002 \001(\t\022\020\n\010recorded\030\003 \001(\010\"\364\001\n\030Repo"
   "rtShardResultRequest\022\020\n\010shard_id\030\001 \001(\t\022\016"
   "\n\006job_id\030\002 \001(\t\022\021\n\tworker_id\030\003 \001(\t\022\022\n\natt"
   "empt_id\030\004 \001(\t\022\022\n\nis_success\030\005 \001(\010\022\021\n\texi"
   "t_code\030\006 \001(\005\022\021\n\terror_msg\030\007 \001(\t\022\023\n\013outpu"
   "t_path\030\010 \001(\t\022\022\n\nelapsed_ms\030\t \001(\003\022\023\n\013shar"
-  "d_index\030\n \001(\005\"f\n\031ReportShardResultRespon"
-  "se\022\022\n\nerror_code\030\001 \001(\005\022\021\n\terror_msg\030\002 \001("
-  "\t\022\020\n\010accepted\030\003 \001(\010\022\020\n\010job_done\030\004 \001(\0102\362\001"
-  "\n\026ResultCollectorService\022n\n\023ReportShardP"
-  "rogress\022*.video_platform.ReportShardProg"
-  "ressRequest\032+.video_platform.ReportShard"
-  "ProgressResponse\022h\n\021ReportShardResult\022(."
-  "video_platform.ReportShardResultRequest\032"
-  ").video_platform.ReportShardResultRespon"
-  "seB\003\200\001\001b\006proto3"
+  "d_index\030\n \001(\005\022\027\n\017screenshot_path\030\013 \001(\t\"f"
+  "\n\031ReportShardResultResponse\022\022\n\nerror_cod"
+  "e\030\001 \001(\005\022\021\n\terror_msg\030\002 \001(\t\022\020\n\010accepted\030\003"
+  " \001(\010\022\020\n\010job_done\030\004 \001(\0102\362\001\n\026ResultCollect"
+  "orService\022n\n\023ReportShardProgress\022*.video"
+  "_platform.ReportShardProgressRequest\032+.v"
+  "ideo_platform.ReportShardProgressRespons"
+  "e\022h\n\021ReportShardResult\022(.video_platform."
+  "ReportShardResultRequest\032).video_platfor"
+  "m.ReportShardResultResponseB\003\200\001\001b\006proto3"
   ;
 static const ::_pbi::DescriptorTable* const descriptor_table_result_2eproto_deps[1] = {
   &::descriptor_table_common_2eproto,
 };
 static ::_pbi::once_flag descriptor_table_result_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_result_2eproto = {
-    false, false, 855, descriptor_table_protodef_result_2eproto,
+    false, false, 880, descriptor_table_protodef_result_2eproto,
     "result.proto",
     &descriptor_table_result_2eproto_once, descriptor_table_result_2eproto_deps, 1, 4,
     schemas, file_default_instances, TableStruct_result_2eproto::offsets,
@@ -919,6 +921,7 @@ ReportShardResultRequest::ReportShardResultRequest(const ReportShardResultReques
     , decltype(_impl_.attempt_id_){}
     , decltype(_impl_.error_msg_){}
     , decltype(_impl_.output_path_){}
+    , decltype(_impl_.screenshot_path_){}
     , decltype(_impl_.is_success_){}
     , decltype(_impl_.exit_code_){}
     , decltype(_impl_.elapsed_ms_){}
@@ -974,6 +977,14 @@ ReportShardResultRequest::ReportShardResultRequest(const ReportShardResultReques
     _this->_impl_.output_path_.Set(from._internal_output_path(), 
       _this->GetArenaForAllocation());
   }
+  _impl_.screenshot_path_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.screenshot_path_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_screenshot_path().empty()) {
+    _this->_impl_.screenshot_path_.Set(from._internal_screenshot_path(), 
+      _this->GetArenaForAllocation());
+  }
   ::memcpy(&_impl_.is_success_, &from._impl_.is_success_,
     static_cast<size_t>(reinterpret_cast<char*>(&_impl_.shard_index_) -
     reinterpret_cast<char*>(&_impl_.is_success_)) + sizeof(_impl_.shard_index_));
@@ -991,6 +1002,7 @@ inline void ReportShardResultRequest::SharedCtor(
     , decltype(_impl_.attempt_id_){}
     , decltype(_impl_.error_msg_){}
     , decltype(_impl_.output_path_){}
+    , decltype(_impl_.screenshot_path_){}
     , decltype(_impl_.is_success_){false}
     , decltype(_impl_.exit_code_){0}
     , decltype(_impl_.elapsed_ms_){int64_t{0}}
@@ -1021,6 +1033,10 @@ inline void ReportShardResultRequest::SharedCtor(
   #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
     _impl_.output_path_.Set("", GetArenaForAllocation());
   #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  _impl_.screenshot_path_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.screenshot_path_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
 }
 
 ReportShardResultRequest::~ReportShardResultRequest() {
@@ -1040,6 +1056,7 @@ inline void ReportShardResultRequest::SharedDtor() {
   _impl_.attempt_id_.Destroy();
   _impl_.error_msg_.Destroy();
   _impl_.output_path_.Destroy();
+  _impl_.screenshot_path_.Destroy();
 }
 
 void ReportShardResultRequest::SetCachedSize(int size) const {
@@ -1058,6 +1075,7 @@ void ReportShardResultRequest::Clear() {
   _impl_.attempt_id_.ClearToEmpty();
   _impl_.error_msg_.ClearToEmpty();
   _impl_.output_path_.ClearToEmpty();
+  _impl_.screenshot_path_.ClearToEmpty();
   ::memset(&_impl_.is_success_, 0, static_cast<size_t>(
       reinterpret_cast<char*>(&_impl_.shard_index_) -
       reinterpret_cast<char*>(&_impl_.is_success_)) + sizeof(_impl_.shard_index_));
@@ -1159,6 +1177,16 @@ const char* ReportShardResultRequest::_InternalParse(const char* ptr, ::_pbi::Pa
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 80)) {
           _impl_.shard_index_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
+        } else
+          goto handle_unusual;
+        continue;
+      // string screenshot_path = 11;
+      case 11:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 90)) {
+          auto str = _internal_mutable_screenshot_path();
+          ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+          CHK_(::_pbi::VerifyUTF8(str, "video_platform.ReportShardResultRequest.screenshot_path"));
         } else
           goto handle_unusual;
         continue;
@@ -1275,6 +1303,16 @@ uint8_t* ReportShardResultRequest::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt32ToArray(10, this->_internal_shard_index(), target);
   }
 
+  // string screenshot_path = 11;
+  if (!this->_internal_screenshot_path().empty()) {
+    ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::VerifyUtf8String(
+      this->_internal_screenshot_path().data(), static_cast<int>(this->_internal_screenshot_path().length()),
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::SERIALIZE,
+      "video_platform.ReportShardResultRequest.screenshot_path");
+    target = stream->WriteStringMaybeAliased(
+        11, this->_internal_screenshot_path(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -1333,6 +1371,13 @@ size_t ReportShardResultRequest::ByteSizeLong() const {
         this->_internal_output_path());
   }
 
+  // string screenshot_path = 11;
+  if (!this->_internal_screenshot_path().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::StringSize(
+        this->_internal_screenshot_path());
+  }
+
   // bool is_success = 5;
   if (this->_internal_is_success() != 0) {
     total_size += 1 + 1;
@@ -1389,6 +1434,9 @@ void ReportShardResultRequest::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_ms
   if (!from._internal_output_path().empty()) {
     _this->_internal_set_output_path(from._internal_output_path());
   }
+  if (!from._internal_screenshot_path().empty()) {
+    _this->_internal_set_screenshot_path(from._internal_screenshot_path());
+  }
   if (from._internal_is_success() != 0) {
     _this->_internal_set_is_success(from._internal_is_success());
   }
@@ -1443,6 +1491,10 @@ void ReportShardResultRequest::InternalSwap(ReportShardResultRequest* other) {
   ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
       &_impl_.output_path_, lhs_arena,
       &other->_impl_.output_path_, rhs_arena
+  );
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &_impl_.screenshot_path_, lhs_arena,
+      &other->_impl_.screenshot_path_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
       PROTOBUF_FIELD_OFFSET(ReportShardResultRequest, _impl_.shard_index_)

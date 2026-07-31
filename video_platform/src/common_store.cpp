@@ -285,13 +285,16 @@ size_t WorkerStore::Count() const
 
 // ── 原子方法（在 unique_lock 内完成读-改-写） ──
 
-bool WorkerStore::UpdateHeartbeat(const std::string& worker_id, int32_t running_shards)
+bool WorkerStore::UpdateHeartbeat(const std::string& worker_id, int32_t running_shards,
+                                   int32_t cpu_usage, int32_t memory_usage)
 {
     std::unique_lock lock(mutex_);
     auto it = workers_.find(worker_id);
     if (it == workers_.end()) return false;
 
     it->second.current_running_shards = running_shards;
+    it->second.cpu_usage              = cpu_usage;
+    it->second.memory_usage           = memory_usage;
     it->second.last_heartbeat         = NowMs();
     it->second.status                 = static_cast<int32_t>(WorkerStatus::WORKER_ONLINE);
     return true;

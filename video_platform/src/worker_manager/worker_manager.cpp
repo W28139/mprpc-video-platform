@@ -86,9 +86,10 @@ public:
                  load.memory_usage(),
                  load.running_shards());
 
-        // 原子更新：在 unique_lock 内完成 查找→更新 heartbeat/status/running_shards
+        // 原子更新：在 unique_lock 内完成 查找→更新 heartbeat/status/running_shards/cpu/mem
         bool alive = WorkerStore::GetInstance().UpdateHeartbeat(
-            load.worker_id(), load.running_shards());
+            load.worker_id(), load.running_shards(),
+            load.cpu_usage(), load.memory_usage());
 
         response->set_error_code(0);
         response->set_error_msg("");
@@ -130,6 +131,8 @@ public:
             wi->set_max_running_shards(w.max_running_shards);
             wi->set_status(static_cast<WorkerStatus>(w.status));
             wi->set_last_heartbeat(w.last_heartbeat);
+            wi->set_cpu_usage(w.cpu_usage);
+            wi->set_memory_usage(w.memory_usage);
         }
 
         done->Run();

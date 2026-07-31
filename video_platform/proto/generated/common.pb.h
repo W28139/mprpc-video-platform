@@ -608,6 +608,7 @@ class ShardInfo final :
     kAttemptIdFieldNumber = 8,
     kInputPathFieldNumber = 11,
     kOutputPathFieldNumber = 12,
+    kTargetResolutionFieldNumber = 15,
     kStartMsFieldNumber = 4,
     kShardIndexFieldNumber = 3,
     kStatusFieldNumber = 6,
@@ -616,6 +617,7 @@ class ShardInfo final :
     kMaxRetryFieldNumber = 10,
     kCreatedAtFieldNumber = 13,
     kUpdatedAtFieldNumber = 14,
+    kTargetBitrateFieldNumber = 16,
   };
   // string shard_id = 1;
   void clear_shard_id();
@@ -701,6 +703,20 @@ class ShardInfo final :
   std::string* _internal_mutable_output_path();
   public:
 
+  // string target_resolution = 15;
+  void clear_target_resolution();
+  const std::string& target_resolution() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_target_resolution(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_target_resolution();
+  PROTOBUF_NODISCARD std::string* release_target_resolution();
+  void set_allocated_target_resolution(std::string* target_resolution);
+  private:
+  const std::string& _internal_target_resolution() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_target_resolution(const std::string& value);
+  std::string* _internal_mutable_target_resolution();
+  public:
+
   // int64 start_ms = 4;
   void clear_start_ms();
   int64_t start_ms() const;
@@ -773,6 +789,15 @@ class ShardInfo final :
   void _internal_set_updated_at(int64_t value);
   public:
 
+  // int32 target_bitrate = 16;
+  void clear_target_bitrate();
+  int32_t target_bitrate() const;
+  void set_target_bitrate(int32_t value);
+  private:
+  int32_t _internal_target_bitrate() const;
+  void _internal_set_target_bitrate(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:video_platform.ShardInfo)
  private:
   class _Internal;
@@ -787,6 +812,7 @@ class ShardInfo final :
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr attempt_id_;
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr input_path_;
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr output_path_;
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr target_resolution_;
     int64_t start_ms_;
     int32_t shard_index_;
     int status_;
@@ -795,6 +821,7 @@ class ShardInfo final :
     int32_t max_retry_;
     int64_t created_at_;
     int64_t updated_at_;
+    int32_t target_bitrate_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -933,6 +960,8 @@ class WorkerInfo final :
     kMaxRunningShardsFieldNumber = 8,
     kLastHeartbeatFieldNumber = 10,
     kStatusFieldNumber = 9,
+    kCpuUsageFieldNumber = 11,
+    kMemoryUsageFieldNumber = 12,
   };
   // string worker_id = 1;
   void clear_worker_id();
@@ -1034,6 +1063,24 @@ class WorkerInfo final :
   void _internal_set_status(::video_platform::WorkerStatus value);
   public:
 
+  // int32 cpu_usage = 11;
+  void clear_cpu_usage();
+  int32_t cpu_usage() const;
+  void set_cpu_usage(int32_t value);
+  private:
+  int32_t _internal_cpu_usage() const;
+  void _internal_set_cpu_usage(int32_t value);
+  public:
+
+  // int32 memory_usage = 12;
+  void clear_memory_usage();
+  int32_t memory_usage() const;
+  void set_memory_usage(int32_t value);
+  private:
+  int32_t _internal_memory_usage() const;
+  void _internal_set_memory_usage(int32_t value);
+  public:
+
   // @@protoc_insertion_point(class_scope:video_platform.WorkerInfo)
  private:
   class _Internal;
@@ -1052,6 +1099,8 @@ class WorkerInfo final :
     int32_t max_running_shards_;
     int64_t last_heartbeat_;
     int status_;
+    int32_t cpu_usage_;
+    int32_t memory_usage_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -2211,6 +2260,76 @@ inline void ShardInfo::set_updated_at(int64_t value) {
   // @@protoc_insertion_point(field_set:video_platform.ShardInfo.updated_at)
 }
 
+// string target_resolution = 15;
+inline void ShardInfo::clear_target_resolution() {
+  _impl_.target_resolution_.ClearToEmpty();
+}
+inline const std::string& ShardInfo::target_resolution() const {
+  // @@protoc_insertion_point(field_get:video_platform.ShardInfo.target_resolution)
+  return _internal_target_resolution();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void ShardInfo::set_target_resolution(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.target_resolution_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:video_platform.ShardInfo.target_resolution)
+}
+inline std::string* ShardInfo::mutable_target_resolution() {
+  std::string* _s = _internal_mutable_target_resolution();
+  // @@protoc_insertion_point(field_mutable:video_platform.ShardInfo.target_resolution)
+  return _s;
+}
+inline const std::string& ShardInfo::_internal_target_resolution() const {
+  return _impl_.target_resolution_.Get();
+}
+inline void ShardInfo::_internal_set_target_resolution(const std::string& value) {
+  
+  _impl_.target_resolution_.Set(value, GetArenaForAllocation());
+}
+inline std::string* ShardInfo::_internal_mutable_target_resolution() {
+  
+  return _impl_.target_resolution_.Mutable(GetArenaForAllocation());
+}
+inline std::string* ShardInfo::release_target_resolution() {
+  // @@protoc_insertion_point(field_release:video_platform.ShardInfo.target_resolution)
+  return _impl_.target_resolution_.Release();
+}
+inline void ShardInfo::set_allocated_target_resolution(std::string* target_resolution) {
+  if (target_resolution != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.target_resolution_.SetAllocated(target_resolution, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.target_resolution_.IsDefault()) {
+    _impl_.target_resolution_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:video_platform.ShardInfo.target_resolution)
+}
+
+// int32 target_bitrate = 16;
+inline void ShardInfo::clear_target_bitrate() {
+  _impl_.target_bitrate_ = 0;
+}
+inline int32_t ShardInfo::_internal_target_bitrate() const {
+  return _impl_.target_bitrate_;
+}
+inline int32_t ShardInfo::target_bitrate() const {
+  // @@protoc_insertion_point(field_get:video_platform.ShardInfo.target_bitrate)
+  return _internal_target_bitrate();
+}
+inline void ShardInfo::_internal_set_target_bitrate(int32_t value) {
+  
+  _impl_.target_bitrate_ = value;
+}
+inline void ShardInfo::set_target_bitrate(int32_t value) {
+  _internal_set_target_bitrate(value);
+  // @@protoc_insertion_point(field_set:video_platform.ShardInfo.target_bitrate)
+}
+
 // -------------------------------------------------------------------
 
 // WorkerInfo
@@ -2473,6 +2592,46 @@ inline void WorkerInfo::_internal_set_last_heartbeat(int64_t value) {
 inline void WorkerInfo::set_last_heartbeat(int64_t value) {
   _internal_set_last_heartbeat(value);
   // @@protoc_insertion_point(field_set:video_platform.WorkerInfo.last_heartbeat)
+}
+
+// int32 cpu_usage = 11;
+inline void WorkerInfo::clear_cpu_usage() {
+  _impl_.cpu_usage_ = 0;
+}
+inline int32_t WorkerInfo::_internal_cpu_usage() const {
+  return _impl_.cpu_usage_;
+}
+inline int32_t WorkerInfo::cpu_usage() const {
+  // @@protoc_insertion_point(field_get:video_platform.WorkerInfo.cpu_usage)
+  return _internal_cpu_usage();
+}
+inline void WorkerInfo::_internal_set_cpu_usage(int32_t value) {
+  
+  _impl_.cpu_usage_ = value;
+}
+inline void WorkerInfo::set_cpu_usage(int32_t value) {
+  _internal_set_cpu_usage(value);
+  // @@protoc_insertion_point(field_set:video_platform.WorkerInfo.cpu_usage)
+}
+
+// int32 memory_usage = 12;
+inline void WorkerInfo::clear_memory_usage() {
+  _impl_.memory_usage_ = 0;
+}
+inline int32_t WorkerInfo::_internal_memory_usage() const {
+  return _impl_.memory_usage_;
+}
+inline int32_t WorkerInfo::memory_usage() const {
+  // @@protoc_insertion_point(field_get:video_platform.WorkerInfo.memory_usage)
+  return _internal_memory_usage();
+}
+inline void WorkerInfo::_internal_set_memory_usage(int32_t value) {
+  
+  _impl_.memory_usage_ = value;
+}
+inline void WorkerInfo::set_memory_usage(int32_t value) {
+  _internal_set_memory_usage(value);
+  // @@protoc_insertion_point(field_set:video_platform.WorkerInfo.memory_usage)
 }
 
 // -------------------------------------------------------------------

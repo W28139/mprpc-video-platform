@@ -600,6 +600,7 @@ class ReportShardResultRequest final :
     kAttemptIdFieldNumber = 4,
     kErrorMsgFieldNumber = 7,
     kOutputPathFieldNumber = 8,
+    kScreenshotPathFieldNumber = 11,
     kIsSuccessFieldNumber = 5,
     kExitCodeFieldNumber = 6,
     kElapsedMsFieldNumber = 9,
@@ -689,6 +690,20 @@ class ReportShardResultRequest final :
   std::string* _internal_mutable_output_path();
   public:
 
+  // string screenshot_path = 11;
+  void clear_screenshot_path();
+  const std::string& screenshot_path() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_screenshot_path(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_screenshot_path();
+  PROTOBUF_NODISCARD std::string* release_screenshot_path();
+  void set_allocated_screenshot_path(std::string* screenshot_path);
+  private:
+  const std::string& _internal_screenshot_path() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_screenshot_path(const std::string& value);
+  std::string* _internal_mutable_screenshot_path();
+  public:
+
   // bool is_success = 5;
   void clear_is_success();
   bool is_success() const;
@@ -739,6 +754,7 @@ class ReportShardResultRequest final :
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr attempt_id_;
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr error_msg_;
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr output_path_;
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr screenshot_path_;
     bool is_success_;
     int32_t exit_code_;
     int64_t elapsed_ms_;
@@ -1758,6 +1774,56 @@ inline void ReportShardResultRequest::_internal_set_shard_index(int32_t value) {
 inline void ReportShardResultRequest::set_shard_index(int32_t value) {
   _internal_set_shard_index(value);
   // @@protoc_insertion_point(field_set:video_platform.ReportShardResultRequest.shard_index)
+}
+
+// string screenshot_path = 11;
+inline void ReportShardResultRequest::clear_screenshot_path() {
+  _impl_.screenshot_path_.ClearToEmpty();
+}
+inline const std::string& ReportShardResultRequest::screenshot_path() const {
+  // @@protoc_insertion_point(field_get:video_platform.ReportShardResultRequest.screenshot_path)
+  return _internal_screenshot_path();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void ReportShardResultRequest::set_screenshot_path(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.screenshot_path_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:video_platform.ReportShardResultRequest.screenshot_path)
+}
+inline std::string* ReportShardResultRequest::mutable_screenshot_path() {
+  std::string* _s = _internal_mutable_screenshot_path();
+  // @@protoc_insertion_point(field_mutable:video_platform.ReportShardResultRequest.screenshot_path)
+  return _s;
+}
+inline const std::string& ReportShardResultRequest::_internal_screenshot_path() const {
+  return _impl_.screenshot_path_.Get();
+}
+inline void ReportShardResultRequest::_internal_set_screenshot_path(const std::string& value) {
+  
+  _impl_.screenshot_path_.Set(value, GetArenaForAllocation());
+}
+inline std::string* ReportShardResultRequest::_internal_mutable_screenshot_path() {
+  
+  return _impl_.screenshot_path_.Mutable(GetArenaForAllocation());
+}
+inline std::string* ReportShardResultRequest::release_screenshot_path() {
+  // @@protoc_insertion_point(field_release:video_platform.ReportShardResultRequest.screenshot_path)
+  return _impl_.screenshot_path_.Release();
+}
+inline void ReportShardResultRequest::set_allocated_screenshot_path(std::string* screenshot_path) {
+  if (screenshot_path != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.screenshot_path_.SetAllocated(screenshot_path, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.screenshot_path_.IsDefault()) {
+    _impl_.screenshot_path_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:video_platform.ReportShardResultRequest.screenshot_path)
 }
 
 // -------------------------------------------------------------------

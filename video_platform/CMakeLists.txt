@@ -30,9 +30,10 @@ add_custom_target(gen_protos
     COMMENT "Generating C++ from proto files..."
 )
 
-# ── 公共库：存储层 ──────────────────────────────────────────────────
+# ── 公共库：存储层 + FFmpeg 执行器 ──────────────────────────────
 add_library(video_common
     ${CMAKE_CURRENT_SOURCE_DIR}/src/common_store.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/transcode_worker/ffmpeg_executor.cpp
     ${PROTO_SRCS}
 )
 target_include_directories(video_common PUBLIC
