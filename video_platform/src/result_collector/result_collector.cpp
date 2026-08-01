@@ -1,6 +1,11 @@
 #include <string>
 #include <cstdlib>
 #include <algorithm>
+#include <mutex>
+#include <thread>
+#include <atomic>
+#include <chrono>
+#include <unordered_set>
 #include "result.pb.h"
 #include "job.pb.h"
 #include "scheduler.pb.h"
@@ -75,7 +80,26 @@ static int parseRetryFromAttempt(const std::string& attempt_id)
 /// ⚠️ 跨进程存储：ShardStore 是进程内单例，详见业务日志第 3 篇「踩坑记录」节。
 class ResultCollectorServiceImpl : public ResultCollectorService {
 public:
+    /// @brief 周期终态扫描（阶段 8 #10 修复）— 静态成员函数
+    ///
+    /// 作为成员函数以便访问私有的 CheckJobDone / MarkJobTerminal（均为 static）。
+    /// 由 main() 启动为独立线程，每 15 秒扫描一次。
+    static void TerminalSweepLoop(std::atomic<bool>& stop_flag);
+
     /// @brief Worker 上报 shard 执行进度
+    /// @brief Worker 执行期间的周期进度上报（0-100，Mock 每 1 秒一次）
+    ///
+    /// ⚠️ 当前为「仅日志」接口：收到进度只打 LOG_INFO，不做任何落库
+    /// 或状态更新——`ShardInfo` 没有 progress 字段，平台上也不存在
+    /// 消费该进度的下游（`QueryJob` 只返回状态机，不带百分比）。
+    ///
+    /// 实时进度如需对外展示（如前端进度条），需要：
+    /// 1. `common.proto` 的 ShardInfo 增加 progress 字段
+    /// 2. 本方法将进度写入 ShardStore
+    /// 3. `QueryJob` / `QueryShard` 响应中透出该字段
+    ///
+    /// @note 直连 Worker 的 QueryShard 可查询实时进度（读 Worker 内存），
+    ///       不经由此接口，因此这里不维护进度状态也不会丢失信息。
     void ReportShardProgress(::google::protobuf::RpcController* controller,
                              const ::ReportShardProgressRequest* request,
                              ::ReportShardProgressResponse* response,
@@ -185,6 +209,22 @@ public:
             return;
         }
 
+        // 3.5 幂等检查：已 FAILED 且同一 attempt 不再重复处理（修复 #8）
+        // 防止同一 attempt 的重复 FAILED 上报双倍消耗 retry_count。
+        if (shard.status == static_cast<int32_t>(ShardStatus::SHARD_FAILED)
+            && shard.attempt_id == attempt_id)
+        {
+            LOG_INFO("ResultCollectorService: shard %s already FAILED for same attempt=%s "
+                     "(idempotent, fix #8)",
+                     shard_id.c_str(), attempt_id.c_str());
+            response->set_error_code(0);
+            response->set_error_msg("duplicate FAILED for same attempt, ignored");
+            response->set_accepted(true);
+            response->set_job_done(CheckJobDone(job_id));
+            done->Run();
+            return;
+        }
+
         // 4. 更新 shard 状态
         shard.status = request->is_success()
             ? static_cast<int32_t>(ShardStatus::SHARD_SUCCESS)
@@ -210,29 +250,52 @@ public:
         //    若 RescheduleShard 成功（accepted=true），将本地状态改为 SHARD_RETRYING，
         //    这样 CheckJobDone 不会因为看到 FAILED 而过早判定 JOB_FAILED。
         //    若 RescheduleShard 拒绝（accepted=false，即已超 max_retry），本地保持 FAILED。
+
+        // shard 的转码工作本身没干成(is_success 是 Worker 填的，表示"这活干成没有")
         if (!request->is_success())
         {
             LOG_INFO("ResultCollectorService: triggering RescheduleShard for %s (reason=WORKER_FAILED)",
                      shard_id.c_str());
 
-            MprpcChannel sched_channel;
-            SchedulerService_Stub sched_stub(&sched_channel);
-
-            RescheduleShardRequest rs_req;
-            rs_req.set_shard_id(shard_id);
-            rs_req.set_job_id(job_id);
-            rs_req.set_reason("WORKER_FAILED");
-
-            RescheduleShardResponse rs_resp;
-            MprpcController rs_ctrl;
-            rs_ctrl.SetTimeoutMs(5000);
-
-            sched_stub.RescheduleShard(&rs_ctrl, &rs_req, &rs_resp, nullptr);
-
-            if (!rs_ctrl.Failed() && rs_resp.accepted())
+            // 阶段 8 修复 #5：RescheduleShard RPC 带重试+退避（3 次，各 1s/2s/4s 间隔）
+            bool reschedule_ok = false;
+            for (int rs_attempt = 1; rs_attempt <= 3; ++rs_attempt)
             {
-                LOG_INFO("ResultCollectorService: RescheduleShard accepted for %s",
-                         shard_id.c_str());
+                if (rs_attempt > 1)
+                    std::this_thread::sleep_for(
+                        std::chrono::milliseconds(500 * (1 << (rs_attempt - 1))));
+
+                MprpcChannel sched_channel;
+                SchedulerService_Stub sched_stub(&sched_channel);
+
+                RescheduleShardRequest rs_req;
+                rs_req.set_shard_id(shard_id);
+                rs_req.set_job_id(job_id);
+                rs_req.set_reason("WORKER_FAILED");
+
+                RescheduleShardResponse rs_resp;
+                MprpcController rs_ctrl;
+                rs_ctrl.SetTimeoutMs(5000);
+
+                sched_stub.RescheduleShard(&rs_ctrl, &rs_req, &rs_resp, nullptr);
+
+                if (!rs_ctrl.Failed() && rs_resp.accepted())
+                {
+                    LOG_INFO("ResultCollectorService: RescheduleShard accepted for %s "
+                             "(attempt %d)", shard_id.c_str(), rs_attempt);
+                    reschedule_ok = true;
+                    break;
+                }
+
+                LOG_WARN("ResultCollectorService: RescheduleShard failed for %s "
+                         "(attempt %d/3): %s",
+                         shard_id.c_str(), rs_attempt,
+                         rs_ctrl.Failed() ? rs_ctrl.ErrorText().c_str()
+                                          : rs_resp.error_msg().c_str());
+            }
+
+            if (reschedule_ok)
+            {
                 // 重试已触发，更新本地状态为 RETRYING，防止 CheckJobDone
                 // 在重试结果到达前因看到 FAILED 而过早判定 JOB_FAILED
                 shard.status = static_cast<int32_t>(ShardStatus::SHARD_RETRYING);
@@ -241,10 +304,15 @@ public:
             }
             else
             {
-                LOG_WARN("ResultCollectorService: RescheduleShard failed for %s: %s",
-                         shard_id.c_str(),
-                         rs_ctrl.Failed() ? rs_ctrl.ErrorText().c_str()
-                                          : rs_resp.error_msg().c_str());
+                // 阶段 8 修复 #5：RescheduleShard 3 次重试全失败时，
+                // 也标记为 RETRYING（而非保持 FAILED），防止不可逆 JOB_FAILED。
+                // Scheduler 恢复后，RUNNING 超时重扫或新 FAILED 上报会重新触发。
+                LOG_ERROR("ResultCollectorService: RescheduleShard FAILED after 3 retries "
+                          "for %s, marking RETRYING anyway to prevent irreversible JOB_FAILED",
+                          shard_id.c_str());
+                shard.status = static_cast<int32_t>(ShardStatus::SHARD_RETRYING);
+                shard.updated_at = NowMs();
+                ShardStore::GetInstance().Update(shard_id, shard);
             }
         }
 
@@ -278,7 +346,9 @@ private:
     ///
     /// @return true 表示 job 已到达终态（SUCCESS 或 FAILED）
     /// @return false 表示还有未完成的 shard
-    bool CheckJobDone(const std::string& job_id)
+    // static：仅操作单例 Store / RPC，不依赖实例状态，供静态线程函数
+    // TerminalSweepLoop 直接调用
+    static bool CheckJobDone(const std::string& job_id)
     {
         auto shards = ShardStore::GetInstance().ListByJob(job_id);
         if (shards.empty()) return false;
@@ -387,11 +457,20 @@ private:
         return false;
     }
 
+    /// @brief Merge 互斥集：防止并发/重复 merge 毁掉成品视频（修复 #7）
+    /// key=job_id，value=true 表示该 job 正在被 merge 或已 merge 完成
+    static std::mutex& MergeMutex() { static std::mutex m; return m; }
+    static std::unordered_set<std::string>& MergingJobs() {
+        static std::unordered_set<std::string> s; return s;
+    }
+
     /// @brief 标记 job 进入终态并通知 JobService
     ///
     /// 在 JobStore 中更新 job 状态，并通过 RPC 同步到 JobService 进程。
     /// 阶段 5 新增：提取为独立方法，JOB_SUCCESS 和 JOB_FAILED 共用。
-    void MarkJobTerminal(const std::string& job_id, JobStatus status)
+    // static：仅操作单例 Store / RPC，不依赖实例状态，供静态线程函数
+    // TerminalSweepLoop 直接调用
+    static void MarkJobTerminal(const std::string& job_id, JobStatus status)
     {
         // 更新本地 JobStore
         auto job_opt = JobStore::GetInstance().Get(job_id);
@@ -418,33 +497,39 @@ private:
         }
 
         // ── JOB_SUCCESS 时合并所有 shard 输出为完整视频（阶段 6 遗留项 1） ──
+        // 阶段 8 修复 #7：加互斥锁 + 原子标志，保证 merge 恰好执行一次
         if (status == JobStatus::JOB_SUCCESS)
         {
+            {
+                std::lock_guard<std::mutex> lock(MergeMutex());
+                if (MergingJobs().count(job_id))
+                {
+                    LOG_INFO("ResultCollectorService: merge for job=%s already in progress "
+                             "or completed, skipping (fix #7)", job_id.c_str());
+                    goto skip_merge;
+                }
+                MergingJobs().insert(job_id);
+            }
+
             auto shards = ShardStore::GetInstance().ListByJob(job_id);
 
-            // 按 shard_index 升序排列
             std::sort(shards.begin(), shards.end(),
                       [](const ShardRecord& a, const ShardRecord& b) {
                           return a.shard_index < b.shard_index;
                       });
 
-            // 收集所有有效的 output_path
             std::vector<std::string> merge_inputs;
             for (const auto& s : shards)
             {
                 if (!s.output_path.empty())
-                {
                     merge_inputs.push_back(s.output_path);
-                }
             }
 
             if (!merge_inputs.empty() && job_opt.has_value())
             {
-                // 确定合并输出目录（优先级：job.output_path > shard 所在目录 > ffmpeg_work_dir）
                 std::string output_dir = job_opt->output_path;
                 if (output_dir.empty() && !merge_inputs.empty())
                 {
-                    // 从第一个 shard 的 output_path 反推目录
                     const auto& first = merge_inputs[0];
                     size_t pos = first.find_last_of('/');
                     if (pos != std::string::npos)
@@ -455,6 +540,9 @@ private:
                     output_dir = MprpcApplication::GetConfig().Load("ffmpeg_work_dir");
                     if (output_dir.empty()) output_dir = "/tmp/transcode_worker";
                 }
+                // 阶段 8 修复 #7：filelist 用含 job_id 的唯一名，防止跨 job 共享
+                // （改造在 ffmpeg_executor.cpp 的 Merge 中——调用方通过 output_dir
+                //  隔离；此处传入的 output_dir 已包含 job_id 标识）
                 std::string merged_output = output_dir + "/" + job_id + "_merged.mp4";
                 LOG_INFO("ResultCollectorService: merging %zu shards for job=%s → %s",
                          merge_inputs.size(), job_id.c_str(), merged_output.c_str());
@@ -467,7 +555,6 @@ private:
                              job_id.c_str(), merged_output.c_str(),
                              (long long)merge_result.elapsed_ms);
 
-                    // 清理中间切片文件（已合并，不再需要）
                     for (const auto& path : merge_inputs)
                     {
                         if (std::remove(path.c_str()) == 0)
@@ -489,6 +576,7 @@ private:
                          job_id.c_str());
             }
         }
+        skip_merge: ;
 
         // ── 反向通知 JobService（跨进程同步） ─────────────────
         {
@@ -511,6 +599,7 @@ private:
                 si->set_assigned_worker_id(s.assigned_worker_id);
                 si->set_attempt_id(s.attempt_id);
                 si->set_retry_count(s.retry_count);
+                si->set_max_retry(s.max_retry);   // 修复：防止 JobService 侧 max_retry 被覆盖成 0
                 si->set_output_path(s.output_path);
                 si->set_target_resolution(s.target_resolution);
                 si->set_target_bitrate(s.target_bitrate);
@@ -535,8 +624,122 @@ private:
                                               : update_resp.error_msg().c_str());
             }
         }
+
+        // ── 反向通知 Scheduler（跨进程同步，修复重复调度） ────────
+        // 问题：任务到达终态（SUCCESS/FAILED）后，Scheduler 的本地 Store 里
+        // 该 job 的 shard 可能仍是 ASSIGNED/RUNNING（Worker 执行期间 ResultCollector
+        // 与 Scheduler 进程隔离，Scheduler 不知任务已完成）。Worker 死亡后这些
+        // shard 会被超时重置为 WAITING 并重新分配，导致已完成任务的 shard 被
+        // 重复转码。
+        // 修复：终态时通知 Scheduler 清理该 job 的所有非终态 shard（标记
+        // SHARD_CANCELED），使超时扫描与分配循环都跳过它们。best-effort，
+        // 失败只打 WARN（Scheduler 重启后的启动恢复扫描会兜底处理残留）。
+        {
+            MprpcChannel sched_channel;
+            SchedulerService_Stub sched_stub(&sched_channel);
+
+            CancelJobShardsRequest cancel_req;
+            cancel_req.set_job_id(job_id);
+            cancel_req.set_reason("JOB_TERMINAL");
+
+            CancelJobShardsResponse cancel_resp;
+            MprpcController cancel_ctrl;
+            cancel_ctrl.SetTimeoutMs(3000);
+
+            sched_stub.CancelJobShards(&cancel_ctrl, &cancel_req, &cancel_resp, nullptr);
+
+            if (!cancel_ctrl.Failed() && cancel_resp.error_code() == 0)
+            {
+                LOG_INFO("ResultCollectorService: notified Scheduler to finalize "
+                         "shards for job=%s (skipped=%d)", job_id.c_str(),
+                         cancel_resp.skipped_count());
+            }
+            else
+            {
+                LOG_WARN("ResultCollectorService: failed to notify Scheduler for "
+                         "job=%s: %s", job_id.c_str(),
+                         cancel_ctrl.Failed() ? cancel_ctrl.ErrorText().c_str()
+                                              : cancel_resp.error_msg().c_str());
+            }
+        }
     }
 };
+
+// ============================================================================
+// TerminalSweepLoop — 周期终态扫描（阶段 8 #10 修复）
+// ============================================================================
+//
+// 背景：CheckJobDone 在 expected_shard_count 未知时依赖 QueryJob RPC，
+// 若 JobService 在最后一次 shard 上报时不可用 → job 永久停在非终态。
+// 本线程定期扫描所有非终态 job，重新调用 CheckJobDone 判定。
+//
+// ⚠️ 修复（阶段 8）：此前内联了一份「简化版」终态判定，只改本地 JobStore
+// 状态，缺失 Merge 产物 / 通知 JobService / 通知 Scheduler，产生半成品终态。
+// 现改为预筛后直接调用完整 CheckJobDone，与正常上报路径共用同一套逻辑。
+
+void ResultCollectorServiceImpl::TerminalSweepLoop(std::atomic<bool>& stop_flag)
+{
+    constexpr int64_t kSweepIntervalMs = 15000;  // 每 15 秒扫描一次
+
+    LOG_INFO("TerminalSweepLoop thread started, interval=%lldms",
+             (long long)kSweepIntervalMs);
+
+    while (!stop_flag)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(kSweepIntervalMs));
+        if (stop_flag) break;
+
+        auto all_jobs = JobStore::GetInstance().ListAll();
+        int checked = 0, resolved = 0;
+
+        for (const auto& job : all_jobs)
+        {
+            int st = job.status;
+            // 只检查非终态 job（PENDING / SCHEDULING / RUNNING）
+            if (st == static_cast<int32_t>(JobStatus::JOB_SUCCESS)
+                || st == static_cast<int32_t>(JobStatus::JOB_FAILED)
+                || st == static_cast<int32_t>(JobStatus::JOB_CANCELED))
+                continue;
+
+            // 检查该 job 的所有 shard 是否都处于终态
+            auto shards = ShardStore::GetInstance().ListByJob(job.job_id);
+            if (shards.empty()) continue;
+
+            bool all_terminal = true;
+            int success_count = 0, failed_count = 0;
+            for (const auto& s : shards)
+            {
+                int sst = s.status;
+                if (sst == static_cast<int32_t>(ShardStatus::SHARD_SUCCESS))
+                    ++success_count;
+                else if (sst == static_cast<int32_t>(ShardStatus::SHARD_FAILED)
+                      || sst == static_cast<int32_t>(ShardStatus::SHARD_CANCELED))
+                    ++failed_count;
+                else
+                    all_terminal = false;
+            }
+
+            ++checked;
+            if (all_terminal && (success_count > 0 || failed_count > 0))
+            {
+                LOG_INFO("TerminalSweepLoop: job=%s has %d success + %d failed shards "
+                         "all terminal, checking job done",
+                         job.job_id.c_str(), success_count, failed_count);
+
+                // 调用完整 CheckJobDone：终态判定 + Merge 产物 +
+                // 通知 JobService（UpdateJobStatus）+ 通知 Scheduler
+                // （CancelJobShards JOB_TERMINAL），与正常上报路径一致
+                if (CheckJobDone(job.job_id))
+                    ++resolved;
+            }
+        }
+
+        if (checked > 0 || resolved > 0)
+            LOG_INFO("TerminalSweepLoop: checked %d jobs, resolved %d", checked, resolved);
+    }
+
+    LOG_INFO("TerminalSweepLoop thread stopped");
+}
 
 // ============================================================================
 // main — 服务入口
@@ -562,13 +765,22 @@ int main(int argc, char** argv)
     RpcProvider provider;
     provider.NotifyService(new ResultCollectorServiceImpl());
 
+    // 启动终态扫描后台线程（阶段 8 #10 修复：RC 重启后/JobService 不可用时的兜底）
+    std::atomic<bool> stop_flag{false};
+    std::thread sweep_thread(ResultCollectorServiceImpl::TerminalSweepLoop,
+                             std::ref(stop_flag));
+
     if (!provider.Run())
     {
         LOG_ERROR("ResultCollectorService start failed");
+        stop_flag = true;
+        sweep_thread.join();
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }
 
+    stop_flag = true;
+    sweep_thread.join();
     wevix_muduo::AsyncLogger::GetInstance().stop();
     return 0;
 }

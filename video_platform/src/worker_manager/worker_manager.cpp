@@ -2,6 +2,8 @@
 #include <cstdlib>
 #include <thread>
 #include <atomic>
+#include <mutex>
+#include <unordered_set>
 #include <chrono>
 #include "worker.pb.h"
 #include "scheduler.pb.h"
@@ -71,9 +73,10 @@ public:
 
     /// @brief Worker 心跳上报
     ///
-    /// Worker 每 3 秒调用一次，携带 WorkerLoad（cpu_usage / memory_usage /
-    /// running_shards / finished_shards / failed_shards）。
-    /// 更新 WorkerRecord 的 last_heartbeat 和负载快照。
+    /// Worker 每 3 秒调用一次
+    // 1. 保活（存活检测） Worker 每 3 秒调一次，WorkerManager 收到后更新 last_heartbeat 时间戳(心跳断了 20 秒，Worker 就被判定死亡)
+    // 2. 负载上报,请求携带 WorkerLoad。UpdateHeartbeat 把这些值写入 WorkerRecord 的负载快照，Scheduler 的 ListWorkers拿到后做加权评分选 worker
+    // 3. 反向告知存活状态 — 响应里的 alive （Worker 收到 alive=false（说明 manager 已把它标记死亡））
     void Heartbeat(::google::protobuf::RpcController* controller,
                    const ::HeartbeatRequest* request,
                    ::HeartbeatResponse* response,
@@ -167,8 +170,12 @@ public:
 
 static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
 {
-    constexpr int64_t kHeartbeatTimeoutMs = 10000;  // 10 秒无心跳 → OFFLINE
+    constexpr int64_t kHeartbeatTimeoutMs = 20000;  // 阶段 8 #12：20 秒（≈2 个心跳周期）无心跳 → OFFLINE
     constexpr int64_t kCheckIntervalMs    = 2000;   // 每 2 秒扫描一次
+
+    // 阶段 8 #11：NotifyWorkerOffline RPC 失败的 worker 需要持续重试
+    static std::unordered_set<std::string> pending_notify;
+    static std::mutex notify_mutex;
 
     LOG_INFO("HeartbeatTimeoutCheck thread started, timeout=%lldms, interval=%lldms",
              (long long)kHeartbeatTimeoutMs, (long long)kCheckIntervalMs);
@@ -179,8 +186,9 @@ static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
         if (stop_flag) break;
 
         int64_t now = NowMs();
-        auto workers = WorkerStore::GetInstance().ListAll();  // 在锁内拷贝快照
+        auto workers = WorkerStore::GetInstance().ListAll();
 
+        // ── 1. 检查 ONLINE Worker 是否超时 ──────────────────────────
         for (const auto& w : workers)
         {
             if (w.status != static_cast<int32_t>(WorkerStatus::WORKER_ONLINE))
@@ -189,8 +197,6 @@ static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
             if (now - w.last_heartbeat <= kHeartbeatTimeoutMs)
                 continue;
 
-            // 原子检查并标记：在 unique_lock 内完成 查找→二次确认→标记 OFFLINE
-            // 与 Heartbeat RPC 的 UpdateHeartbeat 互斥，消除 TOCTOU 竞争窗口
             if (WorkerStore::GetInstance().MarkOfflineIfTimeout(
                     w.worker_id, now, kHeartbeatTimeoutMs))
             {
@@ -201,9 +207,7 @@ static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
                          (long long)now,
                          (long long)(now - w.last_heartbeat));
 
-                // ── 通知 Scheduler 重调度该 Worker 上的 RUNNING shard ─
-                // Worker 进程退出后，其正在执行的 shard 需要被重新分配给其他 Worker。
-                // 通过 SchedulerService.NotifyWorkerOffline RPC 触发。
+                // ── 通知 Scheduler ──────────────────────────────
                 {
                     MprpcChannel sched_channel;
                     SchedulerService_Stub sched_stub(&sched_channel);
@@ -225,11 +229,55 @@ static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
                     }
                     else
                     {
-                        LOG_WARN("WorkerManager: NotifyWorkerOffline RPC failed for %s: %s",
+                        LOG_WARN("WorkerManager: NotifyWorkerOffline RPC failed for %s: %s "
+                                 "(will retry, fix #11)",
                                  w.worker_id.c_str(),
                                  nw_ctrl.Failed() ? nw_ctrl.ErrorText().c_str()
                                                   : nw_resp.error_msg().c_str());
+                        // 阶段 8 #11：RPC 失败时加入待重试集合
+                        std::lock_guard<std::mutex> lock(notify_mutex);
+                        pending_notify.insert(w.worker_id);
                     }
+                }
+            }
+        }
+
+        // ── 2. 阶段 8 #11：重试之前失败的 NotifyWorkerOffline ─────
+        {
+            std::vector<std::string> to_retry;
+            {
+                std::lock_guard<std::mutex> lock(notify_mutex);
+                to_retry.assign(pending_notify.begin(), pending_notify.end());
+            }
+
+            for (const auto& worker_id : to_retry)
+            {
+                MprpcChannel sched_channel;
+                SchedulerService_Stub sched_stub(&sched_channel);
+
+                NotifyWorkerOfflineRequest nw_req;
+                nw_req.set_worker_id(worker_id);
+                nw_req.set_reason("TIMEOUT");
+
+                NotifyWorkerOfflineResponse nw_resp;
+                MprpcController nw_ctrl;
+                nw_ctrl.SetTimeoutMs(5000);
+
+                sched_stub.NotifyWorkerOffline(&nw_ctrl, &nw_req, &nw_resp, nullptr);
+
+                if (!nw_ctrl.Failed() && nw_resp.error_code() == 0)
+                {
+                    LOG_INFO("WorkerManager: retry NotifyWorkerOffline SUCCESS for %s",
+                             worker_id.c_str());
+                    std::lock_guard<std::mutex> lock(notify_mutex);
+                    pending_notify.erase(worker_id);
+                }
+                else
+                {
+                    LOG_WARN("WorkerManager: retry NotifyWorkerOffline still failed for %s: %s",
+                             worker_id.c_str(),
+                             nw_ctrl.Failed() ? nw_ctrl.ErrorText().c_str()
+                                              : nw_resp.error_msg().c_str());
                 }
             }
         }

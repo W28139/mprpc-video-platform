@@ -170,22 +170,19 @@ public:
 private:
     // ── 内部方法 ───────────────────────────────────────────────────────────
 
-    /// @brief 执行 shell 命令并捕获 stdout+stderr
-    /// @param cmd          完整的 shell 命令
-    /// @param progress_cb  可选进度回调。在读取到每一行输出时调用，
-    ///                      参数为解析出的进度百分比（0-100），解析失败回调 -1
-    /// @param should_cancel 可选取消检查回调。返回 true 时立即 SIGTERM 子进程并返回。
-    ///                      用于支持 CancelShard 即时生效。
+    /// @brief 执行命令并捕获 stdout+stderr（fork+execvp，不走 shell）
+    /// @param args        命令参数数组，args[0] 为可执行文件名
+    /// @param progress_cb  可选进度回调，在每行输出解析后调用
+    /// @param should_cancel 可选取消检查回调，返回 true 时立即 SIGTERM 子进程
     /// @return FfmpegResult
     ///
     /// 实现细节：
-    /// - 使用 fork() + execvp() 启动子进程（替代 popen，暴露 PID 支持 kill）
+    /// - 使用 fork() + execvp() 启动子进程（不走 /bin/sh，消除命令注入）
     /// - 通过 pipe() 捕获 stdout+stderr
-    /// - 逐行读取子进程输出（fgets），对每行调用 progress_cb（若提供）
-    /// - 每行读取后检查 should_cancel（若提供），触发时 kill(pid, SIGTERM)
+    /// - poll() 带超时轮询子进程输出 + 检查 cancel（修复卡死不输出的挂死）
+    /// - 总执行时长上限 1 小时超时保护
     /// - waitpid() 获取退出码
-    /// - 退出码非 0 时，error_msg 包含最后 512 字节的输出内容
-    static FfmpegResult ExecuteCommand(const std::string& cmd,
+    static FfmpegResult ExecuteCommand(const std::vector<std::string>& args,
                                        std::function<void(int)> progress_cb = nullptr,
                                        std::function<bool()> should_cancel = nullptr);
 

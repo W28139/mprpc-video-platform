@@ -1,6 +1,7 @@
 #include <string>
 #include <cstdlib>
 #include <thread>
+#include <atomic>
 #include <chrono>
 #include "job.pb.h"
 #include "scheduler.pb.h"
@@ -59,6 +60,7 @@ public:
         }
 
         // 用 GenerateId 生成唯一 job_id
+        // 把job的信息整合到 =JobRecord里
         std::string job_id = GenerateId("job");
         JobRecord job;
         job.job_id             = job_id;
@@ -106,6 +108,7 @@ public:
         std::vector<ShardInfo> shard_list_from_scheduler;  // 收集 shard 用于跨进程同步
         for (int attempt = 1; attempt <= 3; ++attempt)
         {
+            // 利用 rpc 调用切片函数 ScheduleJob
             MprpcChannel sched_channel;
             SchedulerService_Stub sched_stub(&sched_channel);
 
@@ -117,21 +120,21 @@ public:
             MprpcController sched_ctrl;
 
             sched_stub.ScheduleJob(&sched_ctrl, &sched_req, &sched_resp, nullptr);
-            // sched_resp.accepted() 通常请求已被受理
+            // sched_resp.accepted() 通常请求已被受理 成功的话就进入，收集，退出
             if (!sched_ctrl.Failed() && sched_resp.accepted())
             {
                 LOG_INFO("JobService::SubmitJob job_id=%s: Scheduler accepted (attempt %d)",
                          job_id.c_str(), attempt);
                 // 直接从 ScheduleJobResponse 获取 shard_count（直接数据路径，避免侧信道）
                 shard_count_from_scheduler = sched_resp.shard_count();
-                // 捕获 shard 列表用于跨进程同步
+                // 捕获 shard 列表用于跨进程同步,把在另一个服务器切好的片信息收集回来
                 shard_list_from_scheduler.clear();
                 for (const auto& si : sched_resp.shards())
                     shard_list_from_scheduler.push_back(si);
                 schedule_ok = true;
                 break;
             }
-
+            // 第 atteempt 次没成功
             LOG_WARN("JobService::SubmitJob job_id=%s: Scheduler.ScheduleJob failed "
                      "(attempt %d/3): %s",
                      job_id.c_str(), attempt,
@@ -142,6 +145,7 @@ public:
                 std::this_thread::sleep_for(std::chrono::seconds(1));
         }
 
+        // 切片成功后的逻辑
         if (schedule_ok)
         {
             // 使用 ScheduleJobResponse 返回的 shard_count 更新 JobStore里job_id该JobRecord的信息
@@ -168,30 +172,36 @@ public:
             for (const auto& si : shard_list_from_scheduler)
             {
                 ShardRecord s;
-                s.shard_id      = si.shard_id();
-                s.job_id        = si.job_id();
-                s.shard_index   = si.shard_index();
-                s.start_ms      = si.start_ms();
-                s.duration_ms   = si.duration_ms();
-                s.status        = static_cast<int32_t>(si.status());
-                s.retry_count   = si.retry_count();
-                s.max_retry     = si.max_retry();
-                s.input_path    = si.input_path();
-                s.output_path   = si.output_path();
-                s.created_at    = si.created_at();
-                s.updated_at    = si.updated_at();
+                s.shard_id           = si.shard_id();
+                s.job_id             = si.job_id();
+                s.shard_index        = si.shard_index();
+                s.start_ms           = si.start_ms();
+                s.duration_ms        = si.duration_ms();
+                s.status             = static_cast<int32_t>(si.status());
+                s.retry_count        = si.retry_count();
+                s.max_retry          = si.max_retry();
+                s.input_path         = si.input_path();
+                s.output_path        = si.output_path();
+                s.target_resolution  = si.target_resolution();   // 修复 #18
+                s.target_bitrate     = si.target_bitrate();      // 修复 #18
+                s.created_at         = si.created_at();
+                s.updated_at         = si.updated_at();
                 ShardStore::GetInstance().Insert(s);
             }
             LOG_INFO("JobService::SubmitJob job_id=%s: populated %zu shards in local ShardStore",
                      job_id.c_str(), shard_list_from_scheduler.size());
         }
+        // 切片失败后的逻辑
         else
         {
             LOG_ERROR("JobService::SubmitJob job_id=%s: Scheduler.ScheduleJob failed "
-                      "after 3 retries, job stuck in PENDING – will be retried by "
-                      "background SchedulingLoop",
+                      "after 3 retries, job queued as PENDING – will be retried by "
+                      "background PendingScanLoop",
                       job_id.c_str());
-            // Job 留在 PENDING 状态，SchedulingLoop 可通过扫描 PENDING job 兜底
+            // 告知客户端当前 Scheduler 不可用，任务已排队等待后台重试
+            response->set_error_code(2);
+            response->set_error_msg("Scheduler unavailable after 3 retries, "
+                                    "job queued as PENDING and will be retried automatically");
         }
 
         done->Run();
@@ -430,6 +440,125 @@ public:
 };
 
 // ============================================================================
+// PendingScanLoop — 后台 PENDING 任务兜底扫描（阶段 8 Bug #2/#3 修复）(PENDING:已提交，等待系统处理 )
+// ============================================================================
+//
+// 背景：SubmitJob 调用 Scheduler.ScheduleJob 时可能因 Scheduler 不可用而失败，
+// job 留在 PENDING 状态。本线程定期扫描 PENDING job 并重试 ScheduleJob，确保：
+// 1. Scheduler 重启后，之前 PENDING 的 job 能被重新切分调度（修复 #2）
+// 2. SubmitJob 重试耗尽后，job 不会被永久遗忘（修复 #3）
+//
+// ScheduleJob 在 Scheduler 端是幂等的（job_exists 分支），重复调用安全。
+
+static void PendingScanLoop(std::atomic<bool>& stop_flag)
+{
+    constexpr int64_t kScanIntervalMs = 10000;  // 每 10 秒扫描一次
+
+    LOG_INFO("PendingScanLoop thread started, interval=%lldms",
+             (long long)kScanIntervalMs);
+
+    while (!stop_flag)
+    {
+        std::this_thread::sleep_for(std::chrono::milliseconds(kScanIntervalMs));
+        if (stop_flag) break;
+
+        // 扫描所有 PENDING 状态的 job
+        auto all_jobs = JobStore::GetInstance().ListAll();
+        std::vector<JobRecord> pending_jobs;
+        for (const auto& j : all_jobs)
+        {
+            if (j.status == static_cast<int32_t>(JobStatus::JOB_PENDING))
+                pending_jobs.push_back(j);
+        }
+
+        if (pending_jobs.empty()) continue;
+
+        LOG_INFO("PendingScanLoop: found %zu PENDING jobs, retrying ScheduleJob...",
+                 pending_jobs.size());
+
+        for (const auto& job : pending_jobs)
+        {
+            // 构造 JobInfo
+            JobInfo job_info;
+            job_info.set_job_id(job.job_id);
+            job_info.set_user_id(job.user_id);
+            job_info.set_input_path(job.input_path);
+            job_info.set_output_path(job.output_path);
+            job_info.set_target_format(job.target_format);
+            job_info.set_target_resolution(job.target_resolution);
+            job_info.set_target_bitrate(job.target_bitrate);
+            job_info.set_priority(job.priority);
+            job_info.set_status(JobStatus::JOB_PENDING);
+            job_info.set_shard_count(job.shard_count);
+            job_info.set_shard_duration_sec(job.shard_duration_sec);
+            job_info.set_duration_sec(job.duration_sec);
+
+            // 调用 Scheduler.ScheduleJob（幂等）
+            MprpcChannel sched_channel;
+            SchedulerService_Stub sched_stub(&sched_channel);
+
+            ScheduleJobRequest sched_req;
+            *sched_req.mutable_job_info() = job_info;
+
+            ScheduleJobResponse sched_resp;
+            MprpcController sched_ctrl;
+            sched_ctrl.SetTimeoutMs(5000);
+
+            sched_stub.ScheduleJob(&sched_ctrl, &sched_req, &sched_resp, nullptr);
+
+            if (!sched_ctrl.Failed() && sched_resp.accepted())
+            {
+                // 更新 JobStore 中的状态和 shard_count
+                auto refreshed_opt = JobStore::GetInstance().Get(job.job_id);
+                if (refreshed_opt.has_value())
+                {
+                    auto refreshed = refreshed_opt.value();
+                    // 成功的话更新状态为 scaned 切片状态
+                    refreshed.status = static_cast<int32_t>(JobStatus::JOB_SCHEDULING);
+                    refreshed.shard_count = sched_resp.shard_count();
+                    refreshed.updated_at = NowMs();
+                    JobStore::GetInstance().Update(job.job_id, refreshed);
+                }
+
+                // 同步 shard 列表到本地 ShardStore（JobService 进程需要本地副本）
+                for (const auto& si : sched_resp.shards())
+                {
+                    ShardRecord s;
+                    s.shard_id           = si.shard_id();
+                    s.job_id             = si.job_id();
+                    s.shard_index        = si.shard_index();
+                    s.start_ms           = si.start_ms();
+                    s.duration_ms        = si.duration_ms();
+                    s.status             = static_cast<int32_t>(si.status());
+                    s.retry_count        = si.retry_count();
+                    s.max_retry          = si.max_retry();
+                    s.input_path         = si.input_path();
+                    s.output_path        = si.output_path();
+                    s.target_resolution  = si.target_resolution();
+                    s.target_bitrate     = si.target_bitrate();
+                    s.created_at         = si.created_at();
+                    s.updated_at         = si.updated_at();
+                    ShardStore::GetInstance().InsertOrUpdate(s);
+                }
+
+                LOG_INFO("PendingScanLoop: job_id=%s rescheduled successfully, "
+                         "%d shards created",
+                         job.job_id.c_str(), sched_resp.shard_count());
+            }
+            else
+            {
+                LOG_WARN("PendingScanLoop: ScheduleJob still failed for job_id=%s: %s",
+                         job.job_id.c_str(),
+                         sched_ctrl.Failed() ? sched_ctrl.ErrorText().c_str()
+                                             : sched_resp.error_msg().c_str());
+            }
+        }
+    }
+
+    LOG_INFO("PendingScanLoop thread stopped");
+}
+
+// ============================================================================
 // main — 服务入口
 // ============================================================================
 
@@ -453,13 +582,21 @@ int main(int argc, char** argv)
     RpcProvider provider;
     provider.NotifyService(new JobServiceImpl());
 
+    // 启动 PENDING 扫描后台线程（阶段 8 修复：Scheduler 重启后自动重试 PENDING job）
+    std::atomic<bool> stop_flag{false};
+    std::thread pending_thread(PendingScanLoop, std::ref(stop_flag));
+
     if (!provider.Run())
     {
         LOG_ERROR("JobService start failed");
+        stop_flag = true;
+        pending_thread.join();
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }
 
+    stop_flag = true;
+    pending_thread.join();
     wevix_muduo::AsyncLogger::GetInstance().stop();
     return 0;
 }

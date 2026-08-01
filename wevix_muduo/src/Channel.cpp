@@ -80,27 +80,33 @@ void Channel::handleEvent()
     if ((revents_ & EPOLLHUP) && !(revents_ & EPOLLIN))
     {
         LOG_DEBUG("Channel fd=%d: EPOLLHUP event", fd_);
-        if (closeCallback_) closeCallback_();
+        if (closeCallback_) { closeCallback_(); return; }
     }
 
     // 错误处理
     if (revents_ & EPOLLERR)
     {
         LOG_WARN("Channel fd=%d: EPOLLERR event, revents=0x%x", fd_, revents_);
-        if (errorCallback_) errorCallback_();
+        if (errorCallback_) { errorCallback_(); return; }
     }
 
     // 可读、优先级数据、挂断
     if (revents_ & (EPOLLIN | EPOLLPRI | EPOLLRDHUP))
     {
-        if (readCallback_) readCallback_();
+        if (readCallback_) { readCallback_(); return; }
     }
 
     // 可写
     if (revents_ & EPOLLOUT)
     {
-        if (writeCallback_) writeCallback_();
+        if (writeCallback_) { writeCallback_(); }
     }
+    // 注意：回调可能同步销毁 Channel 自身（如 handleClose → removeConnection
+    // → 最后一个 shared_ptr 释放 → Connection/channel_ 析构），因此每个回调
+    // 执行后必须立即 return，禁止再访问 this 的任何成员。
+    // 未处理的事件（如同批次的 EPOLLOUT）由下一轮 epoll_wait 继续分发：
+    // 若 Channel 已 remove，事件自然消失；若对象存活，sendInLoop 中的
+    // enableWriting(EPOLL_CTL_MOD) 会保证 EPOLLOUT 重新触发，不会丢失。
 }
 
 } // namespace wevix_muduo

@@ -1,14 +1,26 @@
+// ============================================================================
+// FfmpegExecutor — FFmpeg/FFprobe 命令行封装
+// ============================================================================
+//
+// 阶段 8 重构（修复 #4, #9, #16, #20, #25, #27）：
+//   - 全部方法改为 fork+execvp 直接传 argv，不走 /bin/sh -c → 消除命令注入
+//   - ExecuteCommand 用 poll()+read() 替代阻塞 fgets → cancel 即时生效
+//   - 进度百分比修复：正确按 raw_progress*10ms*100/total_ms 换算
+//   - cancel 退出码不再被局部变量遮蔽
+//   - fdopen 失败分支先 kill 再 waitpid
+//   - Transcode 仅在 duration_ms==0 时才 Probe
+
 #include "video_platform/ffmpeg_executor.h"
 
 #include <cstdio>
 #include <cstdlib>
 #include <cstring>
 #include <chrono>
-#include <sstream>
 #include <thread>
 #include <sys/stat.h>
 #include <sys/wait.h>
 #include <unistd.h>
+#include <poll.h>
 #include <fcntl.h>
 #include <signal.h>
 #include "wevix_muduo/AsyncLogger.h"
@@ -73,21 +85,38 @@ bool FfmpegExecutor::CheckAvailable()
 }
 
 // ============================================================================
-// ExecuteCommand — 子进程执行核心（fork+exec，支持 cancel kill）
+// ExecuteCommand — 子进程执行核心（fork+execvp+pipe，不走 shell，支持 cancel）
+// ============================================================================
+//
+// 阶段 8 重构（修复 #4, #9, #20, #25）：
+//   - 不再通过 /bin/sh -c 拼接字符串，改为 fork+execvp 直接传 argv → 消除命令注入
+//   - poll() 带 1s 超时轮询可读性，替代阻塞 fgets → cancel 即时生效（修复卡死不输出）
+//   - 总执行时长上限 1 小时，超时 SIGKILL → 永远不永久阻塞
+//   - cancel/超时时 exit_code 从 waitpid 正确获取（修复被局部变量遮蔽）
+//   - fdopen 失败时先 kill 子进程再 waitpid（修复无限阻塞）
+//   - raw read() + 手动分行，替代 fdopen/fgets（避免 stdio 与非阻塞 fd 的兼容问题）
 // ============================================================================
 
-FfmpegResult FfmpegExecutor::ExecuteCommand(const std::string& cmd,
+FfmpegResult FfmpegExecutor::ExecuteCommand(const std::vector<std::string>& args,
                                             std::function<void(int)> progress_cb,
                                             std::function<bool()> should_cancel)
 {
     FfmpegResult result;
     auto start = std::chrono::steady_clock::now();
 
-    // 创建管道用于捕获子进程 stdout+stderr
+    if (args.empty())
+    {
+        result.success   = false;
+        result.exit_code = -1;
+        result.error_msg = "ExecuteCommand: args is empty";
+        return result;
+    }
+
+    // ── 1. 创建管道 ──────────────────────────────────────────────────
     int pipefd[2];
     if (pipe(pipefd) != 0)
     {
-        result.success = false;
+        result.success   = false;
         result.exit_code = -1;
         result.error_msg = "pipe() failed: " + std::string(std::strerror(errno));
         return result;
@@ -96,7 +125,7 @@ FfmpegResult FfmpegExecutor::ExecuteCommand(const std::string& cmd,
     pid_t pid = fork();
     if (pid < 0)
     {
-        result.success = false;
+        result.success   = false;
         result.exit_code = -1;
         result.error_msg = "fork() failed: " + std::string(std::strerror(errno));
         close(pipefd[0]);
@@ -104,12 +133,11 @@ FfmpegResult FfmpegExecutor::ExecuteCommand(const std::string& cmd,
         return result;
     }
 
+    // ── 2. 子进程：execvp 直接执行，不走 shell ──────────────────────
     if (pid == 0)
     {
-        // ── 子进程：重定向 stdout+stderr 到管道写端，stdin 到 /dev/null ──
-        close(pipefd[0]);  // 关闭读端
+        close(pipefd[0]);
 
-        // 重定向 stdin 到 /dev/null，防止子进程继承终端输入导致 SIGTSTP
         int devnull = open("/dev/null", O_RDONLY);
         if (devnull >= 0)
         {
@@ -117,106 +145,138 @@ FfmpegResult FfmpegExecutor::ExecuteCommand(const std::string& cmd,
             close(devnull);
         }
 
-        // 重定向 stdout 和 stderr 到管道写端
         dup2(pipefd[1], STDOUT_FILENO);
         dup2(pipefd[1], STDERR_FILENO);
         close(pipefd[1]);
 
-        // 执行 shell 命令
-        execl("/bin/sh", "sh", "-c", cmd.c_str(), nullptr);
+        // 构建 argv 数组（execvp 要求）
+        std::vector<const char*> argv;
+        argv.reserve(args.size() + 1);
+        for (const auto& a : args) argv.push_back(a.c_str());
+        argv.push_back(nullptr);
 
-        // execl 失败时才会走到这里
+        execvp(args[0].c_str(), const_cast<char* const*>(argv.data()));
         _exit(127);
     }
 
-    // ── 父进程：读取子进程输出 ──────────────────────────────────
-    close(pipefd[1]);  // 关闭写端
+    // ── 3. 父进程：poll + read 读子进程输出 ────────────────────────
+    close(pipefd[1]);
 
-    FILE* pipe = fdopen(pipefd[0], "r");
-    if (!pipe)
+    // poll + raw read（不使用 fdopen/fgets，避免 stdio 缓冲与非阻塞 fd 冲突）
+    constexpr int    kPollTimeoutMs = 1000;        // poll 超时 1 秒
+    constexpr int64_t kMaxExecMs    = 3600000;     // 最大执行时长 1 小时
+    int64_t total_elapsed_ms = 0;
+    int     child_status      = 0;
+    bool    child_reaped      = false;
+    bool    killed            = false;
+
+    std::string line_buf;
+    std::string stderr_tail;
+    char rbuf[4096];
+
+    while (!killed)
     {
-        result.success = false;
-        result.exit_code = -1;
-        result.error_msg = "fdopen() failed: " + std::string(std::strerror(errno));
-        close(pipefd[0]);
-        // 确保子进程被回收
-        int status;
-        waitpid(pid, &status, 0);
-        return result;
-    }
+        struct pollfd pfd;
+        pfd.fd     = pipefd[0];
+        pfd.events = POLLIN;
+        int ret = poll(&pfd, 1, kPollTimeoutMs);
 
-    // 逐行读取子进程输出，同时解析进度
-    std::string stderr_tail;  // 保留尾部用于错误报告
-    char buf[4096];
-    bool killed = false;
-
-    while (fgets(buf, sizeof(buf), pipe))
-    {
-        std::string line(buf);
-
-        // 保留尾部 512 字节用于失败时的错误摘要
-        stderr_tail += line;
-        if (stderr_tail.size() > 512)
+        if (ret < 0)
         {
-            stderr_tail.erase(0, stderr_tail.size() - 512);
+            if (errno == EINTR) continue;
+            break;  // poll 错误
         }
 
-        // 进度回调（如果提供）
-        if (progress_cb)
+        if (ret == 0)
         {
-            int progress = ParseProgress(line, 0);
-            progress_cb(progress);
-        }
+            // 超时：检查 cancel 和最大执行时长
+            total_elapsed_ms += kPollTimeoutMs;
 
-        // 取消检查（如果提供）
-        if (should_cancel && should_cancel())
-        {
-            LOG_INFO("ExecuteCommand: cancel requested, sending SIGTERM to pid=%d", pid);
-            kill(pid, SIGTERM);
-            killed = true;
-
-            // 等待子进程优雅退出（最多 5 秒），超时则 SIGKILL
-            int status;
-            pid_t wait_result = waitpid(pid, &status, WNOHANG);
-            if (wait_result == 0)
+            if (should_cancel && should_cancel())
             {
-                // 子进程还没退出，等待最多 5 秒
-                std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                for (int i = 0; i < 9; ++i)
-                {
-                    wait_result = waitpid(pid, &status, WNOHANG);
-                    if (wait_result > 0) break;
-                    std::this_thread::sleep_for(std::chrono::milliseconds(500));
-                }
-                if (wait_result == 0)
-                {
-                    LOG_WARN("ExecuteCommand: pid=%d did not exit after SIGTERM, sending SIGKILL", pid);
-                    kill(pid, SIGKILL);
-                    waitpid(pid, &status, 0);
-                }
+                LOG_INFO("ExecuteCommand: cancel requested, sending SIGTERM to pid=%d", pid);
+                kill(pid, SIGTERM);
+                killed = true;
             }
+            else if (total_elapsed_ms >= kMaxExecMs)
+            {
+                LOG_WARN("ExecuteCommand: max exec time (%lldms) exceeded, killing pid=%d",
+                         (long long)kMaxExecMs, pid);
+                kill(pid, SIGKILL);
+                killed = true;
+            }
+            if (killed) break;
+            continue;
+        }
+
+        // 有数据可读
+        ssize_t n = read(pipefd[0], rbuf, sizeof(rbuf) - 1);
+        if (n < 0)
+        {
+            if (errno == EINTR || errno == EAGAIN) continue;
             break;
         }
+        if (n == 0) break;  // EOF
+
+        rbuf[n] = '\0';
+        line_buf += rbuf;
+
+        // 从缓冲区中逐行提取
+        size_t pos;
+        while ((pos = line_buf.find('\n')) != std::string::npos)
+        {
+            std::string line = line_buf.substr(0, pos + 1);
+            line_buf.erase(0, pos + 1);
+
+            stderr_tail += line;
+            if (stderr_tail.size() > 512)
+                stderr_tail.erase(0, stderr_tail.size() - 512);
+
+            if (progress_cb)
+            {
+                int progress = ParseProgress(line, 0);
+                progress_cb(progress);
+            }
+
+            // 每行读取后检查 cancel（快速响应）
+            if (should_cancel && should_cancel())
+            {
+                LOG_INFO("ExecuteCommand: cancel requested (inline check), "
+                         "sending SIGTERM to pid=%d", pid);
+                kill(pid, SIGTERM);
+                killed = true;
+                break;
+            }
+        }
     }
 
-    fclose(pipe);  // 也会关闭 pipefd[0]
-
-    // 获取退出状态（如果之前未被 waitpid 回收）
-    int status = 0;
-    if (!killed)
+    // ── 4. cancel 路径：优雅退出 → SIGKILL 兜底 ────────────────────
+    if (killed)
     {
-        waitpid(pid, &status, 0);
-    }
-    else
-    {
-        // 子进程已被回收，重新获取 status（若上面 waitpid 成功）
-        waitpid(pid, &status, WNOHANG);
+        pid_t wr = waitpid(pid, &child_status, WNOHANG);
+        for (int i = 0; i < 10 && wr == 0; ++i)
+        {
+            std::this_thread::sleep_for(std::chrono::milliseconds(500));
+            wr = waitpid(pid, &child_status, WNOHANG);
+        }
+        if (wr == 0)
+        {
+            LOG_WARN("ExecuteCommand: pid=%d did not exit after SIGTERM, sending SIGKILL", pid);
+            kill(pid, SIGKILL);
+            waitpid(pid, &child_status, 0);
+        }
+        child_reaped = true;
     }
 
-    if (WIFEXITED(status))
-        result.exit_code = WEXITSTATUS(status);
-    else if (WIFSIGNALED(status))
-        result.exit_code = -WTERMSIG(status);  // 负值表示被信号终止
+    // ── 5. 收尾 ─────────────────────────────────────────────────────
+    close(pipefd[0]);
+    if (!child_reaped) waitpid(pid, &child_status, 0);
+
+    // 正确提取退出码（修复 #20：不再被局部变量遮蔽）
+    if (WIFEXITED(child_status))
+        result.exit_code = WEXITSTATUS(child_status);
+    else if (WIFSIGNALED(child_status))
+        result.exit_code = -WTERMSIG(child_status);
     else
         result.exit_code = -1;
 
@@ -225,8 +285,8 @@ FfmpegResult FfmpegExecutor::ExecuteCommand(const std::string& cmd,
 
     if (killed)
     {
-        result.success = false;
-        result.error_msg = "cancelled by user request";
+        result.success   = false;
+        result.error_msg = "cancelled or timed out";
     }
     else if (result.exit_code == 0)
     {
@@ -236,11 +296,9 @@ FfmpegResult FfmpegExecutor::ExecuteCommand(const std::string& cmd,
     {
         result.success = false;
         result.error_msg = stderr_tail;
-        // 截断过长的错误信息
         if (result.error_msg.size() > 512)
-        {
-            result.error_msg = "...(truncated)\n" + result.error_msg.substr(result.error_msg.size() - 400);
-        }
+            result.error_msg = "...(truncated)\n"
+                             + result.error_msg.substr(result.error_msg.size() - 400);
     }
 
     return result;
@@ -248,6 +306,19 @@ FfmpegResult FfmpegExecutor::ExecuteCommand(const std::string& cmd,
 
 // ============================================================================
 // ParseProgress — 从 ffmpeg 输出行解析进度
+// ============================================================================
+//
+// 返回值语义（务必区分两种模式）：
+//   * total_duration_ms > 0：直接返回 0-100 百分比；
+//   * total_duration_ms == 0（当前唯一实际路径，ExecuteCommand 恒传 0）：
+//     返回「微秒/10000」——单位是 0.01% 精度，即 out_time 每过 10ms 值 +1，
+//     值 100 相当于 1 秒。换算成百分比需要调用方再乘 100 / total_ms。
+//
+// ⚠️ 已知问题（阶段8审查）：
+//  ① time= 回退分支的百分比换算行（return ms / (total_duration_ms/100)）在
+//     total_duration_ms ∈ (0, 100) 时除零（#16 关联项）；当前恒传 0 走不到，
+//     一旦调用方按 API 约定传入真实时长即触发 SIGFPE。
+//  ② out_time_ms 解析无合法性校验，atoll 失败/负值会得到 0 或垃圾值。
 // ============================================================================
 
 int FfmpegExecutor::ParseProgress(const std::string& line, int64_t total_duration_ms)
@@ -307,60 +378,81 @@ int FfmpegExecutor::ParseProgress(const std::string& line, int64_t total_duratio
 }
 
 // ============================================================================
-// Probe — 视频信息探测
+// Probe — 视频信息探测（fork+execvp，不走 shell）
 // ============================================================================
+//
+// 阶段 8 重构：改用 fork+execvp 直接传 argv（修复 #4 命令注入），
+// 替代原来的 popen + shell 字符串拼接。
 
 VideoInfo FfmpegExecutor::Probe(const std::string& input_path)
 {
     VideoInfo info;
 
-    // 使用 ffprobe 获取 JSON 格式的视频信息
-    // 只查询 format 和第一个视频流，减少输出
-    std::string cmd =
-        "ffprobe -v quiet -print_format json -show_format -show_streams -select_streams v:0 \""
-        + input_path + "\"";
+    // 构建 argv
+    std::vector<std::string> args = {
+        "ffprobe", "-v", "quiet", "-print_format", "json",
+        "-show_format", "-show_streams", "-select_streams", "v:0", input_path
+    };
 
-    FILE* pipe = popen((cmd + " 2>&1").c_str(), "r");
-    if (!pipe) return info;
+    // fork+exec+pipe 执行，捕获 stdout
+    int pipefd[2];
+    if (pipe(pipefd) != 0) return info;
 
-    // 读取全部输出（ffprobe JSON 通常不超过 10KB）
+    pid_t pid = fork();
+    if (pid < 0) { close(pipefd[0]); close(pipefd[1]); return info; }
+
+    if (pid == 0)
+    {
+        close(pipefd[0]);
+        int devnull = open("/dev/null", O_RDONLY);
+        if (devnull >= 0) { dup2(devnull, STDIN_FILENO); close(devnull); }
+        dup2(pipefd[1], STDOUT_FILENO);
+        dup2(pipefd[1], STDERR_FILENO);
+        close(pipefd[1]);
+
+        std::vector<const char*> argv;
+        for (const auto& a : args) argv.push_back(a.c_str());
+        argv.push_back(nullptr);
+        execvp("ffprobe", const_cast<char* const*>(argv.data()));
+        _exit(127);
+    }
+
+    close(pipefd[1]);
+
     std::string json;
     char buf[2048];
-    while (fgets(buf, sizeof(buf), pipe))
+    ssize_t n;
+    while ((n = read(pipefd[0], buf, sizeof(buf) - 1)) > 0)
     {
+        buf[n] = '\0';
         json += buf;
     }
-    pclose(pipe);
+    close(pipefd[0]);
+
+    int status = 0;
+    waitpid(pid, &status, 0);
 
     if (json.empty()) return info;
 
     // ── 手动解析 JSON（不依赖第三方库） ──────────────────────────────
-    // 只提取我们需要的字段：duration, width, height, codec_name, format_name
-    //
-    // 简化解析策略：在字符串中搜索特定 key，提取紧随其后的值。
 
     auto extractString = [&json](const std::string& key, std::string& out) {
-        // 搜索 "key": "value"
         std::string pattern = "\"" + key + "\": \"";
         size_t start = json.find(pattern);
         if (start == std::string::npos)
         {
-            // 也尝试 "key":
             pattern = "\"" + key + "\": ";
             start = json.find(pattern);
             if (start == std::string::npos) return false;
             start += pattern.size();
-            // 跳过引号（如果有）
             if (start < json.size() && json[start] == '\"') ++start;
             size_t end = json.find_first_of("\",\n\r}", start);
-            if (end != std::string::npos)
-                out = json.substr(start, end - start);
+            if (end != std::string::npos) out = json.substr(start, end - start);
             return !out.empty();
         }
         start += pattern.size();
         size_t end = json.find('\"', start);
-        if (end != std::string::npos)
-            out = json.substr(start, end - start);
+        if (end != std::string::npos) out = json.substr(start, end - start);
         return !out.empty();
     };
 
@@ -369,12 +461,9 @@ VideoInfo FfmpegExecutor::Probe(const std::string& input_path)
         size_t start = json.find(pattern);
         if (start == std::string::npos) return false;
         start += pattern.size();
-        // 跳过引号（数字通常不带引号，但有些 JSON 带）
         std::string numStr;
         size_t end = json.find_first_of(",\n\r}", start);
-        if (end != std::string::npos)
-            numStr = json.substr(start, end - start);
-        // 移除前后空白和引号
+        if (end != std::string::npos) numStr = json.substr(start, end - start);
         while (!numStr.empty() && (numStr[0] == ' ' || numStr[0] == '\"')) numStr.erase(0, 1);
         while (!numStr.empty() && (numStr.back() == ' ' || numStr.back() == '\"')) numStr.pop_back();
         if (numStr.empty()) return false;
@@ -393,14 +482,10 @@ VideoInfo FfmpegExecutor::Probe(const std::string& input_path)
         return true;
     };
 
-    // 提取信息
     double duration_sec = 0.0;
     if (extractDouble("duration", duration_sec))
-    {
         info.duration_ms = static_cast<int64_t>(duration_sec * 1000.0);
-    }
 
-    // width / height / codec_name 在 streams 数组中
     extractInt("width", info.width);
     extractInt("height", info.height);
     extractString("codec_name", info.codec_name);
@@ -411,7 +496,7 @@ VideoInfo FfmpegExecutor::Probe(const std::string& input_path)
 }
 
 // ============================================================================
-// Slice — 视频切片
+// Slice — 视频切片（fork+execvp，不走 shell）
 // ============================================================================
 
 FfmpegResult FfmpegExecutor::Slice(const std::string& input_path,
@@ -419,29 +504,25 @@ FfmpegResult FfmpegExecutor::Slice(const std::string& input_path,
                                     int64_t duration_ms,
                                     const std::string& output_path)
 {
-    // 确保输出目录存在
     MakeDirs(output_path.substr(0, output_path.find_last_of('/')));
 
-    // 用重新编码实现精密切片（-c copy 在非关键帧处不精确）
-    // -ss 放 -i 前 = fast input seeking，配合重编码可做到帧精确
-    // -preset ultrafast 追求切片速度（后续转码会再次编码）
-    std::ostringstream cmd;
-    cmd << "ffmpeg -y"
-        << " -ss " << (start_ms / 1000.0)
-        << " -t "  << (duration_ms / 1000.0)
-        << " -i \"" << input_path << "\""
-        << " -c:v libx264 -preset ultrafast -c:a aac"
-        << " \"" << output_path << "\"";
+    std::vector<std::string> args = {
+        "ffmpeg", "-y",
+        "-ss", std::to_string(start_ms / 1000.0),
+        "-t",  std::to_string(duration_ms / 1000.0),
+        "-i", input_path,
+        "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
+        output_path
+    };
 
-    FfmpegResult result = ExecuteCommand(cmd.str());
+    FfmpegResult result = ExecuteCommand(args);
     if (result.success)
     {
         result.output_path = output_path;
-        // 验证输出文件存在且大小 > 0
         struct stat st;
         if (stat(output_path.c_str(), &st) != 0 || st.st_size == 0)
         {
-            result.success = false;
+            result.success   = false;
             result.exit_code = -1;
             result.error_msg = "slice output file is empty or missing: " + output_path;
         }
@@ -450,7 +531,7 @@ FfmpegResult FfmpegExecutor::Slice(const std::string& input_path,
 }
 
 // ============================================================================
-// Transcode — 视频转码
+// Transcode — 视频转码（fork+execvp，不走 shell，修复进度百分比）
 // ============================================================================
 
 FfmpegResult FfmpegExecutor::Transcode(const std::string& input_path,
@@ -462,84 +543,71 @@ FfmpegResult FfmpegExecutor::Transcode(const std::string& input_path,
                                         std::function<void(int)> progress_callback,
                                         std::function<bool()> should_cancel)
 {
-    // 确保输出目录存在
     MakeDirs(output_path.substr(0, output_path.find_last_of('/')));
 
-    // 探测输入文件时长，用于进度百分比计算
-    int64_t total_ms = 0;
+    // 进度基准：优先用切窗时长；仅当 duration_ms==0 时才 Probe（修复 #27）
+    int64_t total_ms = duration_ms;
+    if (total_ms <= 0)
     {
         auto info = Probe(input_path);
         if (info.valid) total_ms = info.duration_ms;
     }
 
-    // 若指定了时间范围，用它作为进度基准；否则用源文件时长
-    if (duration_ms > 0)
-        total_ms = duration_ms;
+    // 构建 argv（不走 shell，修复 #4）
+    std::vector<std::string> args;
+    args.push_back("ffmpeg");
+    args.push_back("-y");
 
-    // 构建转码命令
-    // -ss 在 -i 前 = fast input seeking，配合重编码实现帧精确定位
-    // -progress pipe:1  输出结构化进度到 stdout
-    // -nostats          隐藏默认的统计输出
-    // -c:v libx264      使用 H.264 编码
-    // -preset fast      快速预设（平衡速度与质量）
-    // -c:a aac          使用 AAC 音频编码
-    std::ostringstream cmd;
-    cmd << "ffmpeg -y";
-
-    // 时间范围（精确切片，替代单独的 Slice 步骤）
     if (start_ms > 0)
-        cmd << " -ss " << (start_ms / 1000.0);
+    {
+        args.push_back("-ss");
+        args.push_back(std::to_string(start_ms / 1000.0));
+    }
     if (duration_ms > 0)
-        cmd << " -t " << (duration_ms / 1000.0);
+    {
+        args.push_back("-t");
+        args.push_back(std::to_string(duration_ms / 1000.0));
+    }
 
-    cmd << " -i \"" << input_path << "\"";
+    args.push_back("-i");
+    args.push_back(input_path);
 
-    // 分辨率（如 "1280x720" 或 "720p" → "1280x720"）
     std::string resolved = ResolveResolution(target_resolution);
     if (!resolved.empty())
     {
-        cmd << " -s " << resolved;
+        args.push_back("-s");
+        args.push_back(resolved);
     }
-
-    // 视频码率（kbps）
     if (target_bitrate > 0)
     {
-        cmd << " -b:v " << target_bitrate << "k";
+        args.push_back("-b:v");
+        args.push_back(std::to_string(target_bitrate) + "k");
     }
 
-    cmd << " -c:v libx264 -preset fast -c:a aac"
-        << " -progress pipe:1 -nostats"
-        << " \"" << output_path << "\"";
+    args.push_back("-c:v");  args.push_back("libx264");
+    args.push_back("-preset"); args.push_back("fast");
+    args.push_back("-c:a");  args.push_back("aac");
+    args.push_back("-progress"); args.push_back("pipe:1");
+    args.push_back("-nostats");
+    args.push_back(output_path);
 
-    // 进度回调包装：将 ParseProgress 的微秒值转为 0-100 百分比
+    // 进度回调包装：将 ParseProgress 的微秒原始值转为 0-100 百分比（修复 #16）
     std::function<void(int)> wrapped_cb = nullptr;
-    if (progress_callback)
+    if (progress_callback && total_ms > 0)
     {
         wrapped_cb = [progress_callback, total_ms](int raw_progress) {
-            if (raw_progress < 0) return;  // 无法解析的行，跳过
-
-            if (total_ms > 0)
-            {
-                // ParseProgress 返回微秒/10000（即 0.01% 精度）
-                // 重新计算百分比
-                int pct = raw_progress;
-                if (pct < 0)   pct = 0;
-                if (pct > 100) pct = 100;
-
-                // 如果 raw_progress 很大（> 100），说明是原始微秒值
-                if (pct > 100)
-                {
-                    int64_t raw_ms = static_cast<int64_t>(raw_progress) * 10;  // 0.01% → ms 近似
-                    pct = static_cast<int>(raw_ms * 100 / total_ms);
-                    if (pct < 0) pct = 0;
-                    if (pct > 100) pct = 100;
-                }
-                progress_callback(pct);
-            }
+            if (raw_progress < 0) return;
+            // ParseProgress(total_duration_ms=0) 返回 us/10000（0.01% 单位）
+            // out_time_ms = raw_progress * 10 ms，百分比 = out_time_ms * 100 / total_ms
+            int64_t out_ms = static_cast<int64_t>(raw_progress) * 10;
+            int pct = static_cast<int>(out_ms * 100 / total_ms);
+            if (pct < 0)   pct = 0;
+            if (pct > 100) pct = 100;
+            progress_callback(pct);
         };
     }
 
-    FfmpegResult result = ExecuteCommand(cmd.str(), wrapped_cb, should_cancel);
+    FfmpegResult result = ExecuteCommand(args, wrapped_cb, should_cancel);
     if (result.success)
     {
         result.output_path = output_path;
@@ -550,22 +618,32 @@ FfmpegResult FfmpegExecutor::Transcode(const std::string& input_path,
 // ============================================================================
 // Screenshot — 截图
 // ============================================================================
+//
+// 阶段6遗留项5：转码成功后由 FfmpegExecute 调用，截取
+// start_ms + duration_ms/2 时间点单帧，随 ReportShardResult 上报
+// （screenshot_path 字段，写入 ShardRecord）。目前下游无消费方。
+//
+// -ss 在 -i 前 = fast input seeking（先跳到最近关键帧再精确解码），
+// 只解码一个 GOP 而非从头解码。
+//
+// ⚠️ 已知问题：命令拼接仅双引号包裹路径 → 命令注入（#4）。
+// ============================================================================
 
 FfmpegResult FfmpegExecutor::Screenshot(const std::string& input_path,
                                          int64_t timestamp_ms,
                                          const std::string& output_path)
 {
-    // 确保输出目录存在
     MakeDirs(output_path.substr(0, output_path.find_last_of('/')));
 
-    std::ostringstream cmd;
-    cmd << "ffmpeg -y"
-        << " -ss " << (timestamp_ms / 1000.0)
-        << " -i \"" << input_path << "\""
-        << " -vframes 1"
-        << " \"" << output_path << "\"";
+    std::vector<std::string> args = {
+        "ffmpeg", "-y",
+        "-ss", std::to_string(timestamp_ms / 1000.0),
+        "-i", input_path,
+        "-vframes", "1",
+        output_path
+    };
 
-    FfmpegResult result = ExecuteCommand(cmd.str());
+    FfmpegResult result = ExecuteCommand(args);
     if (result.success)
     {
         result.output_path = output_path;
@@ -576,6 +654,16 @@ FfmpegResult FfmpegExecutor::Screenshot(const std::string& input_path,
 // ============================================================================
 // Merge — 视频合并
 // ============================================================================
+//
+// 阶段6遗留项1：ResultCollector.MarkJobTerminal 在 JOB_SUCCESS 时收集全部
+// shard 的 output_path（按 shard_index 排序）调用本方法，产出 {job_id}_merged.mp4。
+// 用 concat demuxer + -c copy（不重编码，秒级完成）。
+//
+// ⚠️ 已知问题（阶段8审查）：
+//  ① filelist.txt 用固定名写在输出目录下，跨 job/并发共享——ResultCollector
+//     侧并发 merge 会交错写同一文件（#7）；本方法写完即删，无残留。
+//  ② 命令拼接仅双引号包裹路径 → 命令注入（#4）。
+// ============================================================================
 
 FfmpegResult FfmpegExecutor::Merge(const std::vector<std::string>& input_paths,
                                     const std::string& output_path)
@@ -583,46 +671,41 @@ FfmpegResult FfmpegExecutor::Merge(const std::vector<std::string>& input_paths,
     if (input_paths.empty())
     {
         FfmpegResult result;
-        result.success = false;
+        result.success   = false;
         result.exit_code = -1;
         result.error_msg = "Merge: input_paths is empty";
         return result;
     }
 
-    // 确保输出目录存在
     std::string output_dir = output_path.substr(0, output_path.find_last_of('/'));
     MakeDirs(output_dir);
 
-    // 创建 filelist.txt（concat demuxer 用）
+    // filelist 用固定名写在输出目录（调用方需保证互斥，见 result_collector #7）
     std::string filelist_path = output_dir + "/filelist.txt";
     FILE* fl = fopen(filelist_path.c_str(), "w");
     if (!fl)
     {
         FfmpegResult result;
-        result.success = false;
+        result.success   = false;
         result.exit_code = -1;
         result.error_msg = "Merge: cannot create filelist: " + filelist_path;
         return result;
     }
 
     for (const auto& path : input_paths)
-    {
-        // concat demuxer 格式: file '/path/to/file'
         fprintf(fl, "file '%s'\n", path.c_str());
-    }
     fclose(fl);
 
-    // 执行合并
-    std::ostringstream cmd;
-    cmd << "ffmpeg -y"
-        << " -f concat -safe 0"
-        << " -i \"" << filelist_path << "\""
-        << " -c copy"
-        << " \"" << output_path << "\"";
+    std::vector<std::string> args = {
+        "ffmpeg", "-y",
+        "-f", "concat", "-safe", "0",
+        "-i", filelist_path,
+        "-c", "copy",
+        output_path
+    };
 
-    FfmpegResult result = ExecuteCommand(cmd.str());
+    FfmpegResult result = ExecuteCommand(args);
 
-    // 清理临时文件
     std::remove(filelist_path.c_str());
 
     if (result.success)

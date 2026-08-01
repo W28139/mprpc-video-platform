@@ -10,6 +10,7 @@
 #include <fstream>
 #include <sstream>
 #include <sys/stat.h>
+#include <unistd.h>
 #include "worker.pb.h"
 #include "result.pb.h"
 #include "mprpcapplication.h"
@@ -70,6 +71,21 @@ struct RunningShard {
 
     RunningShard(const ShardInfo& s, const std::string& aid)
         : info(s), attempt_id(aid) {}
+};
+
+/// @brief 待重试上报的结果（修复 #6：上报失败后心跳兜底）
+struct PendingReport {
+    std::string shard_id;
+    std::string job_id;
+    std::string worker_id;
+    std::string attempt_id;
+    bool        is_success;
+    int         exit_code;
+    std::string error_msg;
+    std::string output_path;
+    int64_t     elapsed_ms;
+    int32_t     shard_index;
+    std::string screenshot_path;
 };
 
 /// @brief WorkerService RPC 实现
@@ -245,7 +261,8 @@ public:
         done->Run();
     }
 
-    /// @brief 查询 shard 执行进度
+    /// @brief 查询 shard 执行进度(分片级：1 个 shard 的实时进度),progress 0-100 实时百分比,毫秒级实时
+    // QueryJob（JobService :9001): 任务级：1 个 job 全貌 + 所有 shard 的状态列表
     void QueryShard(::google::protobuf::RpcController* controller,
                     const ::QueryShardRequest* request,
                     ::QueryShardResponse* response,
@@ -389,7 +406,12 @@ private:
         std::string mock_error_msg;
         if (mock_fail_ratio > 0)
         {
-            thread_local std::mt19937 rng(std::random_device{}());
+            // 修复 #29：不用 std::random_device（WSL/容器熵不足时阻塞），
+            // 改用 steady_clock + thread_id hash 播种（与本仓库 common_store.cpp 准则一致）
+            thread_local std::mt19937 rng(
+                static_cast<uint64_t>(
+                    std::chrono::steady_clock::now().time_since_epoch().count()) +
+                std::hash<std::thread::id>{}(std::this_thread::get_id()));
             int roll = std::uniform_int_distribution<int>(0, 99)(rng);
             mock_success = (roll >= mock_fail_ratio);  // roll=0~99, fail_ratio=40 → roll<40 失败
             if (!mock_success)
@@ -448,11 +470,24 @@ private:
         if (!result_reported)
         {
             LOG_ERROR("MockExecute: shard=%s result report FAILED after 3 retries, "
-                      "keeping in running_shards for heartbeat-based recovery",
+                      "queuing for heartbeat retry (fix #6)",
                       shard_id.c_str());
-            // 不调用 CleanupShard — 保留在 running_shards_ 中，
-            // 由心跳线程检测并重试上报（阶段 5 完善）
-            return;
+            // 阶段 8 修复 #6：结果暂存到待重试队列，心跳线程定期重试上报
+            PendingReport pr;
+            pr.shard_id    = shard_id;
+            pr.job_id      = job_id;
+            pr.worker_id   = worker_id;
+            pr.attempt_id  = rs->attempt_id;
+            pr.is_success  = mock_success;
+            pr.exit_code   = mock_success ? 0 : -1;
+            pr.error_msg   = mock_success ? "" : mock_error_msg;
+            pr.output_path = rs->info.output_path();
+            pr.elapsed_ms  = mock_execution_ms;
+            pr.shard_index = rs->info.shard_index();
+            {
+                std::lock_guard<std::mutex> lock(pending_mutex_);
+                pending_reports_.push_back(pr);
+            }
         }
 
         CleanupShard(shard_id);
@@ -512,7 +547,7 @@ private:
                  (long long)start_ms, (long long)duration_ms);
 
         // ── 2. 转码（切片+转码合一，-ss/-t 直接传给 ffmpeg） ──────
-        // 转码参数从 ShardInfo 透传（阶段 6 遗留项 2），不再读本地配置
+        // 转码参数从 ShardInfo 透传，不再读本地配置
         std::string target_resolution = rs->info.target_resolution();
         int target_bitrate = rs->info.target_bitrate();
 
@@ -601,6 +636,14 @@ private:
             }
         }
 
+        // ── 4.6 再次检查 cancel：截图/重试睡眠期间可能收到取消（修复 #19） ──
+        if (rs->cancelled)
+        {
+            LOG_INFO("FfmpegExecute: shard=%s cancelled after transcode/screenshot", shard_id.c_str());
+            CleanupShard(shard_id);
+            return;
+        }
+
         // ── 5. 上报最终结果（带重试，与 MockExecute 相同逻辑） ────────
         bool is_success = transcode_result.success;
         int exit_code = transcode_result.exit_code;
@@ -654,9 +697,26 @@ private:
         if (!result_reported)
         {
             LOG_ERROR("FfmpegExecute: shard=%s result report FAILED after 3 retries, "
-                      "keeping in running_shards for heartbeat-based recovery",
+                      "queuing for heartbeat retry (fix #6)",
                       shard_id.c_str());
-            return;
+            // 阶段 8 修复 #6：将结果暂存到待重试队列，心跳线程定期重试上报
+            // CleanupShard 照常执行——释放 running_shards_ 槽位，避免楔死 Worker
+            PendingReport pr;
+            pr.shard_id        = shard_id;
+            pr.job_id          = job_id;
+            pr.worker_id       = worker_id;
+            pr.attempt_id      = rs->attempt_id;
+            pr.is_success      = is_success;
+            pr.exit_code       = exit_code;
+            pr.error_msg       = error_msg;
+            pr.output_path     = output_path;
+            pr.elapsed_ms      = total_elapsed;
+            pr.shard_index     = rs->info.shard_index();
+            pr.screenshot_path = screenshot_path;
+            {
+                std::lock_guard<std::mutex> lock(pending_mutex_);
+                pending_reports_.push_back(pr);
+            }
         }
 
         CleanupShard(shard_id);
@@ -738,80 +798,194 @@ private:
 
     mutable std::mutex mutex_;
     std::unordered_map<std::string, std::shared_ptr<RunningShard>> running_shards_;
+
+    // 阶段 8 修复 #6：上报失败的结果暂存队列，由心跳线程定期重试
+    mutable std::mutex pending_mutex_;
+    std::vector<PendingReport> pending_reports_;
+
+public:
+    /// @brief 心跳线程调用：重试所有待上报的 shard 结果（修复 #6）
+    /// @return 成功上报并从队列中移除的数量
+    int RetryPendingReports()
+    {
+        std::vector<PendingReport> batch;
+        {
+            std::lock_guard<std::mutex> lock(pending_mutex_);
+            batch.swap(pending_reports_);  // 取出全部，减少锁持有时间
+        }
+
+        if (batch.empty()) return 0;
+
+        MprpcChannel rc_channel;
+        ResultCollectorService_Stub rc_stub(&rc_channel);
+        int succeeded = 0;
+
+        for (auto& pr : batch)
+        {
+            ReportShardResultRequest req;
+            req.set_shard_id(pr.shard_id);
+            req.set_job_id(pr.job_id);
+            req.set_worker_id(pr.worker_id);
+            req.set_attempt_id(pr.attempt_id);
+            req.set_is_success(pr.is_success);
+            req.set_exit_code(pr.exit_code);
+            req.set_error_msg(pr.error_msg);
+            req.set_output_path(pr.output_path);
+            req.set_elapsed_ms(pr.elapsed_ms);
+            req.set_shard_index(pr.shard_index);
+            req.set_screenshot_path(pr.screenshot_path);
+
+            ReportShardResultResponse resp;
+            MprpcController ctrl;
+            rc_stub.ReportShardResult(&ctrl, &req, &resp, nullptr);
+
+            if (!ctrl.Failed() && resp.accepted())
+            {
+                ++succeeded;
+                LOG_INFO("RetryPendingReports: shard=%s report SUCCESS via heartbeat retry",
+                         pr.shard_id.c_str());
+            }
+            else
+            {
+                // 重试失败，放回队列等待下次心跳
+                std::lock_guard<std::mutex> lock(pending_mutex_);
+                pending_reports_.push_back(pr);
+                LOG_WARN("RetryPendingReports: shard=%s still failed: %s",
+                         pr.shard_id.c_str(),
+                         ctrl.Failed() ? ctrl.ErrorText().c_str() : resp.error_msg().c_str());
+            }
+        }
+
+        if (succeeded > 0)
+            LOG_INFO("RetryPendingReports: %d reports succeeded via heartbeat, %zu still pending",
+                     succeeded, pending_reports_.size());
+        return succeeded;
+    }
 };
 
 // ============================================================================
 // 系统资源采集（阶段 7：资源感知调度）
 // ============================================================================
 
-/// @brief 从 /proc/stat 读取 CPU 时间并计算使用率
+/// @brief 从 /proc/self/stat 读取本进程 CPU 时间并计算使用率（修复 #15）
 ///
-/// 两次调用间计算差值百分比。首次调用返回 0（需要两个采样点）。
-/// 线程安全：使用 thread_local 保存上次采样值，每个心跳线程独立采集。
+/// 阶段 8 修复：原实现读 /proc/stat 第一行（主机全核 CPU），在单机多 Worker
+/// 部署下邻居 Worker 的繁忙会使空闲 Worker 也报高 CPU → 过载门反向工作。
+/// 改为 /proc/self/stat（进程 CPU），正确反映本 Worker 进程的 CPU 占用。
 ///
-/// @return CPU 使用率 0-100，首次调用返回 0
+/// 线程安全：mutex 保护采样状态（替代 thread_local，消除首次返回 0 的窗口）。
+///
+/// @return CPU 使用率 0-100
 static int CollectCpuUsage()
 {
-    thread_local uint64_t prev_total = 0;
-    thread_local uint64_t prev_idle  = 0;
+    static std::mutex cpu_mutex;
+    static uint64_t prev_ticks = 0;
+    static int64_t  prev_time_ms = 0;
+    static bool     first_call = true;
 
-    std::ifstream stat_file("/proc/stat");
+    std::lock_guard<std::mutex> lock(cpu_mutex);
+
+    // 读 /proc/self/stat：utime(14) + stime(15) + cutime(16) + cstime(17)
+    std::ifstream stat_file("/proc/self/stat");
     if (!stat_file.is_open()) return 0;
 
     std::string line;
-    std::getline(stat_file, line);  // 第一行: cpu  user nice system idle iowait irq softirq steal ...
+    std::getline(stat_file, line);
 
-    std::istringstream iss(line);
-    std::string cpu_label;
-    uint64_t user, nice, system, idle, iowait, irq, softirq, steal;
-    iss >> cpu_label >> user >> nice >> system >> idle >> iowait >> irq >> softirq >> steal;
+    // /proc/self/stat 格式：pid (comm) state ... fields...
+    // 跳过 pid 和 comm（comm 可能含空格和括号，需要特殊处理）
+    size_t comm_end = line.rfind(')');
+    if (comm_end == std::string::npos) return 0;
 
-    uint64_t total = user + nice + system + idle + iowait + irq + softirq + steal;
-    uint64_t idle_sum = idle + iowait;
-
-    int usage = 0;
-    if (prev_total > 0)
+    std::istringstream iss(line.substr(comm_end + 2));  // skip ") "
+    std::string field;
+    uint64_t utime = 0, stime = 0, cutime = 0, cstime = 0;
+    // fields after comm: state(3) ppid(4) pgrp(5) ... utime(14) stime(15) cutime(16) cstime(17)
+    for (int i = 3; i <= 17; ++i)
     {
-        uint64_t total_delta = total - prev_total;
-        uint64_t idle_delta  = idle_sum - prev_idle;
-        if (total_delta > 0)
-            usage = static_cast<int>((total_delta - idle_delta) * 100 / total_delta);
+        if (!(iss >> field)) return 0;
+        if (i == 14) utime  = std::stoull(field);
+        if (i == 15) stime  = std::stoull(field);
+        if (i == 16) cutime = std::stoull(field);
+        if (i == 17) cstime = std::stoull(field);
     }
 
-    prev_total = total;
-    prev_idle  = idle_sum;
+    uint64_t total_ticks = utime + stime + cutime + cstime;
+    int64_t now_ms = NowMs();
+
+    int usage = 0;
+    if (!first_call && prev_time_ms > 0)
+    {
+        int64_t elapsed_ms = now_ms - prev_time_ms;
+        // ticks 是 USER_HZ (通常 100)，elapsed_ms 是毫秒
+        // CPU% = (delta_ticks * 1000 / HZ) * 100 / elapsed_ms
+        //      = delta_ticks * 100000 / HZ / elapsed_ms
+        if (elapsed_ms > 0)
+        {
+            uint64_t delta_ticks = total_ticks - prev_ticks;
+            long sys_hz = sysconf(_SC_CLK_TCK);
+            if (sys_hz <= 0) sys_hz = 100;
+            usage = static_cast<int>(delta_ticks * 100000 / static_cast<uint64_t>(sys_hz)
+                                     / static_cast<uint64_t>(elapsed_ms));
+            // 在多核机器上可能 >100（进程用满一核以上），clamp 到 [0,100] 用于过载判断
+            if (usage > 100) usage = 100;
+            if (usage < 0)   usage = 0;
+        }
+    }
+
+    prev_ticks  = total_ticks;
+    prev_time_ms = now_ms;
+    first_call   = false;
     return usage;
 }
 
-/// @brief 从 /proc/meminfo 读取内存使用率
+/// @brief 从 /proc/self/status 读取本进程内存使用率（修复 #15）
 ///
-/// @return 内存使用率 0-100
+/// 原实现读 /proc/meminfo（主机级内存），改为读本进程 VmRSS，
+/// 与主机总内存对比得到进程维度的内存使用率。
 static int CollectMemUsage()
 {
-    std::ifstream mem_file("/proc/meminfo");
-    if (!mem_file.is_open()) return 0;
+    static std::once_flag memtotal_init;
+    static uint64_t mem_total_kb = 0;
 
-    uint64_t mem_total = 0, mem_available = 0;
+    // 延迟初始化：读取一次主机总内存（所有 Worker 共享，只需一次）
+    std::call_once(memtotal_init, []() {
+        std::ifstream mt("/proc/meminfo");
+        if (mt.is_open())
+        {
+            std::string line;
+            while (std::getline(mt, line))
+            {
+                if (line.find("MemTotal:") == 0)
+                {
+                    std::istringstream iss(line);
+                    std::string label;
+                    iss >> label >> mem_total_kb;
+                    break;
+                }
+            }
+        }
+    });
+
+    // 读本进程 VmRSS
+    std::ifstream status_file("/proc/self/status");
+    if (!status_file.is_open()) return 0;
+
+    uint64_t vm_rss_kb = 0;
     std::string line;
-    while (std::getline(mem_file, line))
+    while (std::getline(status_file, line))
     {
-        if (line.find("MemTotal:") == 0)
+        if (line.find("VmRSS:") == 0)
         {
             std::istringstream iss(line);
             std::string label;
-            iss >> label >> mem_total;  // 单位 kB
+            iss >> label >> vm_rss_kb;
+            break;
         }
-        else if (line.find("MemAvailable:") == 0)
-        {
-            std::istringstream iss(line);
-            std::string label;
-            iss >> label >> mem_available;
-        }
-        if (mem_total > 0 && mem_available > 0) break;
     }
 
-    if (mem_total == 0) return 0;
-    return static_cast<int>((mem_total - mem_available) * 100 / mem_total);
+    if (mem_total_kb == 0 || vm_rss_kb == 0) return 0;
+    return static_cast<int>(vm_rss_kb * 100 / mem_total_kb);
 }
 
 // ============================================================================
@@ -932,17 +1106,59 @@ static void RunHeartbeatLoop(std::string worker_id,
         HeartbeatResponse hb_resp;
         MprpcController controller;
 
+        // 向workmanager发送心跳
         stub.Heartbeat(&controller, &hb_req, &hb_resp, nullptr);
-
+        // 心跳成功
         if (!controller.Failed() && hb_resp.error_code() == 0)
         {
             LOG_DEBUG("RunHeartbeatLoop: Heartbeat success, worker_id=%s, running=%d",
                       worker_id.c_str(), running);
 
+            // 检查队列有没有未上报的结果，有的话就上报给ResultCollector
+            // 队列里存在未上报结果的原因通常是 ResultCollector 宕机/重启，
+            // 这里借心跳循环（每 3 秒）作为结果上报失败后的兜底重试
+            if (worker_service)
+            {
+                int retried = worker_service->RetryPendingReports();
+                if (retried > 0)
+                    LOG_INFO("RunHeartbeatLoop: %d pending reports retried successfully", retried);
+            }
+
+            // alive=false：WM 的注册表里查无此 worker（典型场景：WM 重启后内存 WorkerStore 丢失）
+            // 要重新注册恢复记录，下一轮心跳即恢复
             if (!hb_resp.alive())
             {
-                LOG_WARN("RunHeartbeatLoop: WorkerManager reports worker_id=%s is NOT alive",
+                LOG_WARN("RunHeartbeatLoop: WorkerManager reports worker_id=%s is NOT alive, "
+                         "re-registering...",
                          worker_id.c_str());
+
+                // WM 重启后 WorkerStore 丢失，需要重新注册。
+                // InsertOrUpdate 是幂等的（已存在则覆盖），不会产生重复记录。
+                RegisterWorkerRequest reg_req;
+                reg_req.set_worker_id(worker_id);
+                reg_req.set_ip(ip);
+                reg_req.set_port(port);
+                reg_req.set_cpu_cores(cpu_cores);
+                reg_req.set_memory_mb(memory_mb);
+                reg_req.set_max_running_shards(max_running_shards);
+
+                RegisterWorkerResponse reg_resp;
+                MprpcController reg_ctrl;
+
+                stub.RegisterWorker(&reg_ctrl, &reg_req, &reg_resp, nullptr);
+
+                if (!reg_ctrl.Failed() && reg_resp.error_code() == 0)
+                {
+                    LOG_INFO("RunHeartbeatLoop: re-registered worker_id=%s successfully",
+                             worker_id.c_str());
+                }
+                else
+                {
+                    LOG_WARN("RunHeartbeatLoop: re-registration failed for worker_id=%s: %s",
+                             worker_id.c_str(),
+                             reg_ctrl.Failed() ? reg_ctrl.ErrorText().c_str()
+                                               : reg_resp.error_msg().c_str());
+                }
             }
         }
         else

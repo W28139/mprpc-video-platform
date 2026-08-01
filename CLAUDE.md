@@ -23,7 +23,7 @@ muduo_im 是一个基于 Reactor 模式的 Linux C++ 网络库及其上层 RPC �
 | 5. 失败重试和故障恢复 | ✅ 完成（2026-07-29） |
 | 6. 接入 FFmpeg 执行器 | ✅ 完成（2026-07-31） |
 | 7. 资源感知调度和监控 | ✅ 完成（2026-07-31） |
-| 8. 压测、故障测试和文档整理 | ⬜ 下一步 |
+| 8. 压测、故障测试和文档整理 | ✅ 代码审查与Bug修复（2026-08-01），压测待进行 |
 
 ## 阶段 6 完成内容
 
@@ -282,7 +282,7 @@ AsyncLogger::init() → MprpcApplication::Init(argc, argv) → RpcProvider.Notif
 |------|------|
 | `设计问题/` | Buffer 设计、日志系统、RPC 框架梳理、ZK 缓存设计、mprpc 使用说明 |
 | `更新框架日志/` | 框架开发日志（#1-#10），覆盖内存池→日志→mprpc→压测优化 |
-| `更新业务日志/` | 业务平台开发日志（#1-#6），覆盖阶段 2~6 每轮迭代 |
+| `更新业务日志/` | 业务平台开发日志（#1-#8），覆盖阶段 2~8 每轮迭代 |
 | `视频转码平台/` | 系统设计（架构/服务拆分/状态机/调度策略/数据模型）+ 开发路线图 + 验收标准 + 快速启动指南 |
 
 ## 关键配置项
@@ -291,8 +291,8 @@ AsyncLogger::init() → MprpcApplication::Init(argc, argv) → RpcProvider.Notif
 |---|---|---|
 | `rpcserverip` | 必填 | Provider 绑定 IP |
 | `rpcserverport` | 必填 | Provider 绑定端口 |
-| `rpcserverio_threads` | 16 | IO 工作线程数 |
-| `rpcserverwork_threads` | min(8, max(2, cpu核数)) | Work 业务线程数 |
+| `rpcserverio_threads` | 2 | IO 工作线程数（当前配置文件显式配置，未配置时默认 2） |
+| `rpcserverwork_threads` | 2 | Work 业务线程数（当前配置文件显式配置，未配置时默认 2） |
 | `zookeeperip` | 必填 | ZK 地址 |
 | `zookeeperport` | 必填 | ZK 端口 |
 | `mprpcclient_connections_per_endpoint` | 8 | 客户端连接池单 endpoint 最大连接数 |
@@ -318,6 +318,27 @@ AsyncLogger::init() → MprpcApplication::Init(argc, argv) → RpcProvider.Notif
 - Worker 过载保护（running>=max || cpu>90% → reject）
 - `[SchedulerMetrics]` 每 10s 输出调度快照
 
-### 阶段 8：压测、故障测试和文档整理
+### 阶段 8：压测、故障测试和文档整理（2026-08-01 进行中）
 
 系统性验证整个平台在负载下的表现。
+
+**压测结果**：
+
+| 测试项 | 结果 |
+|--------|------|
+| 单元测试（buffer/threadpool/rpc_protocol） | 43/43 通过 |
+| echo 压测（100 并发阶梯） | 峰值 17 万 QPS，P50 ~60us，0 失败 |
+| echo 64KB 大报文 | 修复 UAF 前崩溃，修复后 0 失败 |
+| RPC 压测（直连长连接） | 12.3 万 QPS，P50 403us |
+| RPC 阶梯压测 | 50 并发达峰 ~5 万 QPS；默认 work_threads=2 在 100 并发饱和（P99 28ms），调至 16 后 2.9ms |
+| 平台全链路（真实 ffmpeg） | 30s 视频 → 2 shard → 合并 30.02s 精确，JOB_SUCCESS |
+| 平台压测 | 10 任务并发全部 SUCCESS，队列峰值 10+，worker 满载保护生效 |
+| 故障测试 | worker 转码中被杀 → 重调度恢复 SUCCESS；ffmpeg 失败 → 3 次重试 → JOB_FAILED |
+
+**压测发现并修复的 Bug（3 项）**：
+
+1. **（严重）Channel::handleEvent UAF 崩溃**（`wevix_muduo/src/Channel.cpp`）——64KB 大报文触发 SIGSEGV。epoll 同批次 `IN|RDHUP|OUT` 事件时，read 回调内 `handleClose` 同步销毁 Connection/channel_，返回后 `handleEvent` 继续访问已析构的 this。修复：每个回调执行后立即 `return`，禁止再访问 this（ET 模式下 `enableWriting` 的 `EPOLL_CTL_MOD` 保证 EPOLLOUT 重新触发不丢失）。
+2. **已完成任务的 shard 被重复调度**——ResultCollector 任务终态只通知 JobService，Scheduler 不知道任务已完成；Worker 死亡时 `NotifyWorkerOffline` 会把终态任务的残留 ASSIGNED/RUNNING shard 重置为 WAITING 重新分配。修复：① `MarkJobTerminal` 终态后通知 Scheduler（复用 `CancelJobShards`，reason=JOB_TERMINAL）；② `CancelJobShards` 先把本地非终态 shard 标记 CANCELED 再通知 Worker；③ `NotifyWorkerOffline`/超时扫描/分配循环均增加 job 终态（SUCCESS/FAILED/CANCELED）检查。
+3. **查询接口 retry=N/0 显示不一致**——Scheduler/ResultCollector 的 `UpdateJobStatus` 通知 shard 快照漏填 `max_retry`，JobService 幂等覆盖把 max_retry 清零。修复：两处快照补 `set_max_retry`。
+
+**已记录文档**：`doc/更新业务日志/8. 阶段8代码审查与Bug修复.md`（代码审查部分）；压测与故障测试部分见 `doc/更新业务日志/` 下 2026-08-01 相关日志。
