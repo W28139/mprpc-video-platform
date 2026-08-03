@@ -58,27 +58,12 @@ message CancelJobResponse {
     string error_msg  = 2;  // 失败时的错误描述
 }
 
-// ── UpdateJobStatus ─────────────────────────────────────────────────────────
-// 由 Scheduler / ResultCollector 反向通知 JobService 更新 job 状态。
-// 由于 JobStore 是进程内存储，跨进程的状态变更需要通过 RPC 同步。
-
-message UpdateJobStatusRequest {
-    string job_id     = 1;  // 目标 job ID
-    JobStatus status  = 2;  // 新状态
-    int32  shard_count = 3; // 可选：更新 shard 总数（Scheduler 切分后回填）
-    repeated ShardInfo shards = 4; // 可选：更新 shard 状态列表（跨进程同步）
-}
-
-message UpdateJobStatusResponse {
-    int32  error_code = 1;  // 0=成功，1=job 不存在
-    string error_msg  = 2;
-}
-
 // ── Service ────────────────────────────────────────────────────────────────
 
 service JobService {
     rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);       // 提交视频处理任务
     rpc QueryJob(QueryJobRequest) returns (QueryJobResponse);          // 查询任务状态与所有 shard
     rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);       // 取消任务
-    rpc UpdateJobStatus(UpdateJobStatusRequest) returns (UpdateJobStatusResponse); // 跨进程状态同步
+    // 阶段 9 删除 UpdateJobStatus：Store 已 MySQL 化，跨进程状态同步不再需要 RPC，
+    // 各服务直接读取 MySQL 共享数据。
 }

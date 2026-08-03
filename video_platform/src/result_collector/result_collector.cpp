@@ -7,7 +7,6 @@
 #include <chrono>
 #include <unordered_set>
 #include "result.pb.h"
-#include "job.pb.h"
 #include "scheduler.pb.h"
 #include "mprpcapplication.h"
 #include "mprpcchannel.h"
@@ -15,6 +14,8 @@
 #include "rpcprovider.h"
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
+#include "video_platform/mysql_pool.h"
+#include "video_platform/redis_client.h"
 #include "video_platform/ffmpeg_executor.h"
 
 using namespace video_platform;
@@ -150,27 +151,20 @@ public:
                  request->exit_code(),
                  (long long)request->elapsed_ms());
 
-        // 1. 查找或创建 shard 本地副本
+        // 1. 从 ShardStore（MySQL）获取 shard
+        // 阶段 9：shard 由 Scheduler 切分时写入 MySQL，RC 直接读取同一份数据，
+        // 不再需要"从请求参数构造本地副本"。查不到说明数据异常，拒绝接收。
         auto shard_opt = ShardStore::GetInstance().Get(shard_id);
         if (!shard_opt.has_value())
         {
-            // 首次收到该 shard 的结果：从请求参数构造本地 ShardRecord
-            ShardRecord shard_copy;
-            shard_copy.shard_id      = shard_id;
-            shard_copy.job_id        = job_id;
-            shard_copy.shard_index   = request->shard_index();
-            shard_copy.status        = static_cast<int32_t>(ShardStatus::SHARD_CREATED);
-            shard_copy.assigned_worker_id = worker_id;
-            shard_copy.attempt_id    = attempt_id;
-            shard_copy.retry_count   = parseRetryFromAttempt(attempt_id);
-            shard_copy.max_retry     = 3;
-            shard_copy.output_path     = request->output_path();
-            shard_copy.screenshot_path = request->screenshot_path();
-            shard_copy.created_at      = NowMs();
-            shard_copy.updated_at      = NowMs();
-            ShardStore::GetInstance().Insert(shard_copy);
-            shard_opt = ShardStore::GetInstance().Get(shard_id);
-            LOG_INFO("ResultCollectorService: created local shard copy shard_id=%s", shard_id.c_str());
+            LOG_ERROR("ResultCollectorService::ReportShardResult shard_id=%s not found "
+                      "in MySQL (job=%s), rejecting result", shard_id.c_str(), job_id.c_str());
+            response->set_error_code(1);
+            response->set_error_msg("shard not found: " + shard_id);
+            response->set_accepted(false);
+            response->set_job_done(false);
+            done->Run();
+            return;
         }
 
         auto shard = shard_opt.value();
@@ -209,16 +203,20 @@ public:
             return;
         }
 
-        // 3.5 幂等检查：已 FAILED 且同一 attempt 不再重复处理（修复 #8）
+        // 3.5 幂等检查：同一 attempt 的重复失败结果不再处理（修复 #8/#3）
         // 防止同一 attempt 的重复 FAILED 上报双倍消耗 retry_count。
-        if (shard.status == static_cast<int32_t>(ShardStatus::SHARD_FAILED)
+        // #3 修复：检查范围从 FAILED 扩展到 RETRYING——首次 FAILED 上报处理后
+        // 本地状态被置为 RETRYING（:301-303），重复 FAILED 到达时状态已不是
+        // FAILED，原检查被绕过导致再次触发 RescheduleShard 双倍消耗预算。
+        if ((shard.status == static_cast<int32_t>(ShardStatus::SHARD_FAILED)
+          || shard.status == static_cast<int32_t>(ShardStatus::SHARD_RETRYING))
             && shard.attempt_id == attempt_id)
         {
-            LOG_INFO("ResultCollectorService: shard %s already FAILED for same attempt=%s "
-                     "(idempotent, fix #8)",
-                     shard_id.c_str(), attempt_id.c_str());
+            LOG_INFO("ResultCollectorService: shard %s already processed for same "
+                     "attempt=%s (status=%d, idempotent, fix #8/#3)",
+                     shard_id.c_str(), attempt_id.c_str(), shard.status);
             response->set_error_code(0);
-            response->set_error_msg("duplicate FAILED for same attempt, ignored");
+            response->set_error_msg("duplicate result for same attempt, ignored");
             response->set_accepted(true);
             response->set_job_done(CheckJobDone(job_id));
             done->Run();
@@ -226,20 +224,35 @@ public:
         }
 
         // 4. 更新 shard 状态
-        shard.status = request->is_success()
-            ? static_cast<int32_t>(ShardStatus::SHARD_SUCCESS)
-            : static_cast<int32_t>(ShardStatus::SHARD_FAILED);
-        shard.attempt_id = attempt_id;
-        shard.assigned_worker_id = worker_id;
-        shard.output_path = request->output_path();
-        shard.screenshot_path = request->screenshot_path();
-        shard.updated_at = NowMs();
-        ShardStore::GetInstance().Update(shard_id, shard);
+        // 条件更新（阶段 9）：仅当仍是快照状态时推进，防止覆盖
+        // Scheduler 并发写入的状态（如超时重扫的 WAITING 重置）
+        {
+            int from_status = shard.status;   // 快照前置状态
+            shard.status = request->is_success()
+                ? static_cast<int32_t>(ShardStatus::SHARD_SUCCESS)
+                : static_cast<int32_t>(ShardStatus::SHARD_FAILED);
+            shard.attempt_id = attempt_id;
+            shard.assigned_worker_id = worker_id;
+            shard.output_path = request->output_path();
+            shard.screenshot_path = request->screenshot_path();
+            shard.updated_at = NowMs();
+            ShardStore::GetInstance().UpdateIfStatus(shard_id, {from_status}, shard);
+        }
 
         LOG_INFO("ResultCollectorService: shard %s → %s (attempt=%s)",
                  shard_id.c_str(),
                  request->is_success() ? "SUCCESS" : "FAILED",
                  attempt_id.c_str());
+
+        // 阶段 10：shard 状态推进后失效进度缓存，让 QueryJob 及时看到新状态。
+        // 进行中的进度变化（ReportShardProgress）靠 60s TTL 过期自然刷新；
+        // 结果落定（SUCCESS/FAILED）则主动 DEL，终态判定不滞后。
+        // Redis 不可用时静默跳过（降级）。
+        {
+            auto& redis = RedisClient::GetInstance();
+            if (redis.inited() && redis.enabled())
+                redis.Del("job:progress:" + job_id);
+        }
 
         // 5. 若执行失败，调用 Scheduler.RescheduleShard 触发重试
         //    这里是阶段 5 故障恢复的核心链路：
@@ -247,9 +260,10 @@ public:
         //      → retry_count++ → 判断超限? → SHARD_FAILED(永久) : SHARD_WAITING(重分配)
         //    → SchedulingLoop 扫描 WAITING → 重新 AssignShard → Worker 再次执行
         //
-        //    若 RescheduleShard 成功（accepted=true），将本地状态改为 SHARD_RETRYING，
-        //    这样 CheckJobDone 不会因为看到 FAILED 而过早判定 JOB_FAILED。
-        //    若 RescheduleShard 拒绝（accepted=false，即已超 max_retry），本地保持 FAILED。
+        //    若 RescheduleShard 成功（accepted=true），将状态改为 SHARD_RETRYING
+        //    （MySQL 共享数据，阶段 9 起），这样 CheckJobDone 不会因为看到 FAILED
+        //    而过早判定 JOB_FAILED。
+        //    若 RescheduleShard 拒绝（accepted=false，即已超 max_retry），保持 FAILED。
 
         // shard 的转码工作本身没干成(is_success 是 Worker 填的，表示"这活干成没有")
         if (!request->is_success())
@@ -259,6 +273,7 @@ public:
 
             // 阶段 8 修复 #5：RescheduleShard RPC 带重试+退避（3 次，各 1s/2s/4s 间隔）
             bool reschedule_ok = false;
+            bool last_was_network = false;  // #8 修复：区分网络失败与确定性拒绝
             for (int rs_attempt = 1; rs_attempt <= 3; ++rs_attempt)
             {
                 if (rs_attempt > 1)
@@ -272,6 +287,9 @@ public:
                 rs_req.set_shard_id(shard_id);
                 rs_req.set_job_id(job_id);
                 rs_req.set_reason("WORKER_FAILED");
+                // #3 修复：携带本次失败上报的 attempt_id，
+                // Scheduler 按 attempt 幂等，重复触发不双倍消耗 retry_count
+                rs_req.set_attempt_id(attempt_id);
 
                 RescheduleShardResponse rs_resp;
                 MprpcController rs_ctrl;
@@ -287,6 +305,7 @@ public:
                     break;
                 }
 
+                last_was_network = rs_ctrl.Failed();
                 LOG_WARN("ResultCollectorService: RescheduleShard failed for %s "
                          "(attempt %d/3): %s",
                          shard_id.c_str(), rs_attempt,
@@ -298,21 +317,34 @@ public:
             {
                 // 重试已触发，更新本地状态为 RETRYING，防止 CheckJobDone
                 // 在重试结果到达前因看到 FAILED 而过早判定 JOB_FAILED
+                // 条件更新：仅当仍是 FAILED 时推进（Scheduler 可能已重置为 WAITING）
                 shard.status = static_cast<int32_t>(ShardStatus::SHARD_RETRYING);
                 shard.updated_at = NowMs();
-                ShardStore::GetInstance().Update(shard_id, shard);
+                ShardStore::GetInstance().UpdateIfStatus(
+                    shard_id, {static_cast<int32_t>(ShardStatus::SHARD_FAILED)}, shard);
             }
-            else
+            else if (last_was_network)
             {
-                // 阶段 8 修复 #5：RescheduleShard 3 次重试全失败时，
-                // 也标记为 RETRYING（而非保持 FAILED），防止不可逆 JOB_FAILED。
-                // Scheduler 恢复后，RUNNING 超时重扫或新 FAILED 上报会重新触发。
-                LOG_ERROR("ResultCollectorService: RescheduleShard FAILED after 3 retries "
-                          "for %s, marking RETRYING anyway to prevent irreversible JOB_FAILED",
+                // 3 次重试全因网络失败（Scheduler 不可达）→ 标记 RETRYING，
+                // 防止不可逆 JOB_FAILED；Scheduler 恢复后重扫/新上报会兜底。
+                LOG_ERROR("ResultCollectorService: RescheduleShard FAILED after 3 "
+                          "network retries for %s, marking RETRYING",
                           shard_id.c_str());
                 shard.status = static_cast<int32_t>(ShardStatus::SHARD_RETRYING);
                 shard.updated_at = NowMs();
-                ShardStore::GetInstance().Update(shard_id, shard);
+                ShardStore::GetInstance().UpdateIfStatus(
+                    shard_id, {static_cast<int32_t>(ShardStatus::SHARD_FAILED)}, shard);
+            }
+            else
+            {
+                // #8 修复：确定性拒绝（accepted=false，如 max_retry 耗尽）——
+                // Scheduler 已把 shard 置 FAILED 并推进 job 终态，保持 FAILED
+                // 尊重其终态判定。此前无条件置 RETRYING 导致 RC 侧 CheckJobDone
+                // 把 RETRYING 计为 in_progress，job 在 RC 永不 FAILED，
+                // 与 Scheduler/JobService 的终态永久分叉（每 15s 空扫一次）。
+                LOG_WARN("ResultCollectorService: RescheduleShard deterministically "
+                         "rejected for %s (e.g. max retry), keeping FAILED (fix #8)",
+                         shard_id.c_str());
             }
         }
 
@@ -353,7 +385,9 @@ private:
         auto shards = ShardStore::GetInstance().ListByJob(job_id);
         if (shards.empty()) return false;
 
-        // 从 JobStore 获取预期的 shard 总数
+        // 从 JobStore（MySQL）获取预期的 shard 总数。
+        // 阶段 9：job 数据由 JobService/Scheduler 写入 MySQL 共享，直接可读，
+        // 不再需要"跨进程 QueryJob RPC 查询 shard_count"（阶段 5 的 3 次重试逻辑）。
         int32_t expected_shard_count = 0;
         auto job_opt = JobStore::GetInstance().Get(job_id);
         if (job_opt.has_value())
@@ -376,51 +410,8 @@ private:
                 ++in_progress;  // WAITING / ASSIGNED / RUNNING / RETRYING
         }
 
-        // 当 expected_shard_count 未知时（ResultCollector 本地 JobStore 无此 job），
-        // 尝试从 JobService 查询（跨进程 RPC）。JobService 的 JobStore 中
-        // 有 Scheduler 切分时写入的 shard_count。
-        if (expected_shard_count <= 0)
-        {
-            // 最多重试 3 次，应对 ZK 负载均衡到不同 job_service 实例的情况
-            for (int retry = 0; retry < 3 && expected_shard_count <= 0; ++retry)
-            {
-                MprpcChannel js_channel;
-                JobService_Stub js_stub(&js_channel);
-                QueryJobRequest qj_req;
-                qj_req.set_job_id(job_id);
-                QueryJobResponse qj_resp;
-                MprpcController qj_ctrl;
-                qj_ctrl.SetTimeoutMs(3000);
-                js_stub.QueryJob(&qj_ctrl, &qj_req, &qj_resp, nullptr);
-                if (!qj_ctrl.Failed() && qj_resp.error_code() == 0
-                    && qj_resp.job_info().shard_count() > 0)
-                {
-                    expected_shard_count = qj_resp.job_info().shard_count();
-                    LOG_INFO("ResultCollectorService::CheckJobDone: queried JobService, "
-                             "expected_shard_count=%d (attempt %d)",
-                             expected_shard_count, retry + 1);
-
-                    // 缓存到本地 JobStore，后续 CheckJobDone 避免重复 RPC
-                    if (!job_opt.has_value())
-                    {
-                        JobRecord local_job;
-                        local_job.job_id = job_id;
-                        local_job.shard_count = expected_shard_count;
-                        local_job.created_at = NowMs();
-                        local_job.updated_at = NowMs();
-                        JobStore::GetInstance().Insert(local_job);
-                    }
-                    else
-                    {
-                        auto j = job_opt.value();
-                        j.shard_count = expected_shard_count;
-                        JobStore::GetInstance().Update(job_id, j);
-                    }
-                    // 刷新 job_opt 以便 MarkJobTerminal 使用
-                    job_opt = JobStore::GetInstance().Get(job_id);
-                }
-            }
-        }
+        // 阶段 9：shard_count 从 MySQL 共享读取（上方 Get 已覆盖），
+        // 跨进程 QueryJob RPC 查询逻辑已删除。
 
         // 若仍然未知，则无法判定终态（defer 到下次 ReportShardResult）
         if (expected_shard_count <= 0)
@@ -472,7 +463,7 @@ private:
     // TerminalSweepLoop 直接调用
     static void MarkJobTerminal(const std::string& job_id, JobStatus status)
     {
-        // 更新本地 JobStore
+        // 更新 JobStore（MySQL）
         auto job_opt = JobStore::GetInstance().Get(job_id);
         if (job_opt.has_value())
         {
@@ -480,14 +471,16 @@ private:
             // 状态单调性检查：只接受状态升级
             if (static_cast<int32_t>(status) > job.status)
             {
+                int from_status = job.status;   // 快照前置状态
                 job.status = static_cast<int32_t>(status);
                 job.updated_at = NowMs();
-                JobStore::GetInstance().Update(job_id, job);
+                // 条件更新：仅当仍是快照状态时推进（防 Scheduler 并发覆盖）
+                JobStore::GetInstance().UpdateIfStatus(job_id, {from_status}, job);
             }
         }
         else
         {
-            // job 不在本地 JobStore 中，创建最小副本
+            // job 记录缺失（异常）：创建最小副本，避免终态判定失效
             JobRecord local_job;
             local_job.job_id     = job_id;
             local_job.status     = static_cast<int32_t>(status);
@@ -498,18 +491,21 @@ private:
 
         // ── JOB_SUCCESS 时合并所有 shard 输出为完整视频（阶段 6 遗留项 1） ──
         // 阶段 8 修复 #7：加互斥锁 + 原子标志，保证 merge 恰好执行一次
+        // #10/#11 修复：检查+insert+Merge+清理整体持锁（锁不再提前释放）——
+        //  ① 不同 job 的 merge 串行化，消除跨 job 共享 filelist.txt 的串片竞态；
+        //  ② merge 失败时从 MergingJobs 移除并直接返回（不置 job 终态），
+        //     由 TerminalSweepLoop 每 15s 重扫 CheckJobDone 自动重试 merge，
+        //     磁盘/ffmpeg 恢复后收敛，产物不再永久缺失。
         if (status == JobStatus::JOB_SUCCESS)
         {
+            std::lock_guard<std::mutex> lock(MergeMutex());
+            if (MergingJobs().count(job_id))
             {
-                std::lock_guard<std::mutex> lock(MergeMutex());
-                if (MergingJobs().count(job_id))
-                {
-                    LOG_INFO("ResultCollectorService: merge for job=%s already in progress "
-                             "or completed, skipping (fix #7)", job_id.c_str());
-                    goto skip_merge;
-                }
-                MergingJobs().insert(job_id);
+                LOG_INFO("ResultCollectorService: merge for job=%s already in progress "
+                         "or completed, skipping (fix #7)", job_id.c_str());
+                goto skip_merge;
             }
+            MergingJobs().insert(job_id);
 
             auto shards = ShardStore::GetInstance().ListByJob(job_id);
 
@@ -540,9 +536,6 @@ private:
                     output_dir = MprpcApplication::GetConfig().Load("ffmpeg_work_dir");
                     if (output_dir.empty()) output_dir = "/tmp/transcode_worker";
                 }
-                // 阶段 8 修复 #7：filelist 用含 job_id 的唯一名，防止跨 job 共享
-                // （改造在 ffmpeg_executor.cpp 的 Merge 中——调用方通过 output_dir
-                //  隔离；此处传入的 output_dir 已包含 job_id 标识）
                 std::string merged_output = output_dir + "/" + job_id + "_merged.mp4";
                 LOG_INFO("ResultCollectorService: merging %zu shards for job=%s → %s",
                          merge_inputs.size(), job_id.c_str(), merged_output.c_str());
@@ -566,8 +559,15 @@ private:
                 }
                 else
                 {
-                    LOG_WARN("ResultCollectorService: merge FAILED for job=%s: %s",
-                             job_id.c_str(), merge_result.error_msg.c_str());
+                    // #10 修复：merge 失败可重试——从集合移除并保持 job 非终态，
+                    // TerminalSweepLoop 周期性重扫 CheckJobDone 时重试 merge。
+                    // 此前集合只增不删：失败后 job 显示 SUCCESS 但产物永久缺失，
+                    // 且集合内存无限增长。
+                    MergingJobs().erase(job_id);
+                    LOG_ERROR("ResultCollectorService: merge FAILED for job=%s: %s "
+                              "(will retry via TerminalSweepLoop)",
+                              job_id.c_str(), merge_result.error_msg.c_str());
+                    return;  // 不置 job 终态、不通知 JobService/Scheduler
                 }
             }
             else
@@ -578,90 +578,13 @@ private:
         }
         skip_merge: ;
 
-        // ── 反向通知 JobService（跨进程同步） ─────────────────
-        {
-            MprpcChannel js_channel;
-            JobService_Stub js_stub(&js_channel);
-
-            UpdateJobStatusRequest update_req;
-            update_req.set_job_id(job_id);
-            update_req.set_status(status);
-
-            // 同步所有 shard 的最新状态到 JobService
-            auto shards = ShardStore::GetInstance().ListByJob(job_id);
-            for (const auto& s : shards)
-            {
-                auto* si = update_req.add_shards();
-                si->set_shard_id(s.shard_id);
-                si->set_job_id(s.job_id);
-                si->set_shard_index(s.shard_index);
-                si->set_status(static_cast<ShardStatus>(s.status));
-                si->set_assigned_worker_id(s.assigned_worker_id);
-                si->set_attempt_id(s.attempt_id);
-                si->set_retry_count(s.retry_count);
-                si->set_max_retry(s.max_retry);   // 修复：防止 JobService 侧 max_retry 被覆盖成 0
-                si->set_output_path(s.output_path);
-                si->set_target_resolution(s.target_resolution);
-                si->set_target_bitrate(s.target_bitrate);
-            }
-
-            UpdateJobStatusResponse update_resp;
-            MprpcController update_ctrl;
-            update_ctrl.SetTimeoutMs(3000);
-
-            js_stub.UpdateJobStatus(&update_ctrl, &update_req, &update_resp, nullptr);
-
-            if (!update_ctrl.Failed() && update_resp.error_code() == 0)
-            {
-                LOG_INFO("ResultCollectorService: notified JobService job=%s → %d",
-                         job_id.c_str(), static_cast<int>(status));
-            }
-            else
-            {
-                LOG_WARN("ResultCollectorService: failed to notify JobService for job=%s: %s",
-                         job_id.c_str(),
-                         update_ctrl.Failed() ? update_ctrl.ErrorText().c_str()
-                                              : update_resp.error_msg().c_str());
-            }
-        }
-
-        // ── 反向通知 Scheduler（跨进程同步，修复重复调度） ────────
-        // 问题：任务到达终态（SUCCESS/FAILED）后，Scheduler 的本地 Store 里
-        // 该 job 的 shard 可能仍是 ASSIGNED/RUNNING（Worker 执行期间 ResultCollector
-        // 与 Scheduler 进程隔离，Scheduler 不知任务已完成）。Worker 死亡后这些
-        // shard 会被超时重置为 WAITING 并重新分配，导致已完成任务的 shard 被
-        // 重复转码。
-        // 修复：终态时通知 Scheduler 清理该 job 的所有非终态 shard（标记
-        // SHARD_CANCELED），使超时扫描与分配循环都跳过它们。best-effort，
-        // 失败只打 WARN（Scheduler 重启后的启动恢复扫描会兜底处理残留）。
-        {
-            MprpcChannel sched_channel;
-            SchedulerService_Stub sched_stub(&sched_channel);
-
-            CancelJobShardsRequest cancel_req;
-            cancel_req.set_job_id(job_id);
-            cancel_req.set_reason("JOB_TERMINAL");
-
-            CancelJobShardsResponse cancel_resp;
-            MprpcController cancel_ctrl;
-            cancel_ctrl.SetTimeoutMs(3000);
-
-            sched_stub.CancelJobShards(&cancel_ctrl, &cancel_req, &cancel_resp, nullptr);
-
-            if (!cancel_ctrl.Failed() && cancel_resp.error_code() == 0)
-            {
-                LOG_INFO("ResultCollectorService: notified Scheduler to finalize "
-                         "shards for job=%s (skipped=%d)", job_id.c_str(),
-                         cancel_resp.skipped_count());
-            }
-            else
-            {
-                LOG_WARN("ResultCollectorService: failed to notify Scheduler for "
-                         "job=%s: %s", job_id.c_str(),
-                         cancel_ctrl.Failed() ? cancel_ctrl.ErrorText().c_str()
-                                              : cancel_resp.error_msg().c_str());
-            }
-        }
+        // ── 阶段 9：不再反向通知 JobService / Scheduler ────────────────
+        // MySQL 为唯一数据源：job 终态与 shard 终态写入后对所有进程立即可见。
+        // - JobService 的 QueryJob / PendingScanLoop 直接读 MySQL；
+        // - Scheduler 的分配循环 / 超时重扫 / NotifyWorkerOffline 通过
+        //   MarkShardCanceledIfJobTerminal 读取 MySQL 中的 job 终态，
+        //   残留的 ASSIGNED/RUNNING shard 会被自动标记 CANCELED，不会重复分配。
+        // （原 UpdateJobStatus 通知与 CancelJobShards(JOB_TERMINAL) 通知已删除）
     }
 };
 
@@ -726,9 +649,8 @@ void ResultCollectorServiceImpl::TerminalSweepLoop(std::atomic<bool>& stop_flag)
                          "all terminal, checking job done",
                          job.job_id.c_str(), success_count, failed_count);
 
-                // 调用完整 CheckJobDone：终态判定 + Merge 产物 +
-                // 通知 JobService（UpdateJobStatus）+ 通知 Scheduler
-                // （CancelJobShards JOB_TERMINAL），与正常上报路径一致
+                // 调用完整 CheckJobDone：终态判定 + Merge 产物（阶段 9 起
+                // job/shard 状态写入 MySQL 共享，无需再通知 JobService/Scheduler）
                 if (CheckJobDone(job.job_id))
                     ++resolved;
             }
@@ -761,6 +683,16 @@ int main(int argc, char** argv)
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }
+
+    if (!MysqlPool::GetInstance().Init())
+    {
+        LOG_ERROR("MysqlPool init failed");
+        wevix_muduo::AsyncLogger::GetInstance().stop();
+        return EXIT_FAILURE;
+    }
+
+    // 阶段 10：Redis 是可降级组件，Init 失败只 WARN 不拒绝启动
+    RedisClient::GetInstance().Init();
 
     RpcProvider provider;
     provider.NotifyService(new ResultCollectorServiceImpl());

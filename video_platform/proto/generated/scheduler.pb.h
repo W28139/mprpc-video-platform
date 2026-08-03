@@ -589,6 +589,7 @@ class RescheduleShardRequest final :
     kShardIdFieldNumber = 1,
     kJobIdFieldNumber = 2,
     kReasonFieldNumber = 3,
+    kAttemptIdFieldNumber = 4,
   };
   // string shard_id = 1;
   void clear_shard_id();
@@ -632,6 +633,20 @@ class RescheduleShardRequest final :
   std::string* _internal_mutable_reason();
   public:
 
+  // string attempt_id = 4;
+  void clear_attempt_id();
+  const std::string& attempt_id() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_attempt_id(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_attempt_id();
+  PROTOBUF_NODISCARD std::string* release_attempt_id();
+  void set_allocated_attempt_id(std::string* attempt_id);
+  private:
+  const std::string& _internal_attempt_id() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_attempt_id(const std::string& value);
+  std::string* _internal_mutable_attempt_id();
+  public:
+
   // @@protoc_insertion_point(class_scope:video_platform.RescheduleShardRequest)
  private:
   class _Internal;
@@ -643,6 +658,7 @@ class RescheduleShardRequest final :
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr shard_id_;
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr job_id_;
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr reason_;
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr attempt_id_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -2065,6 +2081,56 @@ inline void RescheduleShardRequest::set_allocated_reason(std::string* reason) {
   }
 #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
   // @@protoc_insertion_point(field_set_allocated:video_platform.RescheduleShardRequest.reason)
+}
+
+// string attempt_id = 4;
+inline void RescheduleShardRequest::clear_attempt_id() {
+  _impl_.attempt_id_.ClearToEmpty();
+}
+inline const std::string& RescheduleShardRequest::attempt_id() const {
+  // @@protoc_insertion_point(field_get:video_platform.RescheduleShardRequest.attempt_id)
+  return _internal_attempt_id();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void RescheduleShardRequest::set_attempt_id(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.attempt_id_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:video_platform.RescheduleShardRequest.attempt_id)
+}
+inline std::string* RescheduleShardRequest::mutable_attempt_id() {
+  std::string* _s = _internal_mutable_attempt_id();
+  // @@protoc_insertion_point(field_mutable:video_platform.RescheduleShardRequest.attempt_id)
+  return _s;
+}
+inline const std::string& RescheduleShardRequest::_internal_attempt_id() const {
+  return _impl_.attempt_id_.Get();
+}
+inline void RescheduleShardRequest::_internal_set_attempt_id(const std::string& value) {
+  
+  _impl_.attempt_id_.Set(value, GetArenaForAllocation());
+}
+inline std::string* RescheduleShardRequest::_internal_mutable_attempt_id() {
+  
+  return _impl_.attempt_id_.Mutable(GetArenaForAllocation());
+}
+inline std::string* RescheduleShardRequest::release_attempt_id() {
+  // @@protoc_insertion_point(field_release:video_platform.RescheduleShardRequest.attempt_id)
+  return _impl_.attempt_id_.Release();
+}
+inline void RescheduleShardRequest::set_allocated_attempt_id(std::string* attempt_id) {
+  if (attempt_id != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.attempt_id_.SetAllocated(attempt_id, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.attempt_id_.IsDefault()) {
+    _impl_.attempt_id_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:video_platform.RescheduleShardRequest.attempt_id)
 }
 
 // -------------------------------------------------------------------

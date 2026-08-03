@@ -13,6 +13,8 @@
 #include "rpcprovider.h"
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
+#include "video_platform/mysql_pool.h"
+#include "video_platform/redis_client.h"
 
 using namespace video_platform;
 
@@ -93,6 +95,37 @@ public:
         bool alive = WorkerStore::GetInstance().UpdateHeartbeat(
             load.worker_id(), load.running_shards(),
             load.cpu_usage(), load.memory_usage());
+
+        // 阶段 10：心跳双写 Redis 负载快照（HSET worker:load {worker_id} → 快照串）。
+        // Scheduler 直接从 Redis 读快照，省掉 ListWorkers RPC 往返。
+        // 快照串格式：ip|port|cpu_cores|memory_mb|max_running|current_running|cpu_usage|memory_usage|ts
+        // - 从 MySQL 读全量记录拼快照：心跳请求只带 WorkerLoad（cpu/mem/running），
+        //   ip/port/max_running 是注册时写入的，MySQL 是唯一真相源
+        // - Redis 写入失败只 WARN：Scheduler 回退 ListWorkers RPC，核心链路不受影响
+        // - alive=false 表示 Worker 已被标记死亡，不写快照（避免"幽灵快照"误导调度）
+        if (alive)
+        {
+            auto& redis = RedisClient::GetInstance();
+            if (redis.inited() && redis.enabled())
+            {
+                auto w_opt = WorkerStore::GetInstance().Get(load.worker_id());
+                if (w_opt.has_value())
+                {
+                    const auto& w = w_opt.value();
+                    std::string snapshot =
+                        w.ip + "|" + std::to_string(w.port) + "|" +
+                        std::to_string(w.cpu_cores) + "|" + std::to_string(w.memory_mb) + "|" +
+                        std::to_string(w.max_running_shards) + "|" + std::to_string(w.current_running_shards) + "|" +
+                        std::to_string(w.cpu_usage) + "|" + std::to_string(w.memory_usage) + "|" +
+                        std::to_string(NowMs());
+                    if (!redis.HSet("worker:load", w.worker_id, snapshot))
+                    {
+                        LOG_WARN("WorkerManagerService: write load snapshot to redis "
+                                 "failed for worker %s", w.worker_id.c_str());
+                    }
+                }
+            }
+        }
 
         response->set_error_code(0);
         response->set_error_msg("");
@@ -252,6 +285,23 @@ static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
 
             for (const auto& worker_id : to_retry)
             {
+                // #5 修复：重试前复查 worker 存活状态。
+                // 场景：网络分区 20s 被标 OFFLINE → 通知失败入集合 →
+                // worker 心跳恢复（UpdateHeartbeat 置回 ONLINE）→ 若仍重发
+                // NotifyWorkerOffline，Scheduler 会把存活 worker 正在执行的
+                // shard 重置 WAITING 重新分配 → 双份转码。
+                auto w_opt = WorkerStore::GetInstance().Get(worker_id);
+                if (w_opt.has_value()
+                    && w_opt->status == static_cast<int32_t>(WorkerStatus::WORKER_ONLINE))
+                {
+                    LOG_INFO("WorkerManager: worker %s back ONLINE, drop pending "
+                             "NotifyWorkerOffline (fix #5)",
+                             worker_id.c_str());
+                    std::lock_guard<std::mutex> lock(notify_mutex);
+                    pending_notify.erase(worker_id);
+                    continue;
+                }
+
                 MprpcChannel sched_channel;
                 SchedulerService_Stub sched_stub(&sched_channel);
 
@@ -307,6 +357,16 @@ int main(int argc, char** argv)
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }
+
+    if (!MysqlPool::GetInstance().Init())
+    {
+        LOG_ERROR("MysqlPool init failed");
+        wevix_muduo::AsyncLogger::GetInstance().stop();
+        return EXIT_FAILURE;
+    }
+
+    // 阶段 10：Redis 是可降级组件，Init 失败只 WARN 不拒绝启动
+    RedisClient::GetInstance().Init();
 
     // 启动心跳超时检测后台线程
     std::atomic<bool> timeout_stopped{false};

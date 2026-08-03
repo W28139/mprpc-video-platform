@@ -2,8 +2,6 @@ syntax = "proto3";
 
 package video_platform;
 
-import "common.proto";
-
 option cc_generic_services = true;
 
 // ============================================================================
@@ -59,4 +57,6 @@ message ReportShardResultResponse {
 service ResultCollectorService {
     rpc ReportShardProgress(ReportShardProgressRequest) returns (ReportShardProgressResponse);  // 上报执行进度
     rpc ReportShardResult(ReportShardResultRequest) returns (ReportShardResultResponse);        // 上报最终执行结果
+    // 阶段 9 删除 NotifyJobCanceled：CancelJob 直接写 MySQL 标记 CANCELED，
+    // RC 的 TerminalSweepLoop / CheckJobDone 读取同一份数据，无需通知。
 }

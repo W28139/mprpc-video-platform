@@ -30,9 +30,11 @@ add_custom_target(gen_protos
     COMMENT "Generating C++ from proto files..."
 )
 
-# ── 公共库：存储层 + FFmpeg 执行器 ──────────────────────────────
+# ── 公共库：存储层（MySQL 持久化）+ FFmpeg 执行器 + Redis 客户端 ──
 add_library(video_common
     ${CMAKE_CURRENT_SOURCE_DIR}/src/common_store.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/mysql_pool.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/redis_client.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/transcode_worker/ffmpeg_executor.cpp
     ${PROTO_SRCS}
 )
@@ -40,7 +42,7 @@ target_include_directories(video_common PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${PROTO_GEN_DIR}
 )
-target_link_libraries(video_common PUBLIC mprpc protobuf)
+target_link_libraries(video_common PUBLIC mprpc protobuf mysqlclient hiredis)
 
 # ── 服务可执行文件 ──────────────────────────────────────────────────────
 # 每个服务独立可执行文件，通过 -i 指定配置文件

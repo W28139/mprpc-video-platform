@@ -1620,6 +1620,7 @@ class CancelShardRequest final :
   enum : int {
     kShardIdFieldNumber = 1,
     kReasonFieldNumber = 2,
+    kAttemptIdFieldNumber = 3,
   };
   // string shard_id = 1;
   void clear_shard_id();
@@ -1649,6 +1650,20 @@ class CancelShardRequest final :
   std::string* _internal_mutable_reason();
   public:
 
+  // string attempt_id = 3;
+  void clear_attempt_id();
+  const std::string& attempt_id() const;
+  template <typename ArgT0 = const std::string&, typename... ArgT>
+  void set_attempt_id(ArgT0&& arg0, ArgT... args);
+  std::string* mutable_attempt_id();
+  PROTOBUF_NODISCARD std::string* release_attempt_id();
+  void set_allocated_attempt_id(std::string* attempt_id);
+  private:
+  const std::string& _internal_attempt_id() const;
+  inline PROTOBUF_ALWAYS_INLINE void _internal_set_attempt_id(const std::string& value);
+  std::string* _internal_mutable_attempt_id();
+  public:
+
   // @@protoc_insertion_point(class_scope:video_platform.CancelShardRequest)
  private:
   class _Internal;
@@ -1659,6 +1674,7 @@ class CancelShardRequest final :
   struct Impl_ {
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr shard_id_;
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr reason_;
+    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr attempt_id_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -3245,6 +3261,56 @@ inline void CancelShardRequest::set_allocated_reason(std::string* reason) {
   }
 #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
   // @@protoc_insertion_point(field_set_allocated:video_platform.CancelShardRequest.reason)
+}
+
+// string attempt_id = 3;
+inline void CancelShardRequest::clear_attempt_id() {
+  _impl_.attempt_id_.ClearToEmpty();
+}
+inline const std::string& CancelShardRequest::attempt_id() const {
+  // @@protoc_insertion_point(field_get:video_platform.CancelShardRequest.attempt_id)
+  return _internal_attempt_id();
+}
+template <typename ArgT0, typename... ArgT>
+inline PROTOBUF_ALWAYS_INLINE
+void CancelShardRequest::set_attempt_id(ArgT0&& arg0, ArgT... args) {
+ 
+ _impl_.attempt_id_.Set(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
+  // @@protoc_insertion_point(field_set:video_platform.CancelShardRequest.attempt_id)
+}
+inline std::string* CancelShardRequest::mutable_attempt_id() {
+  std::string* _s = _internal_mutable_attempt_id();
+  // @@protoc_insertion_point(field_mutable:video_platform.CancelShardRequest.attempt_id)
+  return _s;
+}
+inline const std::string& CancelShardRequest::_internal_attempt_id() const {
+  return _impl_.attempt_id_.Get();
+}
+inline void CancelShardRequest::_internal_set_attempt_id(const std::string& value) {
+  
+  _impl_.attempt_id_.Set(value, GetArenaForAllocation());
+}
+inline std::string* CancelShardRequest::_internal_mutable_attempt_id() {
+  
+  return _impl_.attempt_id_.Mutable(GetArenaForAllocation());
+}
+inline std::string* CancelShardRequest::release_attempt_id() {
+  // @@protoc_insertion_point(field_release:video_platform.CancelShardRequest.attempt_id)
+  return _impl_.attempt_id_.Release();
+}
+inline void CancelShardRequest::set_allocated_attempt_id(std::string* attempt_id) {
+  if (attempt_id != nullptr) {
+    
+  } else {
+    
+  }
+  _impl_.attempt_id_.SetAllocated(attempt_id, GetArenaForAllocation());
+#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (_impl_.attempt_id_.IsDefault()) {
+    _impl_.attempt_id_.Set("", GetArenaForAllocation());
+  }
+#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  // @@protoc_insertion_point(field_set_allocated:video_platform.CancelShardRequest.attempt_id)
 }
 
 // -------------------------------------------------------------------

@@ -24,6 +24,8 @@ muduo_im 是一个基于 Reactor 模式的 Linux C++ 网络库及其上层 RPC �
 | 6. 接入 FFmpeg 执行器 | ✅ 完成（2026-07-31） |
 | 7. 资源感知调度和监控 | ✅ 完成（2026-07-31） |
 | 8. 压测、故障测试和文档整理 | ✅ 代码审查与Bug修复（2026-08-01），压测待进行 |
+| 9. 数据持久化（MySQL） | ✅ 完成（2026-08-03） |
+| 10. 中间件集成（Redis+MQ） | 🔄 第一批 Redis 缓存完成（2026-08-03），MQ 与 ZK 缓存改造待进行 |
 
 ## 阶段 6 完成内容
 
@@ -263,7 +265,7 @@ AsyncLogger::init() → MprpcApplication::Init(argc, argv) → RpcProvider.Notif
 - `Screenshot(input, ts, output)` → 截图
 - `Merge(inputs, output)` → concat demuxer 合并
 
-**当前状态**：阶段 6 完成。真实 ffmpeg 转码全链路跑通（30s 720p 视频 → 2 shard → 各 15s 精确输出 → JOB_SUCCESS）。Mock 模式保留作为 fallback（`executor_mode=mock`）。
+**当前状态**：阶段 9 完成。三个 Store 以 MySQL 为唯一数据源（jobs/shards/workers 表），服务重启数据不丢失、多进程天然共享；删除 UpdateJobStatus/NotifyJobCanceled 两个跨进程同步 RPC。Mock 模式保留作为 fallback（`executor_mode=mock`）。
 
 ## 压测工具
 
@@ -302,8 +304,38 @@ AsyncLogger::init() → MprpcApplication::Init(argc, argv) → RpcProvider.Notif
 | `target_bitrate` | 0 | 目标视频码率（kbps），0=保持原码率 |
 | `shard_duration_sec` | 15 | 每 shard 默认时长（秒） |
 | `job_duration_fallback_sec` | 60 | ffprobe 探测失败时的回退时长（秒） |
+| `mysqlhost` | 127.0.0.1 | MySQL 地址（阶段 9 起三个 Store 的唯一数据源） |
+| `mysqlport` | 3306 | MySQL 端口 |
+| `mysqluser` / `mysqlpassword` | 必填 | MySQL 账号/密码 |
+| `mysqldbname` | video_platform | MySQL 数据库名 |
+| `mysql_pool_size` | 4 | MySQL 连接池大小（1-64，预创建+线程安全借用） |
 
 ## 下一步工作
+
+### 阶段 9（已完成 ✅ 2026-08-03）
+
+MySQL 持久化替代内存 Store，详见 `doc/更新业务日志/10. 阶段9数据持久化MySQL.md`。
+
+核心改动：
+- 新增 `mysql_pool.h/.cpp`（libmysqlclient 连接池：固定大小预创建、mutex+cv 借用归还、mysql_ping 保活、CLIENT_FOUND_ROWS、自动建表）
+- 三个 Store 接口不变、内部实现全 SQL 化；新增 `UpdateIfStatus` 条件更新（状态推进防旧快照覆盖其他进程的推进）
+- 删除跨进程同步：`UpdateJobStatus` / `NotifyJobCanceled` 两个 RPC（proto+handler+调用方）、JobService/RC 的"从请求构造本地副本"逻辑、RC 的跨进程 QueryJob 查 shard_count
+- 配置新增 `mysqlhost/mysqlport/mysqluser/mysqlpassword/mysqldbname/mysql_pool_size`
+- 验收：全链路 SUCCESS + MySQL 落盘；kill 全部服务重启数据不丢；Scheduler/Worker 崩溃恢复；Store 操作平均延迟 ~0.2ms（<2ms 验收线）
+
+### 阶段 10（第一批 ✅ 2026-08-03，第二批 MQ / 第三批 ZK 缓存改造待进行）
+
+第一阶段（Redis 缓存）完成，详见 `doc/更新业务日志/11. 阶段10中间件集成.md`。
+
+核心改动：
+- 新增 `redis_client.h/.cpp`（hiredis 封装：单连接+mutex、失败重连 1 次、2s 超时、**可降级组件语义**——连接失败只 WARN 不拒绝启动，区别于 MySQL 的 fail-fast）
+- WorkerManager Heartbeat 双写 Redis 快照（`HSET worker:load`，值内嵌 ts）
+- Scheduler `LoadOnlineWorkers` helper：Redis 快照优先（20s ts 过期过滤），失败/无数据回退 ListWorkers RPC（按次降级，恢复自动切回）
+- JobService QueryJob 进度缓存（`SETEX job:progress:{id}` TTL 60s，只缓存成功响应）；RC 结果落定时 DEL
+- 分布式锁：AssignShard 前 `SETNX shard:lock:{id} EX 10`，值校验释放，Redis 故障降级放行（MySQL 条件更新兜底）
+- 配置：`redis_enable` / `redis_host` / `redis_port`（4 个服务 conf）
+
+验收：Redis 正常/故障（端口不可达模拟）/恢复三态下全链路任务均 SUCCESS；快照、缓存、降级回退路径均有日志证据。
 
 ### 阶段 7（已完成 ✅ 2026-07-31）
 

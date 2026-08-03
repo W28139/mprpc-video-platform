@@ -57,6 +57,7 @@ PROTOBUF_CONSTEXPR RescheduleShardRequest::RescheduleShardRequest(
     /*decltype(_impl_.shard_id_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.job_id_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.reason_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+  , /*decltype(_impl_.attempt_id_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct RescheduleShardRequestDefaultTypeInternal {
   PROTOBUF_CONSTEXPR RescheduleShardRequestDefaultTypeInternal()
@@ -176,6 +177,7 @@ const uint32_t TableStruct_scheduler_2eproto::offsets[] PROTOBUF_SECTION_VARIABL
   PROTOBUF_FIELD_OFFSET(::video_platform::RescheduleShardRequest, _impl_.shard_id_),
   PROTOBUF_FIELD_OFFSET(::video_platform::RescheduleShardRequest, _impl_.job_id_),
   PROTOBUF_FIELD_OFFSET(::video_platform::RescheduleShardRequest, _impl_.reason_),
+  PROTOBUF_FIELD_OFFSET(::video_platform::RescheduleShardRequest, _impl_.attempt_id_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::video_platform::RescheduleShardResponse, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -226,11 +228,11 @@ static const ::_pbi::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protode
   { 0, -1, -1, sizeof(::video_platform::ScheduleJobRequest)},
   { 7, -1, -1, sizeof(::video_platform::ScheduleJobResponse)},
   { 19, -1, -1, sizeof(::video_platform::RescheduleShardRequest)},
-  { 28, -1, -1, sizeof(::video_platform::RescheduleShardResponse)},
-  { 37, -1, -1, sizeof(::video_platform::NotifyWorkerOfflineRequest)},
-  { 45, -1, -1, sizeof(::video_platform::NotifyWorkerOfflineResponse)},
-  { 54, -1, -1, sizeof(::video_platform::CancelJobShardsRequest)},
-  { 62, -1, -1, sizeof(::video_platform::CancelJobShardsResponse)},
+  { 29, -1, -1, sizeof(::video_platform::RescheduleShardResponse)},
+  { 38, -1, -1, sizeof(::video_platform::NotifyWorkerOfflineRequest)},
+  { 46, -1, -1, sizeof(::video_platform::NotifyWorkerOfflineResponse)},
+  { 55, -1, -1, sizeof(::video_platform::CancelJobShardsRequest)},
+  { 63, -1, -1, sizeof(::video_platform::CancelJobShardsResponse)},
 };
 
 static const ::_pb::Message* const file_default_instances[] = {
@@ -251,38 +253,39 @@ const char descriptor_table_protodef_scheduler_2eproto[] PROTOBUF_SECTION_VARIAB
   "eduleJobResponse\022\022\n\nerror_code\030\001 \001(\005\022\021\n\t"
   "error_msg\030\002 \001(\t\022\020\n\010accepted\030\003 \001(\010\022\016\n\006job"
   "_id\030\004 \001(\t\022\023\n\013shard_count\030\005 \001(\005\022)\n\006shards"
-  "\030\006 \003(\0132\031.video_platform.ShardInfo\"J\n\026Res"
+  "\030\006 \003(\0132\031.video_platform.ShardInfo\"^\n\026Res"
   "cheduleShardRequest\022\020\n\010shard_id\030\001 \001(\t\022\016\n"
-  "\006job_id\030\002 \001(\t\022\016\n\006reason\030\003 \001(\t\"R\n\027Resched"
-  "uleShardResponse\022\022\n\nerror_code\030\001 \001(\005\022\021\n\t"
-  "error_msg\030\002 \001(\t\022\020\n\010accepted\030\003 \001(\010\"\?\n\032Not"
-  "ifyWorkerOfflineRequest\022\021\n\tworker_id\030\001 \001"
-  "(\t\022\016\n\006reason\030\002 \001(\t\"_\n\033NotifyWorkerOfflin"
-  "eResponse\022\022\n\nerror_code\030\001 \001(\005\022\021\n\terror_m"
-  "sg\030\002 \001(\t\022\031\n\021rescheduled_count\030\003 \001(\005\"8\n\026C"
-  "ancelJobShardsRequest\022\016\n\006job_id\030\001 \001(\t\022\016\n"
-  "\006reason\030\002 \001(\t\"\205\001\n\027CancelJobShardsRespons"
-  "e\022\022\n\nerror_code\030\001 \001(\005\022\021\n\terror_msg\030\002 \001(\t"
-  "\022\024\n\014total_shards\030\003 \001(\005\022\026\n\016notified_count"
-  "\030\004 \001(\005\022\025\n\rskipped_count\030\005 \001(\0052\242\003\n\020Schedu"
-  "lerService\022V\n\013ScheduleJob\022\".video_platfo"
-  "rm.ScheduleJobRequest\032#.video_platform.S"
-  "cheduleJobResponse\022b\n\017RescheduleShard\022&."
-  "video_platform.RescheduleShardRequest\032\'."
-  "video_platform.RescheduleShardResponse\022n"
-  "\n\023NotifyWorkerOffline\022*.video_platform.N"
-  "otifyWorkerOfflineRequest\032+.video_platfo"
-  "rm.NotifyWorkerOfflineResponse\022b\n\017Cancel"
-  "JobShards\022&.video_platform.CancelJobShar"
-  "dsRequest\032\'.video_platform.CancelJobShar"
-  "dsResponseB\003\200\001\001b\006proto3"
+  "\006job_id\030\002 \001(\t\022\016\n\006reason\030\003 \001(\t\022\022\n\nattempt"
+  "_id\030\004 \001(\t\"R\n\027RescheduleShardResponse\022\022\n\n"
+  "error_code\030\001 \001(\005\022\021\n\terror_msg\030\002 \001(\t\022\020\n\010a"
+  "ccepted\030\003 \001(\010\"\?\n\032NotifyWorkerOfflineRequ"
+  "est\022\021\n\tworker_id\030\001 \001(\t\022\016\n\006reason\030\002 \001(\t\"_"
+  "\n\033NotifyWorkerOfflineResponse\022\022\n\nerror_c"
+  "ode\030\001 \001(\005\022\021\n\terror_msg\030\002 \001(\t\022\031\n\021reschedu"
+  "led_count\030\003 \001(\005\"8\n\026CancelJobShardsReques"
+  "t\022\016\n\006job_id\030\001 \001(\t\022\016\n\006reason\030\002 \001(\t\"\205\001\n\027Ca"
+  "ncelJobShardsResponse\022\022\n\nerror_code\030\001 \001("
+  "\005\022\021\n\terror_msg\030\002 \001(\t\022\024\n\014total_shards\030\003 \001"
+  "(\005\022\026\n\016notified_count\030\004 \001(\005\022\025\n\rskipped_co"
+  "unt\030\005 \001(\0052\242\003\n\020SchedulerService\022V\n\013Schedu"
+  "leJob\022\".video_platform.ScheduleJobReques"
+  "t\032#.video_platform.ScheduleJobResponse\022b"
+  "\n\017RescheduleShard\022&.video_platform.Resch"
+  "eduleShardRequest\032\'.video_platform.Resch"
+  "eduleShardResponse\022n\n\023NotifyWorkerOfflin"
+  "e\022*.video_platform.NotifyWorkerOfflineRe"
+  "quest\032+.video_platform.NotifyWorkerOffli"
+  "neResponse\022b\n\017CancelJobShards\022&.video_pl"
+  "atform.CancelJobShardsRequest\032\'.video_pl"
+  "atform.CancelJobShardsResponseB\003\200\001\001b\006pro"
+  "to3"
   ;
 static const ::_pbi::DescriptorTable* const descriptor_table_scheduler_2eproto_deps[1] = {
   &::descriptor_table_common_2eproto,
 };
 static ::_pbi::once_flag descriptor_table_scheduler_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_scheduler_2eproto = {
-    false, false, 1223, descriptor_table_protodef_scheduler_2eproto,
+    false, false, 1243, descriptor_table_protodef_scheduler_2eproto,
     "scheduler.proto",
     &descriptor_table_scheduler_2eproto_once, descriptor_table_scheduler_2eproto_deps, 1, 8,
     schemas, file_default_instances, TableStruct_scheduler_2eproto::offsets,
@@ -889,6 +892,7 @@ RescheduleShardRequest::RescheduleShardRequest(const RescheduleShardRequest& fro
       decltype(_impl_.shard_id_){}
     , decltype(_impl_.job_id_){}
     , decltype(_impl_.reason_){}
+    , decltype(_impl_.attempt_id_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -916,6 +920,14 @@ RescheduleShardRequest::RescheduleShardRequest(const RescheduleShardRequest& fro
     _this->_impl_.reason_.Set(from._internal_reason(), 
       _this->GetArenaForAllocation());
   }
+  _impl_.attempt_id_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.attempt_id_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_attempt_id().empty()) {
+    _this->_impl_.attempt_id_.Set(from._internal_attempt_id(), 
+      _this->GetArenaForAllocation());
+  }
   // @@protoc_insertion_point(copy_constructor:video_platform.RescheduleShardRequest)
 }
 
@@ -927,6 +939,7 @@ inline void RescheduleShardRequest::SharedCtor(
       decltype(_impl_.shard_id_){}
     , decltype(_impl_.job_id_){}
     , decltype(_impl_.reason_){}
+    , decltype(_impl_.attempt_id_){}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.shard_id_.InitDefault();
@@ -940,6 +953,10 @@ inline void RescheduleShardRequest::SharedCtor(
   _impl_.reason_.InitDefault();
   #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
     _impl_.reason_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  _impl_.attempt_id_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.attempt_id_.Set("", GetArenaForAllocation());
   #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
 }
 
@@ -957,6 +974,7 @@ inline void RescheduleShardRequest::SharedDtor() {
   _impl_.shard_id_.Destroy();
   _impl_.job_id_.Destroy();
   _impl_.reason_.Destroy();
+  _impl_.attempt_id_.Destroy();
 }
 
 void RescheduleShardRequest::SetCachedSize(int size) const {
@@ -972,6 +990,7 @@ void RescheduleShardRequest::Clear() {
   _impl_.shard_id_.ClearToEmpty();
   _impl_.job_id_.ClearToEmpty();
   _impl_.reason_.ClearToEmpty();
+  _impl_.attempt_id_.ClearToEmpty();
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -1008,6 +1027,16 @@ const char* RescheduleShardRequest::_InternalParse(const char* ptr, ::_pbi::Pars
           ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
           CHK_(ptr);
           CHK_(::_pbi::VerifyUTF8(str, "video_platform.RescheduleShardRequest.reason"));
+        } else
+          goto handle_unusual;
+        continue;
+      // string attempt_id = 4;
+      case 4:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 34)) {
+          auto str = _internal_mutable_attempt_id();
+          ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+          CHK_(::_pbi::VerifyUTF8(str, "video_platform.RescheduleShardRequest.attempt_id"));
         } else
           goto handle_unusual;
         continue;
@@ -1070,6 +1099,16 @@ uint8_t* RescheduleShardRequest::_InternalSerialize(
         3, this->_internal_reason(), target);
   }
 
+  // string attempt_id = 4;
+  if (!this->_internal_attempt_id().empty()) {
+    ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::VerifyUtf8String(
+      this->_internal_attempt_id().data(), static_cast<int>(this->_internal_attempt_id().length()),
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::SERIALIZE,
+      "video_platform.RescheduleShardRequest.attempt_id");
+    target = stream->WriteStringMaybeAliased(
+        4, this->_internal_attempt_id(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -1107,6 +1146,13 @@ size_t RescheduleShardRequest::ByteSizeLong() const {
         this->_internal_reason());
   }
 
+  // string attempt_id = 4;
+  if (!this->_internal_attempt_id().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::StringSize(
+        this->_internal_attempt_id());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -1133,6 +1179,9 @@ void RescheduleShardRequest::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg,
   }
   if (!from._internal_reason().empty()) {
     _this->_internal_set_reason(from._internal_reason());
+  }
+  if (!from._internal_attempt_id().empty()) {
+    _this->_internal_set_attempt_id(from._internal_attempt_id());
   }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
@@ -1164,6 +1213,10 @@ void RescheduleShardRequest::InternalSwap(RescheduleShardRequest* other) {
   ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
       &_impl_.reason_, lhs_arena,
       &other->_impl_.reason_, rhs_arena
+  );
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &_impl_.attempt_id_, lhs_arena,
+      &other->_impl_.attempt_id_, rhs_arena
   );
 }
 

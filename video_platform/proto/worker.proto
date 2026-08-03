@@ -88,6 +88,12 @@ message AssignShardResponse {
 message CancelShardRequest {
     string shard_id = 1;  // 要取消的 shard ID
     string reason   = 2;  // 取消原因：USER_CANCEL / TIMEOUT / PREEMPT
+    // #1 修复：目标 attempt_id（可选）。
+    // 非空时仅取消「当前正执行该 attempt」的 shard——防止重扫取消通知
+    // 与重新分配竞态：shard 已被重新分配为新 attempt 时，旧 attempt 的
+    // CancelShard 不得误伤新执行。空字符串 = 取消该 shard 任意 attempt
+    // （CancelJobShards 用户取消场景，兼容）。
+    string attempt_id = 3;
 }
 
 message CancelShardResponse {

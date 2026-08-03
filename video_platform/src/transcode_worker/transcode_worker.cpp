@@ -9,6 +9,8 @@
 #include <random>
 #include <fstream>
 #include <sstream>
+#include <set>
+#include <dirent.h>
 #include <sys/stat.h>
 #include <unistd.h>
 #include "worker.pb.h"
@@ -194,10 +196,16 @@ public:
         {
             std::lock_guard<std::mutex> lock(mutex_);
             auto it = running_shards_.find(shard.shard_id());
-            if (it != running_shards_.end() && !it->second->cancelled)
+            // #1 修复：只要 map 中还存在该 shard 的条目（无论是否已取消）就拒绝。
+            // 此前「已取消也放行」允许同一 worker 同时存在新旧 attempt 的两个
+            // 执行线程：旧线程 CleanupShard 会按 shard_id 移除 map 中的新条目
+            // 并 detach 新执行线程，造成执行线程生命周期混乱甚至进程崩溃。
+            if (it != running_shards_.end())
             {
-                LOG_WARN("WorkerService::AssignShard shard %s already running, rejecting",
-                         shard.shard_id().c_str());
+                LOG_WARN("WorkerService::AssignShard shard %s already has an active "
+                         "execution (attempt=%s, cancelled=%d), rejecting",
+                         shard.shard_id().c_str(), it->second->attempt_id.c_str(),
+                         (int)it->second->cancelled.load());
                 response->set_error_code(1);
                 response->set_error_msg("shard already running: " + shard.shard_id());
                 response->set_accepted(false);
@@ -246,11 +254,31 @@ public:
         auto it = running_shards_.find(request->shard_id());
         if (it != running_shards_.end())
         {
+            // #1 修复：attempt_id 精确匹配。重扫取消通知可能与该 shard 的
+            // 重新分配竞态——shard 已被重新分配为新 attempt 时（旧执行线程
+            // 尚未清理、map 条目已被新 RunningShard 替换），旧 attempt 的
+            // CancelShard 不得误伤新执行。请求带 attempt_id 时仅匹配当前
+            // 执行的 attempt；不匹配则视为已进入新 attempt，拒绝取消。
+            if (!request->attempt_id().empty()
+                && it->second->attempt_id != request->attempt_id())
+            {
+                response->set_error_code(0);
+                response->set_error_msg("shard moved to new attempt, cancel ignored");
+                response->set_canceled(false);
+                LOG_INFO("WorkerService::CancelShard shard=%s attempt=%s ignored "
+                         "(current attempt=%s)",
+                         request->shard_id().c_str(),
+                         request->attempt_id().c_str(),
+                         it->second->attempt_id.c_str());
+                done->Run();
+                return;
+            }
             it->second->cancelled = true;
             response->set_error_code(0);
             response->set_error_msg("");
             response->set_canceled(true);
-            LOG_INFO("WorkerService::CancelShard shard=%s cancelled", request->shard_id().c_str());
+            LOG_INFO("WorkerService::CancelShard shard=%s attempt=%s cancelled",
+                     request->shard_id().c_str(), it->second->attempt_id.c_str());
         }
         else
         {
@@ -484,10 +512,7 @@ private:
             pr.output_path = rs->info.output_path();
             pr.elapsed_ms  = mock_execution_ms;
             pr.shard_index = rs->info.shard_index();
-            {
-                std::lock_guard<std::mutex> lock(pending_mutex_);
-                pending_reports_.push_back(pr);
-            }
+            QueuePendingReport(pr);
         }
 
         CleanupShard(shard_id);
@@ -713,10 +738,7 @@ private:
             pr.elapsed_ms      = total_elapsed;
             pr.shard_index     = rs->info.shard_index();
             pr.screenshot_path = screenshot_path;
-            {
-                std::lock_guard<std::mutex> lock(pending_mutex_);
-                pending_reports_.push_back(pr);
-            }
+            QueuePendingReport(pr);
         }
 
         CleanupShard(shard_id);
@@ -804,6 +826,14 @@ private:
     std::vector<PendingReport> pending_reports_;
 
 public:
+    /// @brief 把上报失败的结果压入待重试队列（#18 收敛：两处入队统一，
+    ///        避免后续新增字段时漏拷——历史上 max_retry 丢字段正是此类）
+    void QueuePendingReport(const PendingReport& pr)
+    {
+        std::lock_guard<std::mutex> lock(pending_mutex_);
+        pending_reports_.push_back(pr);
+    }
+
     /// @brief 心跳线程调用：重试所有待上报的 shard 结果（修复 #6）
     /// @return 成功上报并从队列中移除的数量
     int RetryPendingReports()
@@ -837,6 +867,7 @@ public:
 
             ReportShardResultResponse resp;
             MprpcController ctrl;
+            ctrl.SetTimeoutMs(5000);  // #14：显式超时，避免无限阻塞心跳线程
             rc_stub.ReportShardResult(&ctrl, &req, &resp, nullptr);
 
             if (!ctrl.Failed() && resp.accepted())
@@ -845,14 +876,22 @@ public:
                 LOG_INFO("RetryPendingReports: shard=%s report SUCCESS via heartbeat retry",
                          pr.shard_id.c_str());
             }
+            else if (!ctrl.Failed())
+            {
+                // #14 修复：确定性拒绝（accepted=false，如 stale attempt——
+                // shard 已被重调度到更高 attempt，旧结果永远不可能被接受）
+                // 直接丢弃，此前无差别重入队导致 3s 间隔无限重试 + WARN 刷屏。
+                LOG_WARN("RetryPendingReports: shard=%s deterministically rejected, "
+                         "dropping entry: %s", pr.shard_id.c_str(),
+                         resp.error_msg().c_str());
+            }
             else
             {
-                // 重试失败，放回队列等待下次心跳
+                // 仅网络失败才放回队列等待下次心跳
                 std::lock_guard<std::mutex> lock(pending_mutex_);
                 pending_reports_.push_back(pr);
-                LOG_WARN("RetryPendingReports: shard=%s still failed: %s",
-                         pr.shard_id.c_str(),
-                         ctrl.Failed() ? ctrl.ErrorText().c_str() : resp.error_msg().c_str());
+                LOG_WARN("RetryPendingReports: shard=%s still failed (network): %s",
+                         pr.shard_id.c_str(), ctrl.ErrorText().c_str());
             }
         }
 
@@ -866,6 +905,74 @@ public:
 // ============================================================================
 // 系统资源采集（阶段 7：资源感知调度）
 // ============================================================================
+
+/// @brief 聚合「本进程 + 所有存活直接子进程」的 CPU ticks（#15 修复）
+///
+/// 原实现读 /proc/self/stat 的 cutime/cstime——它们只统计已被 waitpid
+/// 收割的已终止子进程，运行中的 ffmpeg 子进程不计入 → 转码进行中心跳
+/// 上报 cpu_usage≈0，Worker 过载门与 Scheduler 加权评分同时失效。
+/// 改为直接聚合：自身 utime+stime + /proc/self/task/*/children 列出的
+/// 存活子进程的 utime+stime（ffmpeg 基本不再 fork，一层足够）。
+static uint64_t CollectTreeCpuTicks()
+{
+    uint64_t ticks = 0;
+
+    // 1. 自身 utime/stime（字段 14/15）
+    {
+        std::ifstream stat_file("/proc/self/stat");
+        if (!stat_file.is_open()) return 0;
+        std::string line;
+        std::getline(stat_file, line);
+        size_t comm_end = line.rfind(')');
+        if (comm_end == std::string::npos) return 0;
+        std::istringstream iss(line.substr(comm_end + 2));
+        std::string field;
+        for (int i = 3; i <= 15; ++i)
+        {
+            if (!(iss >> field)) break;
+            if (i == 14) ticks += std::stoull(field);
+            if (i == 15) ticks += std::stoull(field);
+        }
+    }
+
+    // 2. 存活直接子进程（所有线程的 children 并集去重）
+    std::set<pid_t> children;
+    DIR* task_dir = opendir("/proc/self/task");
+    if (task_dir)
+    {
+        struct dirent* ent;
+        while ((ent = readdir(task_dir)) != nullptr)
+        {
+            if (ent->d_name[0] == '.') continue;
+            std::string children_path = std::string("/proc/self/task/")
+                                      + ent->d_name + "/children";
+            std::ifstream cf(children_path);
+            if (!cf.is_open()) continue;
+            pid_t pid;
+            while (cf >> pid) children.insert(pid);
+        }
+        closedir(task_dir);
+    }
+
+    for (pid_t pid : children)
+    {
+        std::ifstream stat_file("/proc/" + std::to_string(pid) + "/stat");
+        if (!stat_file.is_open()) continue;  // 子进程已退出
+        std::string line;
+        std::getline(stat_file, line);
+        size_t comm_end = line.rfind(')');
+        if (comm_end == std::string::npos) continue;
+        std::istringstream iss(line.substr(comm_end + 2));
+        std::string field;
+        for (int i = 3; i <= 15; ++i)
+        {
+            if (!(iss >> field)) break;
+            if (i == 14) ticks += std::stoull(field);
+            if (i == 15) ticks += std::stoull(field);
+        }
+    }
+    return ticks;
+}
 
 /// @brief 从 /proc/self/stat 读取本进程 CPU 时间并计算使用率（修复 #15）
 ///
@@ -885,32 +992,9 @@ static int CollectCpuUsage()
 
     std::lock_guard<std::mutex> lock(cpu_mutex);
 
-    // 读 /proc/self/stat：utime(14) + stime(15) + cutime(16) + cstime(17)
-    std::ifstream stat_file("/proc/self/stat");
-    if (!stat_file.is_open()) return 0;
-
-    std::string line;
-    std::getline(stat_file, line);
-
-    // /proc/self/stat 格式：pid (comm) state ... fields...
-    // 跳过 pid 和 comm（comm 可能含空格和括号，需要特殊处理）
-    size_t comm_end = line.rfind(')');
-    if (comm_end == std::string::npos) return 0;
-
-    std::istringstream iss(line.substr(comm_end + 2));  // skip ") "
-    std::string field;
-    uint64_t utime = 0, stime = 0, cutime = 0, cstime = 0;
-    // fields after comm: state(3) ppid(4) pgrp(5) ... utime(14) stime(15) cutime(16) cstime(17)
-    for (int i = 3; i <= 17; ++i)
-    {
-        if (!(iss >> field)) return 0;
-        if (i == 14) utime  = std::stoull(field);
-        if (i == 15) stime  = std::stoull(field);
-        if (i == 16) cutime = std::stoull(field);
-        if (i == 17) cstime = std::stoull(field);
-    }
-
-    uint64_t total_ticks = utime + stime + cutime + cstime;
+    // #15 修复：聚合自身 + 存活子进程（cutime/cstime 只计已收割子进程，
+    // 转码中恒 ~0）
+    uint64_t total_ticks = CollectTreeCpuTicks();
     int64_t now_ms = NowMs();
 
     int usage = 0;

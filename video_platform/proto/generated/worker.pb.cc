@@ -143,6 +143,7 @@ PROTOBUF_CONSTEXPR CancelShardRequest::CancelShardRequest(
     ::_pbi::ConstantInitialized): _impl_{
     /*decltype(_impl_.shard_id_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.reason_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
+  , /*decltype(_impl_.attempt_id_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct CancelShardRequestDefaultTypeInternal {
   PROTOBUF_CONSTEXPR CancelShardRequestDefaultTypeInternal()
@@ -281,6 +282,7 @@ const uint32_t TableStruct_worker_2eproto::offsets[] PROTOBUF_SECTION_VARIABLE(p
   ~0u,  // no _inlined_string_donated_
   PROTOBUF_FIELD_OFFSET(::video_platform::CancelShardRequest, _impl_.shard_id_),
   PROTOBUF_FIELD_OFFSET(::video_platform::CancelShardRequest, _impl_.reason_),
+  PROTOBUF_FIELD_OFFSET(::video_platform::CancelShardRequest, _impl_.attempt_id_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::video_platform::CancelShardResponse, _internal_metadata_),
   ~0u,  // no _extensions_
@@ -318,9 +320,9 @@ static const ::_pbi::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protode
   { 54, -1, -1, sizeof(::video_platform::AssignShardRequest)},
   { 61, -1, -1, sizeof(::video_platform::AssignShardResponse)},
   { 70, -1, -1, sizeof(::video_platform::CancelShardRequest)},
-  { 78, -1, -1, sizeof(::video_platform::CancelShardResponse)},
-  { 87, -1, -1, sizeof(::video_platform::QueryShardRequest)},
-  { 94, -1, -1, sizeof(::video_platform::QueryShardResponse)},
+  { 79, -1, -1, sizeof(::video_platform::CancelShardResponse)},
+  { 88, -1, -1, sizeof(::video_platform::QueryShardRequest)},
+  { 95, -1, -1, sizeof(::video_platform::QueryShardResponse)},
 };
 
 static const ::_pb::Message* const file_default_instances[] = {
@@ -357,36 +359,37 @@ const char descriptor_table_protodef_worker_2eproto[] PROTOBUF_SECTION_VARIABLE(
   "Info\">\n\022AssignShardRequest\022(\n\005shard\030\001 \001("
   "\0132\031.video_platform.ShardInfo\"N\n\023AssignSh"
   "ardResponse\022\022\n\nerror_code\030\001 \001(\005\022\021\n\terror"
-  "_msg\030\002 \001(\t\022\020\n\010accepted\030\003 \001(\010\"6\n\022CancelSh"
+  "_msg\030\002 \001(\t\022\020\n\010accepted\030\003 \001(\010\"J\n\022CancelSh"
   "ardRequest\022\020\n\010shard_id\030\001 \001(\t\022\016\n\006reason\030\002"
-  " \001(\t\"N\n\023CancelShardResponse\022\022\n\nerror_cod"
-  "e\030\001 \001(\005\022\021\n\terror_msg\030\002 \001(\t\022\020\n\010canceled\030\003"
-  " \001(\010\"%\n\021QueryShardRequest\022\020\n\010shard_id\030\001 "
-  "\001(\t\"|\n\022QueryShardResponse\022\022\n\nerror_code\030"
-  "\001 \001(\005\022\021\n\terror_msg\030\002 \001(\t\022-\n\nshard_info\030\003"
-  " \001(\0132\031.video_platform.ShardInfo\022\020\n\010progr"
-  "ess\030\004 \001(\0052\241\002\n\024WorkerManagerService\022_\n\016Re"
-  "gisterWorker\022%.video_platform.RegisterWo"
-  "rkerRequest\032&.video_platform.RegisterWor"
-  "kerResponse\022P\n\tHeartbeat\022 .video_platfor"
-  "m.HeartbeatRequest\032!.video_platform.Hear"
-  "tbeatResponse\022V\n\013ListWorkers\022\".video_pla"
-  "tform.ListWorkersRequest\032#.video_platfor"
-  "m.ListWorkersResponse2\224\002\n\rWorkerService\022"
-  "V\n\013AssignShard\022\".video_platform.AssignSh"
-  "ardRequest\032#.video_platform.AssignShardR"
-  "esponse\022V\n\013CancelShard\022\".video_platform."
-  "CancelShardRequest\032#.video_platform.Canc"
-  "elShardResponse\022S\n\nQueryShard\022!.video_pl"
-  "atform.QueryShardRequest\032\".video_platfor"
-  "m.QueryShardResponseB\003\200\001\001b\006proto3"
+  " \001(\t\022\022\n\nattempt_id\030\003 \001(\t\"N\n\023CancelShardR"
+  "esponse\022\022\n\nerror_code\030\001 \001(\005\022\021\n\terror_msg"
+  "\030\002 \001(\t\022\020\n\010canceled\030\003 \001(\010\"%\n\021QueryShardRe"
+  "quest\022\020\n\010shard_id\030\001 \001(\t\"|\n\022QueryShardRes"
+  "ponse\022\022\n\nerror_code\030\001 \001(\005\022\021\n\terror_msg\030\002"
+  " \001(\t\022-\n\nshard_info\030\003 \001(\0132\031.video_platfor"
+  "m.ShardInfo\022\020\n\010progress\030\004 \001(\0052\241\002\n\024Worker"
+  "ManagerService\022_\n\016RegisterWorker\022%.video"
+  "_platform.RegisterWorkerRequest\032&.video_"
+  "platform.RegisterWorkerResponse\022P\n\tHeart"
+  "beat\022 .video_platform.HeartbeatRequest\032!"
+  ".video_platform.HeartbeatResponse\022V\n\013Lis"
+  "tWorkers\022\".video_platform.ListWorkersReq"
+  "uest\032#.video_platform.ListWorkersRespons"
+  "e2\224\002\n\rWorkerService\022V\n\013AssignShard\022\".vid"
+  "eo_platform.AssignShardRequest\032#.video_p"
+  "latform.AssignShardResponse\022V\n\013CancelSha"
+  "rd\022\".video_platform.CancelShardRequest\032#"
+  ".video_platform.CancelShardResponse\022S\n\nQ"
+  "ueryShard\022!.video_platform.QueryShardReq"
+  "uest\032\".video_platform.QueryShardResponse"
+  "B\003\200\001\001b\006proto3"
   ;
 static const ::_pbi::DescriptorTable* const descriptor_table_worker_2eproto_deps[1] = {
   &::descriptor_table_common_2eproto,
 };
 static ::_pbi::once_flag descriptor_table_worker_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_worker_2eproto = {
-    false, false, 1633, descriptor_table_protodef_worker_2eproto,
+    false, false, 1653, descriptor_table_protodef_worker_2eproto,
     "worker.proto",
     &descriptor_table_worker_2eproto_once, descriptor_table_worker_2eproto_deps, 1, 12,
     schemas, file_default_instances, TableStruct_worker_2eproto::offsets,
@@ -2439,6 +2442,7 @@ CancelShardRequest::CancelShardRequest(const CancelShardRequest& from)
   new (&_impl_) Impl_{
       decltype(_impl_.shard_id_){}
     , decltype(_impl_.reason_){}
+    , decltype(_impl_.attempt_id_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -2458,6 +2462,14 @@ CancelShardRequest::CancelShardRequest(const CancelShardRequest& from)
     _this->_impl_.reason_.Set(from._internal_reason(), 
       _this->GetArenaForAllocation());
   }
+  _impl_.attempt_id_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.attempt_id_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  if (!from._internal_attempt_id().empty()) {
+    _this->_impl_.attempt_id_.Set(from._internal_attempt_id(), 
+      _this->GetArenaForAllocation());
+  }
   // @@protoc_insertion_point(copy_constructor:video_platform.CancelShardRequest)
 }
 
@@ -2468,6 +2480,7 @@ inline void CancelShardRequest::SharedCtor(
   new (&_impl_) Impl_{
       decltype(_impl_.shard_id_){}
     , decltype(_impl_.reason_){}
+    , decltype(_impl_.attempt_id_){}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.shard_id_.InitDefault();
@@ -2477,6 +2490,10 @@ inline void CancelShardRequest::SharedCtor(
   _impl_.reason_.InitDefault();
   #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
     _impl_.reason_.Set("", GetArenaForAllocation());
+  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
+  _impl_.attempt_id_.InitDefault();
+  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
+    _impl_.attempt_id_.Set("", GetArenaForAllocation());
   #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
 }
 
@@ -2493,6 +2510,7 @@ inline void CancelShardRequest::SharedDtor() {
   GOOGLE_DCHECK(GetArenaForAllocation() == nullptr);
   _impl_.shard_id_.Destroy();
   _impl_.reason_.Destroy();
+  _impl_.attempt_id_.Destroy();
 }
 
 void CancelShardRequest::SetCachedSize(int size) const {
@@ -2507,6 +2525,7 @@ void CancelShardRequest::Clear() {
 
   _impl_.shard_id_.ClearToEmpty();
   _impl_.reason_.ClearToEmpty();
+  _impl_.attempt_id_.ClearToEmpty();
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -2533,6 +2552,16 @@ const char* CancelShardRequest::_InternalParse(const char* ptr, ::_pbi::ParseCon
           ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
           CHK_(ptr);
           CHK_(::_pbi::VerifyUTF8(str, "video_platform.CancelShardRequest.reason"));
+        } else
+          goto handle_unusual;
+        continue;
+      // string attempt_id = 3;
+      case 3:
+        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 26)) {
+          auto str = _internal_mutable_attempt_id();
+          ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
+          CHK_(ptr);
+          CHK_(::_pbi::VerifyUTF8(str, "video_platform.CancelShardRequest.attempt_id"));
         } else
           goto handle_unusual;
         continue;
@@ -2585,6 +2614,16 @@ uint8_t* CancelShardRequest::_InternalSerialize(
         2, this->_internal_reason(), target);
   }
 
+  // string attempt_id = 3;
+  if (!this->_internal_attempt_id().empty()) {
+    ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::VerifyUtf8String(
+      this->_internal_attempt_id().data(), static_cast<int>(this->_internal_attempt_id().length()),
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::SERIALIZE,
+      "video_platform.CancelShardRequest.attempt_id");
+    target = stream->WriteStringMaybeAliased(
+        3, this->_internal_attempt_id(), target);
+  }
+
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -2615,6 +2654,13 @@ size_t CancelShardRequest::ByteSizeLong() const {
         this->_internal_reason());
   }
 
+  // string attempt_id = 3;
+  if (!this->_internal_attempt_id().empty()) {
+    total_size += 1 +
+      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::StringSize(
+        this->_internal_attempt_id());
+  }
+
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -2638,6 +2684,9 @@ void CancelShardRequest::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, con
   }
   if (!from._internal_reason().empty()) {
     _this->_internal_set_reason(from._internal_reason());
+  }
+  if (!from._internal_attempt_id().empty()) {
+    _this->_internal_set_attempt_id(from._internal_attempt_id());
   }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
@@ -2665,6 +2714,10 @@ void CancelShardRequest::InternalSwap(CancelShardRequest* other) {
   ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
       &_impl_.reason_, lhs_arena,
       &other->_impl_.reason_, rhs_arena
+  );
+  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
+      &_impl_.attempt_id_, lhs_arena,
+      &other->_impl_.attempt_id_, rhs_arena
   );
 }
 

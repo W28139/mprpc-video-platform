@@ -163,37 +163,34 @@ static const ::_pb::Message* const file_default_instances[] = {
 };
 
 const char descriptor_table_protodef_result_2eproto[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) =
-  "\n\014result.proto\022\016video_platform\032\014common.p"
-  "roto\"\210\001\n\032ReportShardProgressRequest\022\020\n\010s"
-  "hard_id\030\001 \001(\t\022\016\n\006job_id\030\002 \001(\t\022\021\n\tworker_"
-  "id\030\003 \001(\t\022\022\n\nattempt_id\030\004 \001(\t\022\020\n\010progress"
-  "\030\005 \001(\005\022\017\n\007message\030\006 \001(\t\"V\n\033ReportShardPr"
-  "ogressResponse\022\022\n\nerror_code\030\001 \001(\005\022\021\n\ter"
-  "ror_msg\030\002 \001(\t\022\020\n\010recorded\030\003 \001(\010\"\364\001\n\030Repo"
-  "rtShardResultRequest\022\020\n\010shard_id\030\001 \001(\t\022\016"
-  "\n\006job_id\030\002 \001(\t\022\021\n\tworker_id\030\003 \001(\t\022\022\n\natt"
-  "empt_id\030\004 \001(\t\022\022\n\nis_success\030\005 \001(\010\022\021\n\texi"
-  "t_code\030\006 \001(\005\022\021\n\terror_msg\030\007 \001(\t\022\023\n\013outpu"
-  "t_path\030\010 \001(\t\022\022\n\nelapsed_ms\030\t \001(\003\022\023\n\013shar"
-  "d_index\030\n \001(\005\022\027\n\017screenshot_path\030\013 \001(\t\"f"
-  "\n\031ReportShardResultResponse\022\022\n\nerror_cod"
-  "e\030\001 \001(\005\022\021\n\terror_msg\030\002 \001(\t\022\020\n\010accepted\030\003"
-  " \001(\010\022\020\n\010job_done\030\004 \001(\0102\362\001\n\026ResultCollect"
-  "orService\022n\n\023ReportShardProgress\022*.video"
-  "_platform.ReportShardProgressRequest\032+.v"
-  "ideo_platform.ReportShardProgressRespons"
-  "e\022h\n\021ReportShardResult\022(.video_platform."
-  "ReportShardResultRequest\032).video_platfor"
-  "m.ReportShardResultResponseB\003\200\001\001b\006proto3"
+  "\n\014result.proto\022\016video_platform\"\210\001\n\032Repor"
+  "tShardProgressRequest\022\020\n\010shard_id\030\001 \001(\t\022"
+  "\016\n\006job_id\030\002 \001(\t\022\021\n\tworker_id\030\003 \001(\t\022\022\n\nat"
+  "tempt_id\030\004 \001(\t\022\020\n\010progress\030\005 \001(\005\022\017\n\007mess"
+  "age\030\006 \001(\t\"V\n\033ReportShardProgressResponse"
+  "\022\022\n\nerror_code\030\001 \001(\005\022\021\n\terror_msg\030\002 \001(\t\022"
+  "\020\n\010recorded\030\003 \001(\010\"\364\001\n\030ReportShardResultR"
+  "equest\022\020\n\010shard_id\030\001 \001(\t\022\016\n\006job_id\030\002 \001(\t"
+  "\022\021\n\tworker_id\030\003 \001(\t\022\022\n\nattempt_id\030\004 \001(\t\022"
+  "\022\n\nis_success\030\005 \001(\010\022\021\n\texit_code\030\006 \001(\005\022\021"
+  "\n\terror_msg\030\007 \001(\t\022\023\n\013output_path\030\010 \001(\t\022\022"
+  "\n\nelapsed_ms\030\t \001(\003\022\023\n\013shard_index\030\n \001(\005\022"
+  "\027\n\017screenshot_path\030\013 \001(\t\"f\n\031ReportShardR"
+  "esultResponse\022\022\n\nerror_code\030\001 \001(\005\022\021\n\terr"
+  "or_msg\030\002 \001(\t\022\020\n\010accepted\030\003 \001(\010\022\020\n\010job_do"
+  "ne\030\004 \001(\0102\362\001\n\026ResultCollectorService\022n\n\023R"
+  "eportShardProgress\022*.video_platform.Repo"
+  "rtShardProgressRequest\032+.video_platform."
+  "ReportShardProgressResponse\022h\n\021ReportSha"
+  "rdResult\022(.video_platform.ReportShardRes"
+  "ultRequest\032).video_platform.ReportShardR"
+  "esultResponseB\003\200\001\001b\006proto3"
   ;
-static const ::_pbi::DescriptorTable* const descriptor_table_result_2eproto_deps[1] = {
-  &::descriptor_table_common_2eproto,
-};
 static ::_pbi::once_flag descriptor_table_result_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_result_2eproto = {
-    false, false, 880, descriptor_table_protodef_result_2eproto,
+    false, false, 866, descriptor_table_protodef_result_2eproto,
     "result.proto",
-    &descriptor_table_result_2eproto_once, descriptor_table_result_2eproto_deps, 1, 4,
+    &descriptor_table_result_2eproto_once, nullptr, 0, 4,
     schemas, file_default_instances, TableStruct_result_2eproto::offsets,
     file_level_metadata_result_2eproto, file_level_enum_descriptors_result_2eproto,
     file_level_service_descriptors_result_2eproto,

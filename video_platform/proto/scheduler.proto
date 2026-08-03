@@ -34,6 +34,12 @@ message RescheduleShardRequest {
     string shard_id = 1;  // 要重新调度的 shard
     string job_id   = 2;  // 所属 job（用于校验和日志）
     string reason   = 3;  // 触发原因：TIMEOUT（心跳超时） / WORKER_FAILED（Worker 返回失败） / MANUAL（人工）
+    // #3 修复：触发本次重调度的 attempt_id（可选，幂等用）。
+    // ResultCollector 上报失败结果时携带该次执行的 attempt_id；
+    // Scheduler 校验与 shard 当前 attempt 一致才处理——重复 FAILED 上报
+    // （响应丢失后心跳重试队列重发）触发的二次 RescheduleShard 会被拒绝，
+    // 防止 retry_count 双倍消耗。空字符串 = 不校验（兼容旧调用方）。
+    string attempt_id = 4;
 }
 
 message RescheduleShardResponse {

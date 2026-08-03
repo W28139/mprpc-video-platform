@@ -825,22 +825,37 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
                                              recv_str, callErrorCode, callErrorMsg);
 
     if (!callOk &&
-        !use_direct_ &&  // 直连模式不重试 ZK 发现
         (callErrorCode == mprpc::RPC_CONNECT_FAILED ||
          callErrorCode == mprpc::RPC_TIMEOUT ||
          callErrorCode == mprpc::RPC_SEND_FAILED ||
          callErrorCode == mprpc::RPC_RECV_FAILED))
     {
-        // 缓存 endpoint 连接失败时，认为实例可能已经下线，失效缓存后重新发现并重试一次。
+        // 连接级失败：清掉该 endpoint 的整个连接池再重试一次。
+        // 背景：服务端 EventLoop 会回收空闲连接，客户端池中因此可能积压
+        // 多条「本地 fd 仍有效但对端已关闭」的死连接，逐条轮转失败代价高
+        // （池越大恢复越慢）。清池后重建连接立即恢复。
+        // 注意：RPC_TIMEOUT 也属连接级（对端无响应），原语义保留。
         DropEndpointConnections(pooledConn->key);
-        InvalidateHostData(method_path);
-        std::string retry_host = PickEndpoint(QueryEndpointList(method_path, legacy_method_path));
-        std::string retryParseError;
-        if (!retry_host.empty() && ParseHostData(retry_host, ip, port, retryParseError))
+        if (use_direct_)
         {
+            // 直连模式：endpoint 固定（如 Scheduler→Worker 的 AssignShard/
+            // QueryShard/CancelShard），清池后对同一地址重建连接重试一次。
             pooledConn = GetPooledConnection(ip, port);
             callOk = SendRequestAndReadResponse(pooledConn, send_rpc_str, timeoutMs,
                                                 recv_str, callErrorCode, callErrorMsg);
+        }
+        else
+        {
+            // 缓存 endpoint 连接失败时，认为实例可能已经下线，失效缓存后重新发现并重试一次。
+            InvalidateHostData(method_path);
+            std::string retry_host = PickEndpoint(QueryEndpointList(method_path, legacy_method_path));
+            std::string retryParseError;
+            if (!retry_host.empty() && ParseHostData(retry_host, ip, port, retryParseError))
+            {
+                pooledConn = GetPooledConnection(ip, port);
+                callOk = SendRequestAndReadResponse(pooledConn, send_rpc_str, timeoutMs,
+                                                    recv_str, callErrorCode, callErrorMsg);
+            }
         }
     }
 

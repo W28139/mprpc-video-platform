@@ -165,7 +165,6 @@ FfmpegResult FfmpegExecutor::ExecuteCommand(const std::vector<std::string>& args
     // poll + raw read（不使用 fdopen/fgets，避免 stdio 缓冲与非阻塞 fd 冲突）
     constexpr int    kPollTimeoutMs = 1000;        // poll 超时 1 秒
     constexpr int64_t kMaxExecMs    = 3600000;     // 最大执行时长 1 小时
-    int64_t total_elapsed_ms = 0;
     int     child_status      = 0;
     bool    child_reaped      = false;
     bool    killed            = false;
@@ -176,6 +175,22 @@ FfmpegResult FfmpegExecutor::ExecuteCommand(const std::vector<std::string>& args
 
     while (!killed)
     {
+        // #16 修复：看门狗改用 steady_clock 实际耗时，每轮循环都检查。
+        // 此前 total_elapsed_ms 只在 poll 超时（ret==0）分支累加——ffmpeg
+        // `-progress pipe:1` 每 ~0.5s 输出一行，poll 几乎总是立即返回，
+        // elapsed 几乎不增长 → 持续吐输出的病态进程永远不会被 kMaxExecMs
+        // SIGKILL（对静默挂死仍有效，但那只是特殊情形）。
+        int64_t total_elapsed_ms = std::chrono::duration_cast<std::chrono::milliseconds>(
+            std::chrono::steady_clock::now() - start).count();
+        if (total_elapsed_ms >= kMaxExecMs)
+        {
+            LOG_WARN("ExecuteCommand: max exec time (%lldms) exceeded, killing pid=%d",
+                     (long long)kMaxExecMs, pid);
+            kill(pid, SIGKILL);
+            killed = true;
+            break;
+        }
+
         struct pollfd pfd;
         pfd.fd     = pipefd[0];
         pfd.events = POLLIN;
@@ -189,20 +204,11 @@ FfmpegResult FfmpegExecutor::ExecuteCommand(const std::vector<std::string>& args
 
         if (ret == 0)
         {
-            // 超时：检查 cancel 和最大执行时长
-            total_elapsed_ms += kPollTimeoutMs;
-
+            // 超时：检查 cancel
             if (should_cancel && should_cancel())
             {
                 LOG_INFO("ExecuteCommand: cancel requested, sending SIGTERM to pid=%d", pid);
                 kill(pid, SIGTERM);
-                killed = true;
-            }
-            else if (total_elapsed_ms >= kMaxExecMs)
-            {
-                LOG_WARN("ExecuteCommand: max exec time (%lldms) exceeded, killing pid=%d",
-                         (long long)kMaxExecMs, pid);
-                kill(pid, SIGKILL);
                 killed = true;
             }
             if (killed) break;
@@ -419,17 +425,53 @@ VideoInfo FfmpegExecutor::Probe(const std::string& input_path)
 
     close(pipefd[1]);
 
+    // #13 修复：read 循环带 poll 超时（此前裸阻塞 read——ffprobe 挂死
+    // （损坏文件/慢挂载点）会永久阻塞调用方；ScheduleJob 在 work 线程内
+    // 同步调 Probe，2 个并发即占满线程池瘫痪平台）。超时后 SIGKILL 兜底，
+    // 返回无效 info 由调用方回退 fallback 时长。
+    constexpr int    kProbePollMs    = 1000;   // poll 单次超时
+    constexpr int64_t kProbeTimeoutMs = 15000;  // ffprobe 探测总上限 15s
     std::string json;
     char buf[2048];
-    ssize_t n;
-    while ((n = read(pipefd[0], buf, sizeof(buf) - 1)) > 0)
+    bool probe_timed_out = false;
+    int64_t elapsed_ms = 0;
+    for (;;)
     {
+        struct pollfd pfd;
+        pfd.fd     = pipefd[0];
+        pfd.events = POLLIN;
+        int ret = poll(&pfd, 1, kProbePollMs);
+        if (ret < 0)
+        {
+            if (errno == EINTR) continue;
+            break;  // poll 错误
+        }
+        if (ret == 0)
+        {
+            elapsed_ms += kProbePollMs;
+            if (elapsed_ms >= kProbeTimeoutMs)
+            {
+                probe_timed_out = true;
+                break;
+            }
+            continue;
+        }
+        ssize_t n = read(pipefd[0], buf, sizeof(buf) - 1);
+        if (n <= 0) break;  // 0=EOF，<0=错误
         buf[n] = '\0';
         json += buf;
     }
     close(pipefd[0]);
 
     int status = 0;
+    if (probe_timed_out)
+    {
+        LOG_WARN("Probe: ffprobe timed out after %lldms, killing pid=%d",
+                 (long long)kProbeTimeoutMs, pid);
+        kill(pid, SIGKILL);
+        waitpid(pid, &status, 0);
+        return info;
+    }
     waitpid(pid, &status, 0);
 
     if (json.empty()) return info;
@@ -680,8 +722,11 @@ FfmpegResult FfmpegExecutor::Merge(const std::vector<std::string>& input_paths,
     std::string output_dir = output_path.substr(0, output_path.find_last_of('/'));
     MakeDirs(output_dir);
 
-    // filelist 用固定名写在输出目录（调用方需保证互斥，见 result_collector #7）
-    std::string filelist_path = output_dir + "/filelist.txt";
+    // #11 修复：filelist 用含输出名的唯一文件（output 形如 {job_id}_merged.mp4，
+    // 派生名必然唯一），不再跨 job 共享固定名 filelist.txt——并发 merge 时
+    // concat 不再读到对方 job 的 file 条目导致产物串片。
+    std::string output_basename = output_path.substr(output_path.find_last_of('/') + 1);
+    std::string filelist_path = output_dir + "/." + output_basename + ".filelist.txt";
     FILE* fl = fopen(filelist_path.c_str(), "w");
     if (!fl)
     {

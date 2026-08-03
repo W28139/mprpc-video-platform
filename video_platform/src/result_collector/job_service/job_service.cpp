@@ -11,6 +11,8 @@
 #include "rpcprovider.h"
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
+#include "video_platform/mysql_pool.h"
+#include "video_platform/redis_client.h"
 
 using namespace video_platform;
 
@@ -105,7 +107,6 @@ public:
         // 最多重试 3 次，防止单次网络抖动导致 job 永久卡死在 PENDING
         bool schedule_ok = false;
         int32_t shard_count_from_scheduler = 0;
-        std::vector<ShardInfo> shard_list_from_scheduler;  // 收集 shard 用于跨进程同步
         for (int attempt = 1; attempt <= 3; ++attempt)
         {
             // 利用 rpc 调用切片函数 ScheduleJob
@@ -126,11 +127,8 @@ public:
                 LOG_INFO("JobService::SubmitJob job_id=%s: Scheduler accepted (attempt %d)",
                          job_id.c_str(), attempt);
                 // 直接从 ScheduleJobResponse 获取 shard_count（直接数据路径，避免侧信道）
+                // 阶段 9：shard 列表不再收集——数据已由 Scheduler 写入 MySQL 共享
                 shard_count_from_scheduler = sched_resp.shard_count();
-                // 捕获 shard 列表用于跨进程同步,把在另一个服务器切好的片信息收集回来
-                shard_list_from_scheduler.clear();
-                for (const auto& si : sched_resp.shards())
-                    shard_list_from_scheduler.push_back(si);
                 schedule_ok = true;
                 break;
             }
@@ -154,42 +152,22 @@ public:
             if (refreshed_opt.has_value())
             {
                 auto refreshed = refreshed_opt.value();
+                int from_status = refreshed.status;   // 快照前置状态（条件更新防覆盖）
                 refreshed.status = static_cast<int32_t>(JobStatus::JOB_SCHEDULING);
                 refreshed.shard_count = shard_count_from_scheduler;
                 refreshed.updated_at = NowMs();
-                JobStore::GetInstance().Update(job_id, refreshed);
+                JobStore::GetInstance().UpdateIfStatus(job_id, {from_status}, refreshed);
                 // 同步更新响应中的 job_info, jobInfo 是指向 RPC 响应 的指针response,它最终会被序列化发给客户端
                 jobInfo->set_status(JobStatus::JOB_SCHEDULING);
                 jobInfo->set_shard_count(shard_count_from_scheduler);
                 jobInfo->set_updated_at(refreshed.updated_at);
             }
 
-            // 将 Scheduler 响应中的 shard 写入本地 ShardStore。
-            // shard_list_from_scheduler 是栈上临时对象（从 RPC response 提取），
-            // 函数返回后即析构，必须在消失前将数据搬入进程生命周期的单例。
-            // JobService 和 Scheduler 是不同进程，各自持有独立的 ShardStore 实例，
-            // 不写入则本进程 QueryJob 查不到 shard 列表。
-            for (const auto& si : shard_list_from_scheduler)
-            {
-                ShardRecord s;
-                s.shard_id           = si.shard_id();
-                s.job_id             = si.job_id();
-                s.shard_index        = si.shard_index();
-                s.start_ms           = si.start_ms();
-                s.duration_ms        = si.duration_ms();
-                s.status             = static_cast<int32_t>(si.status());
-                s.retry_count        = si.retry_count();
-                s.max_retry          = si.max_retry();
-                s.input_path         = si.input_path();
-                s.output_path        = si.output_path();
-                s.target_resolution  = si.target_resolution();   // 修复 #18
-                s.target_bitrate     = si.target_bitrate();      // 修复 #18
-                s.created_at         = si.created_at();
-                s.updated_at         = si.updated_at();
-                ShardStore::GetInstance().Insert(s);
-            }
-            LOG_INFO("JobService::SubmitJob job_id=%s: populated %zu shards in local ShardStore",
-                     job_id.c_str(), shard_list_from_scheduler.size());
+            // 阶段 9：不再从 ScheduleJob 响应构造 shard 本地副本——
+            // Scheduler 已将 shard 写入 MySQL，QueryJob 直接读取同一份数据。
+            LOG_INFO("JobService::SubmitJob job_id=%s: %d shards created "
+                     "(shared via MySQL)",
+                     job_id.c_str(), shard_count_from_scheduler);
         }
         // 切片失败后的逻辑
         else
@@ -214,6 +192,25 @@ public:
                   ::google::protobuf::Closure* done) override
     {
         LOG_INFO("JobService::QueryJob job_id=%s", request->job_id().c_str());
+
+        // 阶段 10：进度缓存——先查 Redis（TTL 60s），命中直接返回，
+        // 减少高频 QueryJob 对 ShardStore(MySQL) 的反复扫描。
+        // 进行中的进度最多滞后 60s（TTL 过期自然刷新）；
+        // RC 在 ReportShardResult 时 DEL，终态/关键推进及时可见。
+        auto& redis = RedisClient::GetInstance();
+        if (redis.inited() && redis.enabled())
+        {
+            std::string cached;
+            bool found = false;
+            if (redis.Get("job:progress:" + request->job_id(), cached, found)
+                && found && response->ParseFromString(cached))
+            {
+                LOG_INFO("JobService::QueryJob job_id=%s (redis cache hit)",
+                         request->job_id().c_str());
+                done->Run();
+                return;
+            }
+        }
 
         auto job_opt = JobStore::GetInstance().Get(request->job_id());
         if (!job_opt.has_value())
@@ -263,6 +260,15 @@ public:
             si->set_updated_at(s.updated_at);
         }
 
+        // 阶段 10：写进度缓存（TTL 60s）。只缓存成功响应；
+        // Redis 不可用时静默跳过（降级，下一次查询直读 MySQL）
+        if (redis.inited() && redis.enabled() && response->error_code() == 0)
+        {
+            std::string serialized;
+            if (response->SerializeToString(&serialized))
+                redis.SetEx("job:progress:" + request->job_id(), serialized, 60);
+        }
+
         done->Run();
     }
 
@@ -288,21 +294,33 @@ public:
             return;
         }
 
-        auto job = job_opt.value();
-        job.status = static_cast<int32_t>(JobStatus::JOB_CANCELED);
-        job.updated_at = NowMs();
-        JobStore::GetInstance().Update(request->job_id(), job);
+        // 条件更新：仅当 job 仍是快照状态时推进（防覆盖 RC 已写入的终态）
+        {
+            auto job = job_opt.value();
+            int from_status = job.status;
+            job.status = static_cast<int32_t>(JobStatus::JOB_CANCELED);
+            job.updated_at = NowMs();
+            JobStore::GetInstance().UpdateIfStatus(request->job_id(), {from_status}, job);
+        }
 
         // ── 传播取消到所有 shard ─────────────────────────────────────
-        // 将所有 shard 标记为 CANCELED，使 SchedulingLoop 不再扫描它们。
+        // 将所有非终态 shard 标记为 CANCELED，使 SchedulingLoop 不再扫描它们。
         // 对已分配的 shard，best-effort 通知 Worker 取消执行。
+        // 条件更新：仅当状态未变时覆盖（防与 RC 并发写入的 SUCCESS 互踩）。
         auto shards = ShardStore::GetInstance().ListByJob(request->job_id());
         int canceled_count = 0;
         for (auto& s : shards)
         {
-            s.status = static_cast<int32_t>(ShardStatus::SHARD_CANCELED);
+            int st = s.status;
+            int s_success  = static_cast<int32_t>(ShardStatus::SHARD_SUCCESS);
+            int s_failed   = static_cast<int32_t>(ShardStatus::SHARD_FAILED);
+            int s_canceled = static_cast<int32_t>(ShardStatus::SHARD_CANCELED);
+            if (st == s_success || st == s_failed || st == s_canceled)
+                continue;  // 已终态，不动（防止破坏 RC 的终态判定）
+            int from_status = st;   // 快照前置状态
+            s.status = s_canceled;
             s.updated_at = NowMs();
-            ShardStore::GetInstance().Update(s.shard_id, s);
+            ShardStore::GetInstance().UpdateIfStatus(s.shard_id, {from_status}, s);
             ++canceled_count;
         }
         LOG_INFO("JobService::CancelJob job_id=%s: canceled %d shards",
@@ -353,90 +371,6 @@ public:
         done->Run();
     }
 
-    /// @brief 跨进程状态同步 — 由 Scheduler / ResultCollector 反向调用
-    ///
-    /// 由于 JobStore 是进程内存储，Scheduler 和 ResultCollector 的状态变更
-    /// 不会自动反映到 JobService。此 RPC 允许其他服务主动推送状态更新。
-    ///
-    /// 调用方：
-    /// - Scheduler.ScheduleJob（切分完成后更新 shard_count + status→SCHEDULING）
-    /// - ResultCollector.CheckJobDone（全部 shard 完成后更新 status→SUCCESS）‘
-    // 调用方调用这个函数，通过request把参数传回job_server所在进程，更新数据（巧妙设计）
-    void UpdateJobStatus(::google::protobuf::RpcController* controller,
-                         const ::UpdateJobStatusRequest* request,
-                         ::UpdateJobStatusResponse* response,
-                         ::google::protobuf::Closure* done) override
-    {
-        LOG_INFO("JobService::UpdateJobStatus job_id=%s, status=%d, shard_count=%d",
-                 request->job_id().c_str(),
-                 static_cast<int>(request->status()),
-                 request->shard_count());
-
-        auto job_opt = JobStore::GetInstance().Get(request->job_id());
-        if (!job_opt.has_value())
-        {
-            response->set_error_code(1);
-            response->set_error_msg("job not found: " + request->job_id());
-            done->Run();
-            return;
-        }
-
-        auto job = job_opt.value();
-
-        // 状态单调性检查：只接受状态升级，拒绝降级
-        // 例如 JOB_SUCCESS(6) 不可被 JOB_RUNNING(4) 覆盖
-        if (request->status() != JobStatus::JOB_STATUS_UNKNOWN)
-        {
-            int32_t new_status = static_cast<int32_t>(request->status());
-            if (new_status > job.status)
-            {
-                job.status = new_status;
-            }
-            else if (new_status != job.status)
-            {
-                LOG_INFO("JobService::UpdateJobStatus job_id=%s: ignoring status "
-                         "downgrade %d → %d",
-                         request->job_id().c_str(), job.status, new_status);
-            }
-        }
-        if (request->shard_count() > job.shard_count)
-        {
-            job.shard_count = request->shard_count();
-        }
-        job.updated_at = NowMs();
-        JobStore::GetInstance().Update(request->job_id(), job);
-
-        // ── 同步 shard 状态更新 ─────────────────────────────────────
-        // 其他服务（Scheduler/ResultCollector）通过此 RPC 推送 shard 状态变更。
-        // 首次创建 shard 副本（Scheduler.ScheduleJob 时）或更新已有 shard 状态。
-        for (const auto& si : request->shards())
-        {
-            ShardRecord s;
-            s.shard_id      = si.shard_id();
-            s.job_id        = si.job_id();
-            s.shard_index   = si.shard_index();
-            s.start_ms      = si.start_ms();
-            s.duration_ms   = si.duration_ms();
-            s.status        = static_cast<int32_t>(si.status());
-            s.assigned_worker_id = si.assigned_worker_id();
-            s.attempt_id    = si.attempt_id();
-            s.retry_count   = si.retry_count();
-            s.max_retry     = si.max_retry();
-            s.input_path    = si.input_path();
-            s.output_path   = si.output_path();
-            s.created_at    = si.created_at();
-            s.updated_at    = si.updated_at();
-            // 幂等：已存在则覆盖更新
-            ShardStore::GetInstance().InsertOrUpdate(s);
-        }
-
-        LOG_INFO("JobService::UpdateJobStatus job_id=%s updated → status=%d, shard_count=%d",
-                 request->job_id().c_str(), job.status, job.shard_count);
-
-        response->set_error_code(0);
-        response->set_error_msg("");
-        done->Run();
-    }
 };
 
 // ============================================================================
@@ -513,36 +447,33 @@ static void PendingScanLoop(std::atomic<bool>& stop_flag)
                 if (refreshed_opt.has_value())
                 {
                     auto refreshed = refreshed_opt.value();
-                    // 成功的话更新状态为 scaned 切片状态
-                    refreshed.status = static_cast<int32_t>(JobStatus::JOB_SCHEDULING);
-                    refreshed.shard_count = sched_resp.shard_count();
-                    refreshed.updated_at = NowMs();
-                    JobStore::GetInstance().Update(job.job_id, refreshed);
+                    // #7 修复：仅当仍为 PENDING 时才推进到 SCHEDULING。
+                    // 此前直接覆写状态，绕过 UpdateJobStatus 的单调性保护：
+                    // 响应丢失场景下可能把已 SUCCESS 的 job 回退为 SCHEDULING
+                    // （永久卡非终态），取消竞争场景下可能把已 CANCELED 的
+                    // job 复活继续执行。先 check 再 Update。
+                    if (refreshed.status != static_cast<int32_t>(JobStatus::JOB_PENDING))
+                    {
+                        LOG_WARN("PendingScanLoop: job_id=%s status=%d no longer "
+                                 "PENDING, skip status overwrite (fix #7)",
+                                 job.job_id.c_str(), refreshed.status);
+                    }
+                    else
+                    {
+                        // 成功的话更新状态为 scaned 切片状态
+                        // 条件更新（阶段 9）：仅当仍为 PENDING 时才推进
+                        refreshed.status = static_cast<int32_t>(JobStatus::JOB_SCHEDULING);
+                        refreshed.shard_count = sched_resp.shard_count();
+                        refreshed.updated_at = NowMs();
+                        JobStore::GetInstance().UpdateIfStatus(
+                            job.job_id,
+                            {static_cast<int32_t>(JobStatus::JOB_PENDING)}, refreshed);
+                    }
                 }
 
-                // 同步 shard 列表到本地 ShardStore（JobService 进程需要本地副本）
-                for (const auto& si : sched_resp.shards())
-                {
-                    ShardRecord s;
-                    s.shard_id           = si.shard_id();
-                    s.job_id             = si.job_id();
-                    s.shard_index        = si.shard_index();
-                    s.start_ms           = si.start_ms();
-                    s.duration_ms        = si.duration_ms();
-                    s.status             = static_cast<int32_t>(si.status());
-                    s.retry_count        = si.retry_count();
-                    s.max_retry          = si.max_retry();
-                    s.input_path         = si.input_path();
-                    s.output_path        = si.output_path();
-                    s.target_resolution  = si.target_resolution();
-                    s.target_bitrate     = si.target_bitrate();
-                    s.created_at         = si.created_at();
-                    s.updated_at         = si.updated_at();
-                    ShardStore::GetInstance().InsertOrUpdate(s);
-                }
-
+                // 阶段 9：不再同步 shard 列表（MySQL 共享，QueryJob 直接读取）
                 LOG_INFO("PendingScanLoop: job_id=%s rescheduled successfully, "
-                         "%d shards created",
+                         "%d shards created (shared via MySQL)",
                          job.job_id.c_str(), sched_resp.shard_count());
             }
             else
@@ -578,6 +509,16 @@ int main(int argc, char** argv)
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }
+
+    if (!MysqlPool::GetInstance().Init())
+    {
+        LOG_ERROR("MysqlPool init failed");
+        wevix_muduo::AsyncLogger::GetInstance().stop();
+        return EXIT_FAILURE;
+    }
+
+    // 阶段 10：Redis 是可降级组件，Init 失败只 WARN 不拒绝启动
+    RedisClient::GetInstance().Init();
 
     RpcProvider provider;
     provider.NotifyService(new JobServiceImpl());

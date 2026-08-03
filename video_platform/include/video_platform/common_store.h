@@ -1,27 +1,26 @@
 #pragma once
 
-#include <shared_mutex>
-#include <unordered_map>
-#include <vector>
-#include <string>
-#include <memory>
-#include <mutex>
 #include <optional>
+#include <string>
+#include <vector>
 
 namespace video_platform {
 
 // ════════════════════════════════════════════════════════════════════════════
-// ⚠️ 重要：所有 Store 都是进程内单例（static 局部变量 + unordered_map）
+// ⚠️ 阶段 9（数据持久化）起：三个 Store 由进程内 unordered_map 改为 MySQL 持久化。
 //
-// 在多进程部署中（每个服务独立进程），各进程的 Store 实例完全隔离。
-// 跨进程的数据传递通过 RPC 的 proto 请求/响应完成，服务收到 RPC 后
-// 需要从请求参数构造本地 Store 副本。不要假定"写入 Store 后另一进程能读到"。
-//
-// 相关：业务日志第 3 篇「踩坑记录：跨进程内存存储不可见」
+// - MySQL 是唯一数据源：读（SELECT）写（INSERT/UPDATE/DELETE）全部走数据库，
+//   不再维护进程内副本。多进程部署时天然共享同一份数据，
+//   各服务不再需要"从 RPC 请求构造本地副本"的跨进程同步逻辑。
+// - 接口保持不变：调用方代码无需感知存储实现。
+// - 原子性：UpdateHeartbeat / MarkOfflineIfTimeout / InsertOrUpdate 等
+//   由单条条件 SQL 保证（强于原 shared_mutex 锁内检查）。
+// - 服务启动时必须先调用 MysqlPool::GetInstance().Init()（见各服务 main()），
+//   预创建连接失败会拒绝启动。
 // ════════════════════════════════════════════════════════════════════════════
 
 // ============================================================================
-// JobStore — 任务元信息内存存储
+// JobStore — 任务元信息存储（MySQL 持久化）
 // ============================================================================
 
 /// @brief 任务元信息记录
@@ -49,10 +48,8 @@ struct JobRecord {
 
 /// @brief 任务数据存储（单例，线程安全）
 ///
-/// 读写锁策略：
-/// - Insert / Update / Delete 使用 unique_lock（写锁），互斥所有读者
-/// - Get / ListAll / Count 使用 shared_lock（读锁），多个读可并发
-///
+/// 线程安全：每个方法独立借用 MySQL 连接池连接执行 SQL，
+/// 连接池保证同一连接不会并发使用，MySQL 服务端保证单语句原子性。
 class JobStore {
 public:
     /// @brief 获取全局唯一实例
@@ -64,12 +61,21 @@ public:
     /// @brief 按 job_id 全量覆盖更新。不存在时返回 false。
     bool Update(const std::string& job_id, const JobRecord& job);
 
+    /// @brief 条件状态推进：仅当当前行状态是 expect_statuses 之一时才全量覆盖。
+    /// expect_statuses 为空表示不检查状态（等价 Update）。
+    /// 用途：MySQL 化后 job 行由多进程共同推进（Scheduler/ResultCollector/
+    /// JobService 都会更新），必须用"快照读到的前置状态"作为条件，
+    /// 防止旧快照把其他进程已推进的状态（如终态）覆盖回退。
+    /// @return true=更新成功；false=行不存在或状态不匹配
+    bool UpdateIfStatus(const std::string& job_id,
+                        const std::vector<int32_t>& expect_statuses,
+                        const JobRecord& job);
+
     /// @brief 删除指定 job。返回 true 表示成功删除。
     bool Delete(const std::string& job_id);
 
     /// @brief 查询单个 job，返回副本（线程安全）。
     /// @return std::nullopt 表示 job_id 不存在。
-    /// 返回值拷贝消除了跨锁悬空指针风险。
     std::optional<JobRecord> Get(const std::string& job_id);
 
     /// @brief 列出所有 job 的副本（线程安全）。
@@ -80,16 +86,10 @@ public:
 
 private:
     JobStore() = default;
-
-    /// @brief 读写锁：读用 shared_lock，写用 unique_lock
-    mutable std::shared_mutex mutex_;
-
-    /// @brief job_id → JobRecord 映射表
-    std::unordered_map<std::string, JobRecord> jobs_;
 };
 
 // ============================================================================
-// ShardStore — Shard 元信息内存存储
+// ShardStore — Shard 元信息存储（MySQL 持久化）
 // ============================================================================
 
 /// @brief Shard（子任务）元信息记录
@@ -131,6 +131,16 @@ public:
     /// @brief 按 shard_id 全量覆盖更新。不存在时返回 false。
     bool Update(const std::string& shard_id, const ShardRecord& shard);
 
+    /// @brief 条件状态推进：仅当当前行状态是 expect_statuses 之一时才全量覆盖。
+    /// expect_statuses 为空表示不检查状态（等价 Update）。
+    /// 用途：MySQL 化后 shard 行由 Scheduler（分配/重扫/重试）与 ResultCollector
+    /// （SUCCESS/FAILED）共同推进，必须用"快照读到的前置状态"作为条件，
+    /// 防止旧快照覆盖其他进程已推进的状态（如把 SUCCESS 覆盖回 WAITING）。
+    /// @return true=更新成功；false=行不存在或状态不匹配
+    bool UpdateIfStatus(const std::string& shard_id,
+                        const std::vector<int32_t>& expect_statuses,
+                        const ShardRecord& shard);
+
     /// @brief 删除指定 shard。返回 true 表示成功删除。
     bool Delete(const std::string& shard_id);
 
@@ -146,7 +156,7 @@ public:
     std::vector<ShardRecord> ListByWorker(const std::string& worker_id) const;
 
     /// @brief 原子插入或覆盖更新（upsert）。
-    /// 在 unique_lock 内完成：key 不存在则插入，存在则覆盖。
+    /// 单条 INSERT ... ON DUPLICATE KEY UPDATE，MySQL 服务端原子完成。
     /// @return true 表示是新插入（key 之前不存在），false 表示覆盖了已存在的记录。
     bool InsertOrUpdate(const ShardRecord& shard);
 
@@ -163,12 +173,10 @@ public:
 
 private:
     ShardStore() = default;
-    mutable std::shared_mutex mutex_;
-    std::unordered_map<std::string, ShardRecord> shards_;
 };
 
 // ============================================================================
-// WorkerStore — Worker 注册信息内存存储
+// WorkerStore — Worker 注册信息存储（MySQL 持久化）
 // ============================================================================
 
 /// @brief Worker 节点信息记录
@@ -212,22 +220,22 @@ public:
     /// @return std::nullopt 表示 worker_id 不存在。
     std::optional<WorkerRecord> Get(const std::string& worker_id);
 
-    // ── 原子方法（在 unique_lock 内完成读-改-写，消除 TOCTOU 竞争） ──
+    // ── 原子方法（单条条件 SQL，MySQL 服务端原子执行，消除 TOCTOU 竞争） ──
 
     /// @brief 原子更新心跳时间戳、运行中 shard 数、CPU/内存使用率。
-    /// 在 unique_lock 内完成：查找 → 更新 last_heartbeat/status/running_shards/cpu/mem。
+    /// 单条 UPDATE ... WHERE worker_id，未命中（worker 不存在）返回 false。
     /// @return true 表示 worker_id 存在且已更新，false 表示未找到。
     bool UpdateHeartbeat(const std::string& worker_id, int32_t running_shards,
                          int32_t cpu_usage = 0, int32_t memory_usage = 0);
 
     /// @brief 原子检查心跳超时并标记 OFFLINE。
-    /// 在 unique_lock 内完成：查找 → 检查 status==ONLINE → 检查 now-last_heartbeat>timeout
-    /// → 标记 OFFLINE。全程持写锁，与 Heartbeat RPC 的 UpdateHeartbeat 互斥。
+    /// 单条条件 UPDATE：status=ONLINE AND last_heartbeat < now-timeout 才生效，
+    /// 与 Heartbeat 的 UpdateHeartbeat 天然互斥（数据库行级原子性）。
     /// @return true 表示确认超时并已标记 OFFLINE，false 表示未超时或不存在。
     bool MarkOfflineIfTimeout(const std::string& worker_id, int64_t now, int64_t timeout_ms);
 
     /// @brief 原子插入或覆盖更新（upsert）。
-    /// 在 unique_lock 内完成：key 不存在则插入，存在则覆盖。全程持写锁。
+    /// 单条 INSERT ... ON DUPLICATE KEY UPDATE，MySQL 服务端原子完成。
     /// @return true 表示是新插入（key 之前不存在），false 表示覆盖了已存在的记录。
     bool InsertOrUpdate(const WorkerRecord& worker);
 
@@ -243,8 +251,6 @@ public:
 
 private:
     WorkerStore() = default;
-    mutable std::shared_mutex mutex_;
-    std::unordered_map<std::string, WorkerRecord> workers_;
 };
 
 // ============================================================================
