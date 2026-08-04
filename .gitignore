@@ -6,3 +6,4 @@ compile_commands.json
 path/temp_out/
 *.mp4
 program_log/
+data/

@@ -1,0 +1,112 @@
+# ============================================================================
+# 阶段 13：CI/CD — GitHub Actions
+#
+#   build       编译全部二进制（ENABLE_NATIVE_MARCH=OFF，与 Docker 一致）
+#   unit-test   单元测试（test_buffer / test_threadpool / test_rpc_protocol）
+#   integration 容器集成测试（compose 全链路，Dockerfile 的唯一真实验证点）
+#   benchmark   RPC 压测（bench_rpc_stress --direct --keepalive）
+#
+# 二进制通过 artifact 在 job 间复用，避免重复编译。
+# ============================================================================
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+jobs:
+  build:
+    name: Build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libprotobuf-dev protobuf-compiler \
+            libzookeeper-mt-dev \
+            libmysqlclient-dev \
+            libhiredis-dev \
+            librabbitmq-dev
+
+      - name: Configure
+        run: cmake -B build -DCMAKE_BUILD_TYPE=Release -DENABLE_NATIVE_MARCH=OFF
+
+      - name: Build
+        run: cmake --build build -j$(nproc)
+
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: bin
+          path: bin/
+          retention-days: 1
+
+  unit-test:
+    name: Unit tests
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/download-artifact@v4
+        with:
+          name: bin
+
+      - name: Install runtime deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libprotobuf-dev
+
+      - name: Run unit tests
+        run: |
+          mkdir -p program_log
+          ./bin/test_buffer
+          ./bin/test_threadpool
+          ./bin/test_rpc_protocol
+
+  integration:
+    name: Integration (docker compose)
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build & start full stack
+        run: docker compose up -d --build
+
+      - name: Run integration test
+        run: ./scripts/integration_test.sh
+
+      - name: Dump service logs (on failure)
+        if: failure()
+        run: docker compose logs --no-color
+
+      - name: Clean up
+        if: always()
+        run: docker compose down -v
+
+  benchmark:
+    name: RPC benchmark
+    needs: build
+    runs-on: ubuntu-24.04
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/download-artifact@v4
+        with:
+          name: bin
+
+      - name: Install runtime deps
+        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends libprotobuf-dev
+
+      - name: Run RPC stress benchmark
+        run: |
+          mkdir -p program_log
+          ./bin/rpc_echo_server -i test/conf/rpc_test.conf &
+          SERVER_PID=$!
+          sleep 3
+          ./bin/bench_rpc_stress --direct --keepalive -c 50 -m 200 -s 64
+          RC=$?
+          kill $SERVER_PID 2>/dev/null || true
+          wait $SERVER_PID 2>/dev/null || true
+          exit $RC

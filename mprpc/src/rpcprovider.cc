@@ -3,6 +3,7 @@
 #include"wevix_muduo/AsyncLogger.h"
 #include"ZookeeperUtil.h"
 #include"mprpccodec.h"
+#include"mprpcutil.h"
 #include <chrono>
 #include <cstdint>
 #include <cstdlib>
@@ -162,6 +163,17 @@ bool RpcProvider::Run()
     }
     uint16_t port = static_cast<uint16_t>(portValue);
 
+    // 阶段 13：服务发现地址（注册到 ZK）——rpcserverip 为 0.0.0.0/空
+    // （Docker 全接口监听）时，探测本机实际 IP，否则消费者连 0.0.0.0 必失败
+    std::string advertise_ip = ip;
+    if (advertise_ip.empty() || advertise_ip == "0.0.0.0")
+    {
+        advertise_ip = mprpc::GetLocalIp();
+        if (!advertise_ip.empty())
+            LOG_INFO("rpcserverip=%s (container mode), advertise ip=%s for service discovery",
+                     ip.c_str(), advertise_ip.c_str());
+    }
+
     int ioThreads = config.LoadInt("rpcserverio_threads", 2, 1, 128);
     // 默认 work pool 保持小规模，WSL/测试环境友好，生产环境按需调大
     int defaultWorkThreads = 2;
@@ -227,7 +239,7 @@ bool RpcProvider::Run()
 
             char method_path_data[128] = {0};
             // 临时顺序节点存储当前服务实例地址。顺序节点天然支持同一方法多实例。
-            sprintf(method_path_data, "%s:%d", ip.c_str(), port);
+            sprintf(method_path_data, "%s:%d", advertise_ip.c_str(), port);
 
             std::string instance_path = method_path + "/instance-";
             std::string actualPath;

@@ -1,0 +1,162 @@
+# ============================================================================
+# 阶段 13：容器化 — docker compose 一键启动
+#
+#   docker compose up -d --build         # 构建镜像并启动全环境
+#   docker compose up --scale transcode_worker=3 -d   # 扩展 Worker 实例数
+#   docker compose logs -f <service>     # 跟踪某服务日志
+#   docker compose down -v               # 停止并删除数据卷（含 MySQL 数据）
+#
+# 架构：5 个平台服务（共用 docker/Dockerfile 单镜像，command 区分）
+#       + ZooKeeper + MySQL + Redis + RabbitMQ
+# 配置：镜像内 /app/conf/*.conf（docker/conf/），host 指向 compose 服务名
+#
+# ⚠️ 宿主端口映射：采用 21810/33060/19001 等替代端口——本机已跑着整套手工部署
+#   占用标准端口。docker 部署完全自包含（容器间经 compose 网络互通，集成测试
+#   走 docker compose exec），宿主访问仅用于调试。本机无占用时可改回标准端口
+#   （如 2181:2181、9001:9001），一行改动。
+# ============================================================================
+
+services:
+  # ── 中间件 ───────────────────────────────────────────────────────────
+  zookeeper:
+    image: zookeeper:3.8
+    environment:
+      # ZK 3.8 默认禁用 4lw 命令（healthcheck 依赖 ruok，需显式放行）
+      ZOO_4LW_COMMANDS_WHITELIST: ruok
+    healthcheck:
+      # bash /dev/tcp 探测（CMD-SHELL 默认走 sh=dash，/dev/tcp 是 bash 特性，需显式 bash -c）
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/2181 && echo ruok >&3 && grep -q imok <&3'"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+      start_period: 10s
+    ports:
+      - "21810:2181"    # 宿主 2181 被本机 ZK 占用 → 替代端口 21810
+    restart: unless-stopped
+
+  mysql:
+    image: mysql:8.0
+    environment:
+      MYSQL_ROOT_PASSWORD: root123456
+      MYSQL_DATABASE: video_platform
+      MYSQL_USER: video_platform
+      MYSQL_PASSWORD: video_platform123
+    volumes:
+      - mysql-data:/var/lib/mysql
+      # 首次启动自动建库建表（服务启动时也会自动建表，幂等）
+      - ./video_platform/sql/schema.sql:/docker-entrypoint-initdb.d/schema.sql:ro
+    healthcheck:
+      # 仅当初始化脚本执行完毕、正式实例可连时才算 healthy
+      test: ["CMD", "mysqladmin", "ping", "-h", "127.0.0.1", "-uroot", "-proot123456"]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+      start_period: 20s
+    ports:
+      - "23306:3306"   # 宿主 3306 被本机 MySQL 占用（33060 是 MySQL X Protocol 也被占）→ 23306
+    restart: unless-stopped
+
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "63790:6379"   # 宿主 6379 被本机 Redis 占用 → 替代端口 63790
+    restart: unless-stopped
+    # 可降级组件（阶段 10）：故障时服务自动回退本地缓存/RPC，无需健康依赖
+
+  rabbitmq:
+    image: rabbitmq:3.12-management
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+      start_period: 20s
+    ports:
+      - "56720:5672"      # AMQP（宿主 5672 被本机 RabbitMQ 占用 → 56720）
+      - "15672:15672"     # 管理控制台（宿主 15672 空闲）
+    restart: unless-stopped
+    # 可降级组件（阶段 10）：故障时调度回退 Pull 轮询、结果上报回退直连 RPC
+
+  # ── 平台服务（共享 docker/Dockerfile，一次编译全部二进制） ──────────
+  job_service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["/app/bin/job_service", "-i", "/app/conf/job_service.conf"]
+    depends_on:
+      zookeeper: { condition: service_healthy }
+      mysql:     { condition: service_healthy }
+    ports:
+      - "19001:9001"    # RPC（宿主 9001 被本机部署占用 → 19001）
+      - "19091:9091"    # Prometheus metrics
+    volumes:
+      - ./program_log:/app/program_log
+    restart: unless-stopped
+
+  scheduler_service:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["/app/bin/scheduler_service", "-i", "/app/conf/scheduler.conf"]
+    depends_on:
+      zookeeper: { condition: service_healthy }
+      mysql:     { condition: service_healthy }
+    ports:
+      - "19002:9002"    # 替代端口（宿主 9002/9092 被本机部署占用）
+      - "19092:9092"
+    volumes:
+      - ./program_log:/app/program_log
+      - ./data/videos:/data/videos
+      - ./data/output:/data/output
+    restart: unless-stopped
+
+  worker_manager:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["/app/bin/worker_manager", "-i", "/app/conf/worker_manager.conf"]
+    depends_on:
+      zookeeper: { condition: service_healthy }
+      mysql:     { condition: service_healthy }
+    ports:
+      - "19003:9003"    # 替代端口（宿主 9003/9093 被本机部署占用）
+      - "19093:9093"
+    volumes:
+      - ./program_log:/app/program_log
+    restart: unless-stopped
+
+  transcode_worker:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["/app/bin/transcode_worker", "-i", "/app/conf/transcode_worker.conf"]
+    depends_on:
+      # worker 只需 ZK（无 MySQL 配置）；等 WM 先启动（注册重试窗口 15s+ 足够）
+      zookeeper:      { condition: service_healthy }
+      worker_manager: { condition: service_started }
+    # 不映射端口：--scale 多副本时宿主端口映射会冲突；容器间经 ZK 发现互通
+    volumes:
+      - ./program_log:/app/program_log
+      - ./data/videos:/data/videos      # 输入视频挂载点
+      - ./data/output:/data/output      # 转码产物挂载点
+    restart: unless-stopped
+
+  result_collector:
+    build:
+      context: .
+      dockerfile: docker/Dockerfile
+    command: ["/app/bin/result_collector", "-i", "/app/conf/result_collector.conf"]
+    depends_on:
+      zookeeper: { condition: service_healthy }
+      mysql:     { condition: service_healthy }
+    ports:
+      - "19005:9005"    # 替代端口（宿主 9005/9094 被本机部署占用）
+      - "19094:9094"
+    volumes:
+      - ./program_log:/app/program_log
+      - ./data/videos:/data/videos
+      - ./data/output:/data/output      # Merge 合并产物
+    restart: unless-stopped
+
+volumes:
+  mysql-data:

@@ -86,20 +86,24 @@ add_executable(job_client
 )
 target_link_libraries(job_client video_common)
 
-# ── GUI 客户端（阶段 12，Qt6）─────────────────────────────────────────────
+# ── GUI 客户端（阶段 12，Qt6，可选）──────────────────────────────────────
 # 依赖：qt6-base-dev（apt install qt6-base-dev）。RPC 走 video_common 的
 # mprpc 链路（ZK 服务发现），异步调用避免阻塞 UI 线程。
+# 阶段 13：Qt6 改为可选（QUIET + if 包裹）——CI/Docker 镜像不装 Qt6，
+# 桌面应用不参与容器化；本机装 Qt6 时 GUI 照常构建。
 set(CMAKE_AUTOMOC ON)
-find_package(Qt6 REQUIRED COMPONENTS Widgets)
-add_executable(video_gui
-    ${CMAKE_CURRENT_SOURCE_DIR}/gui/main.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/gui/theme.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/gui/rpc_client.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/gui/main_window.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/gui/job_table.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/gui/worker_panel.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/gui/log_panel.cpp
-    ${CMAKE_CURRENT_SOURCE_DIR}/gui/submit_dialog.cpp
-)
-target_include_directories(video_gui PRIVATE ${CMAKE_SOURCE_DIR})
-target_link_libraries(video_gui video_common Qt6::Widgets)
+find_package(Qt6 QUIET COMPONENTS Widgets)
+if(Qt6_FOUND)
+    add_executable(video_gui
+        ${CMAKE_CURRENT_SOURCE_DIR}/gui/main.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/gui/theme.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/gui/rpc_client.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/gui/main_window.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/gui/job_table.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/gui/worker_panel.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/gui/log_panel.cpp
+        ${CMAKE_CURRENT_SOURCE_DIR}/gui/submit_dialog.cpp
+    )
+    target_include_directories(video_gui PRIVATE ${CMAKE_SOURCE_DIR})
+    target_link_libraries(video_gui video_common Qt6::Widgets)
+endif()

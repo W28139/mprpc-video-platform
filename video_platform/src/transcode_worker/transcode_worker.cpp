@@ -24,12 +24,39 @@
 #include "video_platform/common_store.h"
 #include "video_platform/ffmpeg_executor.h"
 #include "video_platform/mq_client.h"
+#include "mprpcutil.h"
 
 using namespace video_platform;
 
 // 前向声明（阶段 7：CPU/内存采集函数，定义在 RunHeartbeatLoop 之前）
 static int CollectCpuUsage();
 static int CollectMemUsage();
+
+/// @brief 解析 Worker 唯一标识（阶段 13：容器化支持）。
+///
+/// 优先级：环境变量 WORKER_ID > 配置 worker_id > 本机 hostname。
+/// Docker compose --scale 多副本共用同一 conf，hostname（容器 ID）天然唯一，
+/// 避免所有副本注册成同一个 worker_id 互相覆盖。
+static std::string ResolveWorkerId();
+
+/// @brief 解析 Worker 唯一标识（阶段 13：容器化支持）。
+///
+/// 优先级：环境变量 WORKER_ID > 配置 worker_id > 本机 hostname。
+/// Docker compose --scale 多副本共用同一 conf，hostname（容器 ID）天然唯一，
+/// 避免所有副本注册成同一个 worker_id 互相覆盖。
+static std::string ResolveWorkerId()
+{
+    const char* env = getenv("WORKER_ID");
+    if (env && *env) return env;
+
+    std::string id = MprpcApplication::GetConfig().Load("worker_id");
+    if (!id.empty()) return id;
+
+    char hostname[256] = {0};
+    if (gethostname(hostname, sizeof(hostname) - 1) == 0 && hostname[0])
+        return hostname;
+    return "unknown_worker";
+}
 
 /// @brief 尝试通过 MQ 上报 shard 执行结果（阶段 10：MQ 优先，回退直连 RPC）。
 ///
@@ -378,7 +405,7 @@ private:
     {
         const std::string& shard_id = rs->info.shard_id();
         const std::string& job_id   = rs->info.job_id();
-        std::string worker_id = MprpcApplication::GetConfig().Load("worker_id");
+        std::string worker_id = ResolveWorkerId();
 
         LOG_INFO("MockExecute: shard=%s started, mock_duration=%dms",
                  shard_id.c_str(), mock_execution_ms);
@@ -569,7 +596,7 @@ private:
     {
         const std::string& shard_id = rs->info.shard_id();
         const std::string& job_id   = rs->info.job_id();
-        std::string worker_id = MprpcApplication::GetConfig().Load("worker_id");
+        std::string worker_id = ResolveWorkerId();
 
         // 读取 FFmpeg 相关配置
         std::string work_dir = MprpcApplication::GetConfig().Load("ffmpeg_work_dir");
@@ -1164,6 +1191,13 @@ static void RunHeartbeatLoop(std::string worker_id,
 
     std::string ip = config.Load("rpcserverip");
     int port = config.LoadInt("rpcserverport", -1, 1, 65535);
+    // 阶段 13：Docker 部署 rpcserverip=0.0.0.0（全接口监听），注册上报
+    // 必须用本机实际 IP，否则 WM 拿到 0.0.0.0 无法回连 Worker
+    if (ip == "0.0.0.0" || ip.empty())
+    {
+        ip = mprpc::GetLocalIp();
+        LOG_INFO("RunHeartbeatLoop: rpcserverip is 0.0.0.0, advertise ip=%s", ip.c_str());
+    }
     if (ip.empty() || port == -1)
     {
         LOG_ERROR("RunHeartbeatLoop: missing rpcserverip or rpcserverport in config");
@@ -1338,10 +1372,12 @@ int main(int argc, char** argv)
     // ── 读取 Worker 专有配置 ──────────────────────────────────────────
     auto& config = MprpcApplication::GetConfig();
 
-    std::string worker_id, error;
-    if (!config.LoadRequired("worker_id", worker_id, error))
+    // 阶段 13：worker_id 不再必填——ResolveWorkerId() 兜底 hostname，
+    // 支持 Docker --scale 多副本（各容器 hostname 天然唯一）
+    std::string worker_id = ResolveWorkerId();
+    if (worker_id == "unknown_worker")
     {
-        LOG_ERROR("%s", error.c_str());
+        LOG_ERROR("failed to resolve worker_id (no WORKER_ID env / worker_id config / hostname)");
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }

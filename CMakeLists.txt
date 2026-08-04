@@ -16,8 +16,14 @@ set(CMAKE_ARCHIVE_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
 set(CMAKE_LIBRARY_OUTPUT_DIRECTORY ${PROJECT_SOURCE_DIR}/lib)
 
 # Release 优化参数 (来自 wevix_muduo)
+# ENABLE_NATIVE_MARCH：Docker 镜像/CI 构建需关闭（-march=native 的镜像不可跨 CPU 移植），
+# 本机构建默认开启。
+option(ENABLE_NATIVE_MARCH "Use -march=native for Release builds" ON)
 if(CMAKE_BUILD_TYPE STREQUAL "Release")
-    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG -march=native -flto=auto")
+    set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -O3 -DNDEBUG -flto=auto")
+    if(ENABLE_NATIVE_MARCH)
+        set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -march=native")
+    endif()
 endif()
 
 # 子项目

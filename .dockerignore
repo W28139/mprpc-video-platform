@@ -1,0 +1,18 @@
+# 构建产物（避免把宿主机旧二进制带进镜像上下文）
+build/
+bin/
+lib/
+compile_commands.json
+
+# 日志与本地数据
+program_log/
+data/
+
+# 版本控制 / 编辑器 / 本地工具
+.git/
+.claude/
+.cache/
+.codex/
+.agents/
+.vscode/
+path/
