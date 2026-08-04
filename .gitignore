@@ -1,5 +1,8 @@
 build/
-bin/
 lib/
+.vscode/
 .cache/
 compile_commands.json
+path/temp_out/
+*.mp4
+program_log/
