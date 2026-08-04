@@ -1,0 +1,56 @@
+# ============================================================================
+# 告警规则 — video_platform（阶段 11 可观测性）
+# ============================================================================
+# 由 Prometheus 按 evaluation_interval（30s）评估；触发后送 Alertmanager 通知。
+# 进程内还有内置日志告警兜底（mprpc::MetricsRegistry 的 AlertLoop，见
+# mprpc/include/mprpcmetrics.h）——Prometheus 未部署时同样能发现异常，
+# 触发时各服务日志打印 "ALERT [<name>] firing/recovered"。
+#
+# 口径说明：
+# - 内置兜底按「进程内」评估（如 job_failed_rate = 失败数/终态数，
+#   RC 进程本地 counter）；Prometheus 侧按「集群聚合」评估
+#   （failed/submitted 跨实例 sum），两者数值略有差异，阈值语义一致。
+# ============================================================================
+
+groups:
+  - name: video_platform
+    rules:
+      # ── 无 Worker 可用：平台无法执行任何转码任务 ────────────────
+      - alert: WorkerOffline
+        expr: sum(worker_online) < 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "没有在线转码 Worker"
+          description: "worker_online == {{ $value }} 持续 1 分钟，平台无法执行任何转码任务，请检查 Worker 进程"
+
+      # ── 调度堆积：WAITING+ASSIGNED shard 超过 100 ──────────────
+      - alert: SchedulerQueueBacklog
+        expr: sum(scheduler_queue_size) > 100
+        for: 2m
+        labels:
+          severity: warning
+        annotations:
+          summary: "调度队列积压（{{ $value }} 个待调度 shard）"
+          description: "scheduler_queue_size > 100 持续 2 分钟，Worker 容量不足或调度异常，请扩容或检查 Scheduler"
+
+      # ── 任务失败率异常：5 分钟窗口失败占比超过 30% ──────────────
+      - alert: JobFailureRateHigh
+        expr: rate(job_failed_total[5m]) / clamp_min(rate(job_submitted_total[5m]), 0.001) > 0.3
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "任务失败率过高（{{ $value | humanizePercentage }} > 30%）"
+          description: "5 分钟窗口内失败任务占比超过 30% 持续 5 分钟，请检查转码链路与 Worker 健康"
+
+      # ── RPC P99 延迟劣化：超过 1 秒 ─────────────────────────────
+      - alert: RpcLatencyP99High
+        expr: histogram_quantile(0.99, sum by (le) (rate(rpc_latency_ms_bucket[5m]))) > 1000
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "RPC P99 延迟超过 1 秒（{{ $value }}ms）"
+          description: "全实例聚合 RPC P99 延迟 > 1000ms 持续 5 分钟，请检查 MySQL/MQ/ZK 与各服务健康"

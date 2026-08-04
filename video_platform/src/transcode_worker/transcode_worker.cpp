@@ -18,16 +18,35 @@
 #include "mprpcapplication.h"
 #include "mprpcchannel.h"
 #include "mprpccontroller.h"
+#include "mprpcmetrics.h"
 #include "rpcprovider.h"
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
 #include "video_platform/ffmpeg_executor.h"
+#include "video_platform/mq_client.h"
 
 using namespace video_platform;
 
 // 前向声明（阶段 7：CPU/内存采集函数，定义在 RunHeartbeatLoop 之前）
 static int CollectCpuUsage();
 static int CollectMemUsage();
+
+/// @brief 尝试通过 MQ 上报 shard 执行结果（阶段 10：MQ 优先，回退直连 RPC）。
+///
+/// publish result.pending（消息体 = 序列化的 ReportShardResultRequest），
+/// ResultCollector 的 MQ 消费线程接收后走与 RPC 完全相同的聚合逻辑。
+/// 失败（MQ 不可用/掉线/序列化异常）返回 false，调用方回退原 RPC 路径。
+/// 每次上报独立判断：MQ 恢复后自动切回，无需状态机。
+static bool TryPublishResultToMq(const ::ReportShardResultRequest& result_req)
+{
+    auto& mq = MqClient::GetInstance();
+    if (!mq.inited() || !mq.enabled()) return false;
+    std::string payload;
+    if (!result_req.SerializeToString(&payload)) return false;
+    if (mq.PublishResult(payload)) return true;
+    LOG_WARN("TryPublishResultToMq: publish failed, fallback to direct RPC");
+    return false;
+}
 
 // ============================================================================
 // WorkerService — TranscodeWorker 端 RPC 接口（阶段 5：故障注入 + 重试验证）
@@ -450,28 +469,35 @@ private:
             }
         }
 
-        // ── 上报最终结果（带 3 次重试） ──────────────────────────
+        // ── 上报最终结果（MQ 优先，回退直连 RPC 带 3 次重试） ──────
         // 网络抖动可能导致 ReportShardResult RPC 失败。若 3 次重试都失败，
         // 保留 shard 在 running_shards_ 中——心跳线程会持续上报 running_shards，
         // WorkerManager 能看到这个 shard，阶段 5 的心跳恢复机制可兜底。
-        // 若 RPC 成功但 is_success=false，由 ResultCollector 走 RescheduleShard 链路。
+        // 若上报成功但 is_success=false，由 ResultCollector 走 RescheduleShard 链路。
+        ReportShardResultRequest result_req;
+        result_req.set_shard_id(shard_id);
+        result_req.set_job_id(job_id);
+        result_req.set_worker_id(worker_id);
+        result_req.set_attempt_id(rs->attempt_id);
+        result_req.set_is_success(mock_success);
+        result_req.set_exit_code(mock_success ? 0 : -1);
+        result_req.set_error_msg(mock_success ? "" : mock_error_msg);
+        result_req.set_output_path(rs->info.output_path());
+        result_req.set_elapsed_ms(mock_execution_ms);
+        result_req.set_shard_index(rs->info.shard_index());
+
         bool result_reported = false;
+        // 阶段 10：MQ 优先（publish 成功即已投递，RC 消费后走同一聚合逻辑）
+        if (TryPublishResultToMq(result_req))
+        {
+            LOG_INFO("MockExecute: shard=%s %s published to MQ (result.pending)",
+                     shard_id.c_str(), mock_success ? "SUCCESS" : "FAILED (mock)");
+            result_reported = true;
+        }
         for (int retry = 0; retry < 3 && !result_reported; ++retry)
         {
             if (retry > 0)
                 std::this_thread::sleep_for(std::chrono::seconds(1));
-
-            ReportShardResultRequest result_req;
-            result_req.set_shard_id(shard_id);
-            result_req.set_job_id(job_id);
-            result_req.set_worker_id(worker_id);
-            result_req.set_attempt_id(rs->attempt_id);
-            result_req.set_is_success(mock_success);
-            result_req.set_exit_code(mock_success ? 0 : -1);
-            result_req.set_error_msg(mock_success ? "" : mock_error_msg);
-            result_req.set_output_path(rs->info.output_path());
-            result_req.set_elapsed_ms(mock_execution_ms);
-            result_req.set_shard_index(rs->info.shard_index());
 
             ReportShardResultResponse result_resp;
             MprpcController ctrl;
@@ -632,6 +658,13 @@ private:
         int64_t transcode_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             ts_end - ts_start).count();
 
+        // 阶段 11：转码耗时观测（cancel 的耗时同样有效，计入直方图）
+        mprpc::MetricsRegistry::GetInstance()
+            .Histogram("transcode_duration_ms", "单 shard 转码耗时（毫秒）",
+                       std::vector<double>{100, 500, 1000, 2000, 5000, 10000,
+                                           30000, 60000, 120000, 300000})
+            .Observe(static_cast<double>(transcode_elapsed));
+
         // ── 4. 处理 cancel 情况 ──────────────────────────────────────
         if (rs->cancelled)
         {
@@ -677,24 +710,32 @@ private:
         rs->progress = 100;
         int64_t total_elapsed = transcode_elapsed;
 
+        // 构造结果请求（MQ 与 RPC 共用，阶段 10）
+        ReportShardResultRequest result_req;
+        result_req.set_shard_id(shard_id);
+        result_req.set_job_id(job_id);
+        result_req.set_worker_id(worker_id);
+        result_req.set_attempt_id(rs->attempt_id);
+        result_req.set_is_success(is_success);
+        result_req.set_exit_code(exit_code);
+        result_req.set_error_msg(error_msg);
+        result_req.set_output_path(output_path);
+        result_req.set_elapsed_ms(total_elapsed);
+        result_req.set_shard_index(rs->info.shard_index());
+        result_req.set_screenshot_path(screenshot_path);
+
         bool result_reported = false;
+        // 阶段 10：MQ 优先（publish 成功即已投递，RC 消费后走同一聚合逻辑）
+        if (TryPublishResultToMq(result_req))
+        {
+            LOG_INFO("FfmpegExecute: shard=%s %s published to MQ (result.pending)",
+                     shard_id.c_str(), is_success ? "SUCCESS" : "FAILED");
+            result_reported = true;
+        }
         for (int retry = 0; retry < 3 && !result_reported; ++retry)
         {
             if (retry > 0)
                 std::this_thread::sleep_for(std::chrono::seconds(1));
-
-            ReportShardResultRequest result_req;
-            result_req.set_shard_id(shard_id);
-            result_req.set_job_id(job_id);
-            result_req.set_worker_id(worker_id);
-            result_req.set_attempt_id(rs->attempt_id);
-            result_req.set_is_success(is_success);
-            result_req.set_exit_code(exit_code);
-            result_req.set_error_msg(error_msg);
-            result_req.set_output_path(output_path);
-            result_req.set_elapsed_ms(total_elapsed);
-            result_req.set_shard_index(rs->info.shard_index());
-            result_req.set_screenshot_path(screenshot_path);
 
             ReportShardResultResponse result_resp;
             MprpcController ctrl;
@@ -773,6 +814,14 @@ private:
         result_req.set_output_path(output_path);
         result_req.set_elapsed_ms(elapsed_ms);
         result_req.set_shard_index(shard_index);
+
+        // 阶段 10：MQ 优先（publish 成功即已投递；失败回退直连 RPC）
+        if (TryPublishResultToMq(result_req))
+        {
+            LOG_INFO("ReportShardResult: shard=%s %s published to MQ",
+                     shard_id.c_str(), is_success ? "SUCCESS" : "FAILED");
+            return;
+        }
 
         ReportShardResultResponse result_resp;
         MprpcController ctrl;
@@ -1283,6 +1332,9 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
+    // 阶段 10：MQ 是可降级组件，Init 失败只 WARN（结果上报回退直连 RPC）
+    MqClient::GetInstance().Init();
+
     // ── 读取 Worker 专有配置 ──────────────────────────────────────────
     auto& config = MprpcApplication::GetConfig();
 
@@ -1331,6 +1383,22 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
+    // ── 阶段 11：可观测性（metrics_port<=0 时不启用，可降级组件） ──
+    // 放在 Worker 配置校验 + FFmpeg 检查之后：前面的失败路径不涉及
+    // metrics 线程的启动/清理，保持每个失败分支只做日志清理
+    int metrics_port = config.LoadInt("metrics_port", 0, 0, 65535);
+    mprpc::MetricsHttpServer metrics_server;
+    metrics_server.Init(metrics_port);
+    // 内置日志告警兜底：本进程出站 RPC P99 延迟 > 1000ms
+    mprpc::MetricsRegistry::GetInstance().RegisterAlertRule(
+        {"rpc_latency_p99_high", "WARN",
+         []() {
+             return mprpc::MetricsRegistry::GetInstance()
+                 .HistogramQuantile("rpc_latency_ms", 0.99);
+         },
+         1000, true, 0, "本进程 RPC P99 延迟超过 1000ms"});
+    metrics_server.Start();
+
     // ── 创建 WorkerServiceImpl ──────────────────────────────────────
     auto* worker_service = new WorkerServiceImpl();
 
@@ -1350,6 +1418,7 @@ int main(int argc, char** argv)
         LOG_ERROR("WorkerService start failed");
         heartbeat_stopped = true;
         if (heartbeat_thread.joinable()) heartbeat_thread.join();
+        metrics_server.Stop();
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }
@@ -1357,6 +1426,7 @@ int main(int argc, char** argv)
     // Provider 退出后清理
     heartbeat_stopped = true;
     if (heartbeat_thread.joinable()) heartbeat_thread.join();
+    metrics_server.Stop();
 
     wevix_muduo::AsyncLogger::GetInstance().stop();
     return 0;

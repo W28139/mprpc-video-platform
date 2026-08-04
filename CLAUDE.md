@@ -25,7 +25,9 @@ muduo_im 是一个基于 Reactor 模式的 Linux C++ 网络库及其上层 RPC �
 | 7. 资源感知调度和监控 | ✅ 完成（2026-07-31） |
 | 8. 压测、故障测试和文档整理 | ✅ 代码审查与Bug修复（2026-08-01），压测待进行 |
 | 9. 数据持久化（MySQL） | ✅ 完成（2026-08-03） |
-| 10. 中间件集成（Redis+MQ） | 🔄 第一批 Redis 缓存完成（2026-08-03），MQ 与 ZK 缓存改造待进行 |
+| 10. 中间件集成（Redis+MQ） | ✅ 完成（2026-08-03，三批全部完成；2026-08-04 复验修复 MqClient 消费锁缺陷；真实 Broker 重启实测待用户 sudo） |
+| 11. 可观测性升级（Prometheus+Grafana） | ✅ 完成（2026-08-03，配置产物交付 + curl/日志告警实测；Prometheus/Grafana 部署待用户按 README 安装） |
+| 12. 客户端 GUI（Qt6 桌面应用） | ✅ 完成（2026-08-04，`bin/video_gui`；GUI 交互验收待用户操作） |
 
 ## 阶段 6 完成内容
 
@@ -309,8 +311,44 @@ AsyncLogger::init() → MprpcApplication::Init(argc, argv) → RpcProvider.Notif
 | `mysqluser` / `mysqlpassword` | 必填 | MySQL 账号/密码 |
 | `mysqldbname` | video_platform | MySQL 数据库名 |
 | `mysql_pool_size` | 4 | MySQL 连接池大小（1-64，预创建+线程安全借用） |
+| `metrics_port` | 0（关闭） | Prometheus metrics HTTP 端口（阶段 11，<=0 不启用；单机各服务 9091-9097） |
 
 ## 下一步工作
+
+### 阶段 12（✅ 2026-08-04）
+
+Qt6 桌面客户端，详见 `doc/更新业务日志/14. 阶段12客户端GUI.md`。
+
+核心改动：
+- **服务端**：`job.proto` 新增 `ListJobs` RPC（`ListJobsRequest{limit}` → `repeated JobInfo`，按 created_at 倒序）；`JobStore::ListRecent(limit)`（SQL = ListAll + `ORDER BY created_at DESC LIMIT n`）；`JobServiceImpl::ListJobs` handler（无 Redis 缓存——列表 2s 高频 + 单表 SQL <1ms，缓存无收益）
+- **GUI**（`video_platform/gui/`，`bin/video_gui`，Qt6.4.2 + `CMAKE_AUTOMOC`，link `video_common`）：
+  - `rpc_client.h/.cpp` — **QRunnable + QThreadPool 异步封装**（mprpc stub 同步阻塞，绝不能进 UI 线程）：Submit/Query/ListJobs/ListWorkers/Cancel 5 个 RPC，信号回 UI 线程；`JobItem/ShardItem/WorkerItem` 轻量结构跨线程
+  - `main_window` — 三页签（任务/Worker/日志）+ 2s QTimer 统一刷新 + 选中行 QueryJob 详情（进度条）；双击 SUCCESS 行 → `QProcess::startDetached("ffplay", {output_path/{job_id}_merged.mp4})` 预览
+  - `job_table` — 任务列表 7 列、状态彩色；`worker_panel` — Worker 负载（CPU/内存 ≥80% 红、≥50% 黄）；`log_panel` — tail `program_log/` 最新文件（偏移续读、跟随按天轮转）；`submit_dialog` — 拖拽视频自动填路径 + 下拉分辨率/格式 + 码率/优先级/shard 时长
+- **环境**：`sudo apt install qt6-base-dev`；`conf/video_gui.conf` 只需 zookeeperip/port
+- 启动：`./bin/video_gui -i video_platform/conf/video_gui.conf`（WSLg DISPLAY=:0）
+- 遗留：GUI 交互验收（拖拽/双击预览）待用户操作；筛选/排序（QSortFilterProxyModel）可后续加
+
+### 阶段 10 复验发现并修复（2026-08-04，详见 log 14 Bug 1）
+
+**MqClient 消费锁占用 → mq=push 误判 + WARN 刷屏**：`ConsumeBlocking` 锁内 poll(2s) + 消费线程紧循环 → consume_mutex_ 几乎 100% 被占 → `connected()` try_lock_for(1s) 永远失败 → `consume lock busy` 每日刷 1000+ 条 + SchedulingLoop 永远 `(mq=pull)`。修复：① poll 移出锁（fd 独立于连接内部状态，消费连接只由消费线程销毁，poll 期间无并发写者）② `connected()` 改用 `std::atomic<bool> consume_alive_` 无锁读取 ③ 销毁分支持锁且先置标志。验证：`interval=5000ms (mq=push)` 首次正确识别、刷屏消失、Push 分配 24ms。
+
+### 阶段 11（✅ 2026-08-03）
+
+可观测性升级，详见 `doc/更新业务日志/12. 阶段11可观测性升级.md`。
+
+核心改动：
+- 新增 `mprpc/include/mprpcmetrics.h` + `src/mprpcmetrics.cc`（框架层指标库：Counter/Gauge/Histogram（固定桶+前缀和导出+线性插值分位）、标签分片、`ExportText()` text format 0.0.4、Gauge 采样器线程、AlertLoop 日志告警兜底（30s 一轮，触发/恢复打日志）、`MetricsHttpServer`（独立线程 + 自研 TcpServer 起 HTTP，GET /metrics 200 / 其余 404，可降级组件）
+- 插桩：mprpcchannel CallMethod RAII 计时 → `rpc_latency_ms{method}`；job_service `job_submitted_total`；RC `MarkJobTerminal` 单入口 → `job_success/failed_total`；scheduler 4 处 `retry_count++` → `shard_retry_total` + SchedulingLoop 迭代 RAII → `schedule_loop_duration_ms` + 5s 采样器（新增 `ShardStore::CountByStatus()` 单条 GROUP BY）→ `shard_running/waiting/scheduler_queue_size(WAITING+ASSIGNED)/shard_count{status}`；worker `transcode_duration_ms`；worker_manager 5s 采样器 → `worker_online` + 每 Worker 负载
+- 内置日志告警 4 条：worker_offline(WM)、scheduler_backlog(Scheduler)、job_failed_rate_high(RC, RateEstimator 5min 窗口)、rpc_latency_p99_high(全部服务)
+- 配置产物 `video_platform/observability/`：prometheus.yml（9091-9097）、alerts.yml（4 条 PromQL）、grafana-dashboard.json（4 行：Job 吞吐/Shard 分布/Worker 热力图/RPC 延迟）、README.md
+- 验收：5 端口 curl 200 + 404；全链路任务 SUCCESS 后各 counter/gauge/histogram 增长；故障注入实测 `ALERT [worker_offline] firing/recovered` 与 `ALERT [job_failed_rate_high] firing`；**Prometheus 2.45（apt）+ Grafana 12.0.0（/home/wevix/grafana）实测部署**：5 targets UP、4 规则加载、dashboard 导入成功、面板数据可查（datasource proxy 需 `X-Grafana-Org-Id: 1` 头）
+
+**实测暴露并修复两个框架级缺陷**（详见日志 12 Bug 5/6）：
+- **ZK 同步调用无限阻塞**（`ZookeeperUtil.cc`）：`zoo_get/zoo_get_children` 在连接会话未建立时无限等待 → 改异步 API + 3s 信号量超时 + `zoo_state()` 快速失败 + 回调 `caller_gone` 延迟回收防 UAF
+- **RabbitMQ 消费锁死**（`mq_client.h/.cpp`）：`amqp_consume_message` 内部 poll 超时不可靠，消费线程持锁无限阻塞 → SchedulingLoop 的 `connected()` 永久等锁停摆 → ①消费改自控 `poll(fd)` + `amqp_consume_message({0,0})` 立即读 ②`consume_mutex_` 改 `std::timed_mutex`，`connected()/Ack()/Reconnect()` 用 `try_lock_for(1s)` 降级（打 `consume lock busy, degrade to Pull polling`）③`OpenChannel` 后 `SO_RCVTIMEO/SO_SNDTIMEO` 2s 兜底。MQ 故障 → Pull 轮询接管（实测 5/5 SUCCESS），恢复后 Push 自动切回
+
+### 阶段 9（已完成 ✅ 2026-08-03）
 
 ### 阶段 9（已完成 ✅ 2026-08-03）
 
@@ -323,19 +361,27 @@ MySQL 持久化替代内存 Store，详见 `doc/更新业务日志/10. 阶段9�
 - 配置新增 `mysqlhost/mysqlport/mysqluser/mysqlpassword/mysqldbname/mysql_pool_size`
 - 验收：全链路 SUCCESS + MySQL 落盘；kill 全部服务重启数据不丢；Scheduler/Worker 崩溃恢复；Store 操作平均延迟 ~0.2ms（<2ms 验收线）
 
-### 阶段 10（第一批 ✅ 2026-08-03，第二批 MQ / 第三批 ZK 缓存改造待进行）
+### 阶段 10（✅ 2026-08-03 三批全部完成）
 
-第一阶段（Redis 缓存）完成，详见 `doc/更新业务日志/11. 阶段10中间件集成.md`。
+三批（Redis 缓存 + RabbitMQ 事件驱动调度 + ZK 缓存改造）完成，详见 `doc/更新业务日志/11. 阶段10中间件集成.md`。
 
-核心改动：
+**第一批（Redis）核心改动**：
 - 新增 `redis_client.h/.cpp`（hiredis 封装：单连接+mutex、失败重连 1 次、2s 超时、**可降级组件语义**——连接失败只 WARN 不拒绝启动，区别于 MySQL 的 fail-fast）
 - WorkerManager Heartbeat 双写 Redis 快照（`HSET worker:load`，值内嵌 ts）
 - Scheduler `LoadOnlineWorkers` helper：Redis 快照优先（20s ts 过期过滤），失败/无数据回退 ListWorkers RPC（按次降级，恢复自动切回）
 - JobService QueryJob 进度缓存（`SETEX job:progress:{id}` TTL 60s，只缓存成功响应）；RC 结果落定时 DEL
 - 分布式锁：AssignShard 前 `SETNX shard:lock:{id} EX 10`，值校验释放，Redis 故障降级放行（MySQL 条件更新兜底）
-- 配置：`redis_enable` / `redis_host` / `redis_port`（4 个服务 conf）
 
-验收：Redis 正常/故障（端口不可达模拟）/恢复三态下全链路任务均 SUCCESS；快照、缓存、降级回退路径均有日志证据。
+**第二批（RabbitMQ）核心改动**：
+- 新增 `mq_client.h/.cpp`（rabbitmq-c 封装：**双连接双锁**——发布/消费严格分连接，消费阻塞不卡发布；durable exchange/queue + delivery-mode=2 持久化消息 + 手动 ACK；拓扑声明幂等；失败重连）
+- 事件拓扑：`job.events`→`shard.waiting`（分配通知，消息体=shard_id）+ `shard.events`→`result.pending`（结果数据，消息体=序列化 ReportShardResultRequest）
+- 发布端在 **Scheduler**（shard 切分在 ScheduleJob，4 个 WAITING 触发点：新建/重试/离线/超时重置）
+- 分配逻辑抽取 `TryAssignShard`（轮询与 MQ 消费线程共用）；MqConsumeLoop 消费即时分配 + 幂等跳过 + 无条件 ACK
+- SchedulingLoop 共存：MQ 在线降频 5s 兜底（超时重扫改按时间 30s），掉线自动恢复 2s 轮询
+- Worker 结果上报 MQ 优先回退直连 RPC；RC 消费 result.pending 复用公共 `HandleReportShardResult`
+- 修复 Bug：初版单连接单锁导致 ConsumeBlocking 持锁卡住 ScheduleJob 发布 → RPC 超时（双连接修复）
+
+**验收**：Push 调度延迟实测 33ms（<100ms ✅）；Redis/MQ 正常/故障（端口不可达模拟）/恢复三态全链路 SUCCESS；MQ 故障自动回退 Pull 轮询 + 直连 RPC。真实 Broker 重启测试（消息不丢）待用户 sudo 操作（log11 遗留说明）。
 
 ### 阶段 7（已完成 ✅ 2026-07-31）
 

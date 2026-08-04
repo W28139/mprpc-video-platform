@@ -8,6 +8,7 @@
 #include "mprpcapplication.h"
 #include "mprpcchannel.h"
 #include "mprpccontroller.h"
+#include "mprpcmetrics.h"
 #include "rpcprovider.h"
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
@@ -78,6 +79,11 @@ public:
         job.shard_duration_sec = request->shard_duration_sec();
         job.created_at         = NowMs();
         job.updated_at         = NowMs();
+
+        // 阶段 11：任务提交观测（参数校验通过、平台实际受理后才计数，
+        // 保证 job_failed_rate 的分母=平台受理数）
+        mprpc::MetricsRegistry::GetInstance()
+            .Counter("job_submitted_total", "提交的任务总数").Inc();
 
         // 写入内存存储
         JobStore::GetInstance().Insert(job);
@@ -371,6 +377,46 @@ public:
         done->Run();
     }
 
+    /// @brief 列出任务概要（阶段 12 GUI 客户端：任务列表数据源）
+    ///
+    /// 按 created_at 倒序返回最多 limit 条 JobInfo（不含 shard，列表页
+    /// 只需要概要；shard 详情由 QueryJob 单独查）。无 Redis 缓存——列表
+    /// 是 2s 一次的高频查询，缓存会引入额外一致性复杂度且收益低（SQL
+    /// 单表扫描，MySQL 化后 <1ms）。
+    void ListJobs(::google::protobuf::RpcController* controller,
+                  const ::ListJobsRequest* request,
+                  ::ListJobsResponse* response,
+                  ::google::protobuf::Closure* done) override
+    {
+        LOG_INFO("JobService::ListJobs limit=%d", request->limit());
+
+        auto jobs = JobStore::GetInstance().ListRecent(request->limit());
+        response->set_error_code(0);
+        response->set_error_msg("");
+
+        for (const auto& j : jobs)
+        {
+            auto* info = response->add_jobs();
+            info->set_job_id(j.job_id);
+            info->set_user_id(j.user_id);
+            info->set_input_path(j.input_path);
+            info->set_output_path(j.output_path);
+            info->set_target_format(j.target_format);
+            info->set_target_resolution(j.target_resolution);
+            info->set_target_bitrate(j.target_bitrate);
+            info->set_duration_sec(j.duration_sec);
+            info->set_priority(j.priority);
+            info->set_status(static_cast<JobStatus>(j.status));
+            info->set_shard_count(j.shard_count);
+            info->set_created_at(j.created_at);
+            info->set_updated_at(j.updated_at);
+            info->set_shard_duration_sec(j.shard_duration_sec);
+        }
+
+        LOG_INFO("JobService::ListJobs: returned %d jobs", response->jobs_size());
+        done->Run();
+    }
+
 };
 
 // ============================================================================
@@ -520,6 +566,21 @@ int main(int argc, char** argv)
     // 阶段 10：Redis 是可降级组件，Init 失败只 WARN 不拒绝启动
     RedisClient::GetInstance().Init();
 
+    // ── 阶段 11：可观测性（metrics_port<=0 时不启用，可降级组件） ──
+    int metrics_port = MprpcApplication::GetConfig().LoadInt("metrics_port", 0, 0, 65535);
+    mprpc::MetricsHttpServer metrics_server;
+    metrics_server.Init(metrics_port);
+    // 内置日志告警兜底（Prometheus 未部署时仍能发现异常）：
+    // 本进程出站 RPC P99 延迟 > 1000ms
+    mprpc::MetricsRegistry::GetInstance().RegisterAlertRule(
+        {"rpc_latency_p99_high", "WARN",
+         []() {
+             return mprpc::MetricsRegistry::GetInstance()
+                 .HistogramQuantile("rpc_latency_ms", 0.99);
+         },
+         1000, true, 0, "本进程 RPC P99 延迟超过 1000ms"});
+    metrics_server.Start();
+
     RpcProvider provider;
     provider.NotifyService(new JobServiceImpl());
 
@@ -532,12 +593,14 @@ int main(int argc, char** argv)
         LOG_ERROR("JobService start failed");
         stop_flag = true;
         pending_thread.join();
+        metrics_server.Stop();
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }
 
     stop_flag = true;
     pending_thread.join();
+    metrics_server.Stop();
     wevix_muduo::AsyncLogger::GetInstance().stop();
     return 0;
 }

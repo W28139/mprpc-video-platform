@@ -269,6 +269,26 @@ std::vector<JobRecord> JobStore::ListAll() const
     return result;
 }
 
+std::vector<JobRecord> JobStore::ListRecent(int32_t limit) const
+{
+    MysqlConnectionGuard g(MysqlPool::GetInstance());
+    std::vector<JobRecord> result;
+    if (!g.ok()) return result;
+    std::string sql = "SELECT " + std::string(kJobColumns) + " FROM jobs";
+    if (limit > 0)
+    {
+        sql += " ORDER BY created_at DESC LIMIT " + std::to_string(limit);
+    }
+    std::vector<std::vector<std::string>> rows;
+    if (!g.Query(sql, rows)) {
+        LOG_ERROR("JobStore::ListRecent failed: %s", g.Error().c_str());
+        return result;
+    }
+    result.reserve(rows.size());
+    for (const auto& r : rows) result.push_back(ParseJobRow(r));
+    return result;
+}
+
 size_t JobStore::Count() const
 {
     MysqlConnectionGuard g(MysqlPool::GetInstance());
@@ -495,6 +515,28 @@ size_t ShardStore::Count() const
     std::vector<std::vector<std::string>> rows;
     if (!g.Query("SELECT COUNT(*) FROM shards", rows) || rows.empty()) return 0;
     return static_cast<size_t>(std::stoll(rows[0][0]));
+}
+
+std::map<int32_t, size_t> ShardStore::CountByStatus() const
+{
+    // 阶段 11：可观测性采样用。单条 GROUP BY 查询一次拿到全部分布，
+    // 替代多次 ListByStatus 全行拉取（5s 一次，MySQL 往返成本低）
+    MysqlConnectionGuard g(MysqlPool::GetInstance());
+    std::map<int32_t, size_t> result;
+    if (!g.ok()) return result;
+    std::vector<std::vector<std::string>> rows;
+    // shards.status 为 INT（ShardStatus 枚举值）
+    if (!g.Query("SELECT status, COUNT(*) FROM shards GROUP BY status", rows))
+    {
+        LOG_ERROR("ShardStore::CountByStatus failed: %s", g.Error().c_str());
+        return result;
+    }
+    for (const auto& r : rows)
+    {
+        if (r.size() < 2) continue;
+        result[std::stoi(r[0])] = static_cast<size_t>(std::stoll(r[1]));
+    }
+    return result;
 }
 
 // ============================================================================

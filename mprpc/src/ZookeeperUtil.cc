@@ -4,8 +4,89 @@
 #include <semaphore.h>
 #include <errno.h>
 #include <mutex>
+#include <atomic>
 #include <ctime>
 #include <vector>
+
+// ============================================================================
+// 异步回调上下文（GetData/GetChildren 超时保护，阶段 11 修复）
+// ============================================================================
+// 背景：zoo_get / zoo_get_children 是同步 API，内部阻塞等待 watcher 线程
+// 收到响应。若 ZK 连接处于「会话未建立/断线重连」状态（zookeeper_init 后
+// 连接握手未完成，或重连中），同步调用**无限阻塞**——实测 SchedulingLoop
+// 卡死 7+ 分钟（线程 wchan=futex_wait_queue）。
+// 修复：改用 zoo_aget / zoo_aget_children（异步）+ 信号量 3s 超时等待；
+// 超时后调用方按失败返回，ctx 交由回调线程延迟释放（caller_gone 标记），
+// 杜绝悬垂指针。入口先查 zoo_state：非 CONNECTED 直接失败（快速路径）。
+struct ZooAsyncCtx
+{
+    int rc = -1;                        ///< 回调返回码（ZOK=0）
+    std::string data;                   ///< GetData 结果
+    std::vector<std::string> children;  ///< GetChildren 结果
+    sem_t sem;
+    std::atomic<bool> caller_gone{false};
+};
+
+/// @brief zoo_aget 回调（watcher 线程执行）：填结果 → post → 按需自回收
+static void GetDataCb(int rc, const char* value, int value_len,
+                      const struct Stat* /*stat*/, const void* data)
+{
+    auto* ctx = const_cast<ZooAsyncCtx*>(static_cast<const ZooAsyncCtx*>(data));
+    ctx->rc = rc;
+    if (rc == ZOK && value != nullptr && value_len > 0)
+        ctx->data.assign(value, value_len);
+    sem_post(&ctx->sem);
+    // 调用方已超时离开：回调负责回收（调用方不再碰 ctx，无竞态）
+    if (ctx->caller_gone.load(std::memory_order_acquire))
+        delete ctx;
+}
+
+/// @brief zoo_aget_children 回调（watcher 线程执行）
+static void GetChildrenCb(int rc, const struct String_vector* strings, const void* data)
+{
+    auto* ctx = const_cast<ZooAsyncCtx*>(static_cast<const ZooAsyncCtx*>(data));
+    ctx->rc = rc;
+    if (rc == ZOK && strings != nullptr)
+    {
+        ctx->children.reserve(strings->count);
+        for (int i = 0; i < strings->count; ++i)
+            ctx->children.emplace_back(strings->data[i]);
+    }
+    sem_post(&ctx->sem);
+    if (ctx->caller_gone.load(std::memory_order_acquire))
+        delete ctx;
+}
+
+/// @brief 等待异步结果，最多 wait_ms 毫秒。
+/// @return true=回调已完成（ctx 由调用方回收）；false=超时（ctx 归回调回收）
+static bool WaitZooAsync(ZooAsyncCtx* ctx, int64_t wait_ms)
+{
+    struct timespec ts;
+    clock_gettime(CLOCK_REALTIME, &ts);
+    ts.tv_sec += wait_ms / 1000;
+    ts.tv_nsec += (wait_ms % 1000) * 1000000;
+    if (ts.tv_nsec >= 1000000000)
+    {
+        ts.tv_sec += 1;
+        ts.tv_nsec -= 1000000000;
+    }
+    int r = 0;
+    while ((r = sem_timedwait(&ctx->sem, &ts)) == -1 && errno == EINTR) {}
+    return r == 0;
+}
+
+/// @brief 检查 ZK 连接是否就绪（非 CONNECTED 时同步/异步调用都会阻塞等待）
+static bool ZooConnected(zhandle_t* zh, const char* what)
+{
+    if (zh == nullptr) return false;
+    int state = zoo_state(zh);
+    if (state != ZOO_CONNECTED_STATE)
+    {
+        LOG_WARN("zookeeper not connected (state=%d), skip %s", state, what);
+        return false;
+    }
+    return true;
+}
 
 /**
  * 全局的 Watcher 观察器回调函数
@@ -235,24 +316,32 @@ std::string ZkClient::GetData(const char *path)
         LOG_ERROR("zookeeper handle is null, get path:%s", path);
         return "";
     }
+    // 快速失败：连接未就绪时 zoo_aget 同样会阻塞等待连接（阶段 11 修复）
+    if (!ZooConnected(m_zhandle, path)) return "";
 
-    char buffer[128];
-    int bufferlen = sizeof(buffer);
-    
-    // 同步获取节点数据
-    // 参数 0 表示不需要在该节点上设置 Watcher 监听
-    int flag = zoo_get(m_zhandle, path, 0, buffer, &bufferlen, nullptr);
-    
-    if (flag != ZOK)
+    auto* ctx = new ZooAsyncCtx;
+    sem_init(&ctx->sem, 0, 0);
+    // 异步获取节点数据（watcher=0：不设置 Watcher 监听）
+    int rc = zoo_aget(m_zhandle, path, 0, GetDataCb, ctx);
+    if (rc != ZOK)
     {
-        LOG_WARN("get znode data error, path:%s", path);
+        sem_destroy(&ctx->sem);
+        delete ctx;
+        LOG_WARN("zoo_aget failed, path:%s rc=%d", path, rc);
         return "";
     }
-    else
+    if (!WaitZooAsync(ctx, 3000))
     {
-        // 将获取到的二进制缓冲区转为 std::string 返回
-        return std::string(buffer, bufferlen);
+        // 3s 无响应：按发现失败返回（调用方已有重试/失效缓存回退）；
+        // ctx 由回调线程最终回收（caller_gone 标记），不泄漏不悬垂
+        ctx->caller_gone.store(true, std::memory_order_release);
+        LOG_WARN("zookeeper get data timeout (3s), path:%s", path);
+        return "";
     }
+    std::string result = ctx->data;
+    sem_destroy(&ctx->sem);
+    delete ctx;
+    return result;
 }
 
 std::vector<std::string> ZkClient::GetChildren(const char *path)
@@ -263,21 +352,28 @@ std::vector<std::string> ZkClient::GetChildren(const char *path)
         LOG_ERROR("zookeeper handle is null, get children path:%s", path);
         return children;
     }
+    // 快速失败：连接未就绪时不进入阻塞等待（阶段 11 修复）
+    if (!ZooConnected(m_zhandle, path)) return children;
 
-    struct String_vector strings;
-    int flag = zoo_get_children(m_zhandle, path, 0, &strings);
-    if (flag != ZOK)
+    auto* ctx = new ZooAsyncCtx;
+    sem_init(&ctx->sem, 0, 0);
+    int rc = zoo_aget_children(m_zhandle, path, 0, GetChildrenCb, ctx);
+    if (rc != ZOK)
     {
-        LOG_WARN("get znode children error, flag:%d, path:%s", flag, path);
+        sem_destroy(&ctx->sem);
+        delete ctx;
+        LOG_WARN("zoo_aget_children failed, path:%s rc=%d", path, rc);
         return children;
     }
-
-    children.reserve(strings.count);
-    for (int i = 0; i < strings.count; ++i)
+    if (!WaitZooAsync(ctx, 3000))
     {
-        children.emplace_back(strings.data[i]);
+        ctx->caller_gone.store(true, std::memory_order_release);
+        LOG_WARN("zookeeper get children timeout (3s), path:%s", path);
+        return children;
     }
-    deallocate_String_vector(&strings);
+    children = std::move(ctx->children);
+    sem_destroy(&ctx->sem);
+    delete ctx;
     return children;
 }
 

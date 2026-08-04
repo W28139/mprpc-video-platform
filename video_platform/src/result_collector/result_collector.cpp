@@ -11,11 +11,13 @@
 #include "mprpcapplication.h"
 #include "mprpcchannel.h"
 #include "mprpccontroller.h"
+#include "mprpcmetrics.h"
 #include "rpcprovider.h"
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
 #include "video_platform/mysql_pool.h"
 #include "video_platform/redis_client.h"
+#include "video_platform/mq_client.h"
 #include "video_platform/ffmpeg_executor.h"
 
 using namespace video_platform;
@@ -136,6 +138,20 @@ public:
                            ::ReportShardResultResponse* response,
                            ::google::protobuf::Closure* done) override
     {
+        // 阶段 10：RPC handler 转发公共处理逻辑（MQ 消费线程同样调用）
+        HandleReportShardResult(request, response);
+        done->Run();
+    }
+
+    /// @brief 公共处理逻辑：接收并聚合 shard 执行结果。
+    ///
+    /// 阶段 10：RPC handler（Worker 直连，MQ 故障时回退路径）与
+    /// MQ 消费线程（result.pending，正常路径）共用同一实现，保证
+    /// 聚合/重试/终态判定行为完全一致。重复投递由 attempt_id + 状态
+    /// 幂等检查兜底（见函数体内 2/3 步骤）。
+    static void HandleReportShardResult(const ::ReportShardResultRequest* request,
+                                        ::ReportShardResultResponse* response)
+    {
         const std::string& shard_id   = request->shard_id();
         const std::string& job_id     = request->job_id();
         const std::string& worker_id  = request->worker_id();
@@ -163,7 +179,6 @@ public:
             response->set_error_msg("shard not found: " + shard_id);
             response->set_accepted(false);
             response->set_job_done(false);
-            done->Run();
             return;
         }
 
@@ -186,7 +201,6 @@ public:
             response->set_error_msg("stale result from old attempt, ignored");
             response->set_accepted(false);
             response->set_job_done(false);
-            done->Run();
             return;
         }
 
@@ -199,7 +213,6 @@ public:
             response->set_error_msg("");
             response->set_accepted(true);
             response->set_job_done(CheckJobDone(job_id));
-            done->Run();
             return;
         }
 
@@ -219,7 +232,6 @@ public:
             response->set_error_msg("duplicate result for same attempt, ignored");
             response->set_accepted(true);
             response->set_job_done(CheckJobDone(job_id));
-            done->Run();
             return;
         }
 
@@ -359,8 +371,6 @@ public:
         {
             LOG_INFO("ResultCollectorService: job %s reached terminal state", job_id.c_str());
         }
-
-        done->Run();
     }
 
 private:
@@ -463,6 +473,18 @@ private:
     // TerminalSweepLoop 直接调用
     static void MarkJobTerminal(const std::string& job_id, JobStatus status)
     {
+        // 阶段 11：任务终态观测（单入口，SUCCESS/FAILED 两路共用。
+        // MQ 消费线程与 TerminalSweepLoop 线程并发调用安全——原子计数）
+        auto& metrics_reg = mprpc::MetricsRegistry::GetInstance();
+        if (status == JobStatus::JOB_SUCCESS)
+        {
+            metrics_reg.Counter("job_success_total", "转码成功的任务总数").Inc();
+        }
+        else if (status == JobStatus::JOB_FAILED)
+        {
+            metrics_reg.Counter("job_failed_total", "转码失败的任务总数").Inc();
+        }
+
         // 更新 JobStore（MySQL）
         auto job_opt = JobStore::GetInstance().Get(job_id);
         if (job_opt.has_value())
@@ -664,6 +686,74 @@ void ResultCollectorServiceImpl::TerminalSweepLoop(std::atomic<bool>& stop_flag)
 }
 
 // ============================================================================
+// MqResultConsumeLoop — 阶段 10：消费 result.pending 队列（Push 聚合）
+// ============================================================================
+
+/// @brief 消费 Worker 上报的执行结果消息，复用公共聚合逻辑。
+///
+/// 正常路径：Worker publish result.pending（消息体 = 序列化的
+/// ReportShardResultRequest）→ 本线程解析后调用
+/// HandleReportShardResult（与 RPC handler 同一实现）。
+///
+/// 掉线语义：MQ 故障时 Worker 的 publish 失败会回退直连 RPC（Worker 侧
+/// 每次上报独立判断），本线程只需重连等待——RC 聚合功能在 MQ 掉线期间
+/// 由 RPC 路径完全承接，本线程是"加速通道"而非"唯一通道"。
+///
+/// 可靠性：处理完成才 Ack；解析失败的消息也 Ack（毒消息丢弃，避免死循环）；
+/// Ack 失败 → Broker 重新投递 → 幂等检查（attempt_id/状态）兜底不重复处理。
+static void MqResultConsumeLoop(std::atomic<bool>& stop_flag)
+{
+    auto& mq = MqClient::GetInstance();
+    LOG_INFO("MqResultConsumeLoop thread started (consume result.pending)");
+
+    while (!stop_flag)
+    {
+        // 1. 确保连接可用（MQ 故障时等待重连；期间 Worker 走直连 RPC）
+        if (!mq.connected())
+        {
+            if (!mq.Reconnect())
+            {
+                LOG_WARN("MqResultConsumeLoop: MQ unavailable, retry in 2s "
+                         "(workers fall back to direct RPC)");
+                std::this_thread::sleep_for(std::chrono::seconds(2));
+                continue;
+            }
+            LOG_INFO("MqResultConsumeLoop: MQ reconnected, resume consuming");
+        }
+
+        // 2. 阻塞消费（2s 超时：可感知 stop_flag 与连接状态变化）
+        std::string body;
+        int64_t delivery_tag = 0;
+        if (!mq.ConsumeBlocking("result.pending", body, delivery_tag, 2000))
+        {
+            if (stop_flag) break;
+            continue;
+        }
+
+        // 3. 解析并处理
+        ::ReportShardResultRequest req;
+        ::ReportShardResultResponse resp;
+        if (req.ParseFromString(body))
+        {
+            ResultCollectorServiceImpl::HandleReportShardResult(&req, &resp);
+        }
+        else
+        {
+            LOG_WARN("MqResultConsumeLoop: failed to parse result message "
+                     "(len=%zu), ack & drop", body.size());
+        }
+
+        // 4. 确认消息（失败 → Broker 重投 → 幂等兜底）
+        if (!mq.Ack(delivery_tag))
+        {
+            LOG_WARN("MqResultConsumeLoop: ack failed, broker may redeliver");
+        }
+    }
+
+    LOG_INFO("MqResultConsumeLoop thread stopped");
+}
+
+// ============================================================================
 // main — 服务入口
 // ============================================================================
 
@@ -691,8 +781,42 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    // 阶段 10：Redis 是可降级组件，Init 失败只 WARN 不拒绝启动
+    // 阶段 10：Redis/MQ 是可降级组件，Init 失败只 WARN 不拒绝启动
     RedisClient::GetInstance().Init();
+    MqClient::GetInstance().Init();
+
+    // ── 阶段 11：可观测性（metrics_port<=0 时不启用，可降级组件） ──
+    int metrics_port = MprpcApplication::GetConfig().LoadInt("metrics_port", 0, 0, 65535);
+    mprpc::MetricsHttpServer metrics_server;
+    metrics_server.Init(metrics_port);
+    auto& metrics_reg = mprpc::MetricsRegistry::GetInstance();
+    // 内置日志告警兜底：
+    // 1. 本进程出站 RPC P99 延迟 > 1000ms
+    // 2. 任务失败率（5 分钟窗口，RateEstimator 增量估算）。
+    //    内置口径：失败数 / 终态数（本进程同时维护 success/failed 两个
+    //    counter，无需跨进程读 job_submitted_total）；
+    //    Prometheus 侧口径为 failed/submitted（跨实例聚合，见 alerts.yml）
+    metrics_reg.RegisterAlertRule(
+        {"rpc_latency_p99_high", "WARN",
+         []() {
+             return mprpc::MetricsRegistry::GetInstance()
+                 .HistogramQuantile("rpc_latency_ms", 0.99);
+         },
+         1000, true, 0, "本进程 RPC P99 延迟超过 1000ms"});
+    mprpc::RateEstimator failed_estimator(5 * 60 * 1000);    // 失败计数增量速率
+    mprpc::RateEstimator terminal_estimator(5 * 60 * 1000);  // 终态计数增量速率
+    metrics_reg.RegisterAlertRule(
+        {"job_failed_rate_high", "WARN",
+         [&]() {
+             double rf = failed_estimator.Observe(
+                 metrics_reg.Counter("job_failed_total", "转码失败的任务总数").Value());
+             double rt = terminal_estimator.Observe(
+                 metrics_reg.Counter("job_failed_total", "转码失败的任务总数").Value() +
+                 metrics_reg.Counter("job_success_total", "转码成功的任务总数").Value());
+             return rt > 0 ? rf / std::max(rt, 0.001) : 0.0;
+         },
+         0.3, true, 0, "5 分钟窗口任务失败率超过 30%"});
+    metrics_server.Start();
 
     RpcProvider provider;
     provider.NotifyService(new ResultCollectorServiceImpl());
@@ -701,18 +825,24 @@ int main(int argc, char** argv)
     std::atomic<bool> stop_flag{false};
     std::thread sweep_thread(ResultCollectorServiceImpl::TerminalSweepLoop,
                              std::ref(stop_flag));
+    // 阶段 10：MQ 消费线程（result.pending，Push 聚合）
+    std::thread mq_thread(MqResultConsumeLoop, std::ref(stop_flag));
 
     if (!provider.Run())
     {
         LOG_ERROR("ResultCollectorService start failed");
         stop_flag = true;
-        sweep_thread.join();
+        if (sweep_thread.joinable()) sweep_thread.join();
+        if (mq_thread.joinable()) mq_thread.join();
+        metrics_server.Stop();
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }
 
     stop_flag = true;
-    sweep_thread.join();
+    if (sweep_thread.joinable()) sweep_thread.join();
+    if (mq_thread.joinable()) mq_thread.join();
+    metrics_server.Stop();
     wevix_muduo::AsyncLogger::GetInstance().stop();
     return 0;
 }

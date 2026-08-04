@@ -1,5 +1,6 @@
 #pragma once
 
+#include <map>
 #include <optional>
 #include <string>
 #include <vector>
@@ -80,6 +81,11 @@ public:
 
     /// @brief 列出所有 job 的副本（线程安全）。
     std::vector<JobRecord> ListAll() const;
+
+    /// @brief 列出最近创建的 job（按 created_at 倒序，最多 limit 条）。
+    /// limit <= 0 表示返回全部（等价 ListAll）。
+    /// 阶段 12 新增：GUI 任务列表数据源。
+    std::vector<JobRecord> ListRecent(int32_t limit) const;
 
     /// @brief 返回当前存储的 job 总数。
     size_t Count() const;
@@ -170,6 +176,11 @@ public:
 
     /// @brief 返回当前存储的 shard 总数。
     size_t Count() const;
+
+    /// @brief 按状态统计 shard 数量（阶段 11 可观测性采样用）。
+    /// 单条 SELECT status, COUNT(*) ... GROUP BY status。
+    /// @return status → count 映射（仅包含有数据的 status；查询失败返回空 map）
+    std::map<int32_t, size_t> CountByStatus() const;
 
 private:
     ShardStore() = default;

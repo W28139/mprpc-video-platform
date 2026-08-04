@@ -30,11 +30,12 @@ add_custom_target(gen_protos
     COMMENT "Generating C++ from proto files..."
 )
 
-# ── 公共库：存储层（MySQL 持久化）+ FFmpeg 执行器 + Redis 客户端 ──
+# ── 公共库：存储层（MySQL 持久化）+ FFmpeg 执行器 + Redis/MQ 客户端 ──
 add_library(video_common
     ${CMAKE_CURRENT_SOURCE_DIR}/src/common_store.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/mysql_pool.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/redis_client.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/mq_client.cpp
     ${CMAKE_CURRENT_SOURCE_DIR}/src/transcode_worker/ffmpeg_executor.cpp
     ${PROTO_SRCS}
 )
@@ -42,7 +43,7 @@ target_include_directories(video_common PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/include
     ${PROTO_GEN_DIR}
 )
-target_link_libraries(video_common PUBLIC mprpc protobuf mysqlclient hiredis)
+target_link_libraries(video_common PUBLIC mprpc protobuf mysqlclient hiredis rabbitmq)
 
 # ── 服务可执行文件 ──────────────────────────────────────────────────────
 # 每个服务独立可执行文件，通过 -i 指定配置文件
@@ -60,8 +61,10 @@ add_executable(scheduler_service
 target_link_libraries(scheduler_service video_common)
 
 # WorkerManagerService (port 9003)
+# 注意：源文件当前位于 transcode_worker/worker_manager/（工作区迁移中，
+# 旧路径 src/worker_manager/worker_manager.cpp 已不存在）
 add_executable(worker_manager
-    ${CMAKE_CURRENT_SOURCE_DIR}/src/worker_manager/worker_manager.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/src/transcode_worker/worker_manager/worker_manager.cpp
 )
 target_link_libraries(worker_manager video_common)
 
@@ -82,3 +85,21 @@ add_executable(job_client
     ${CMAKE_CURRENT_SOURCE_DIR}/src/result_collector/job_service/job_client.cpp
 )
 target_link_libraries(job_client video_common)
+
+# ── GUI 客户端（阶段 12，Qt6）─────────────────────────────────────────────
+# 依赖：qt6-base-dev（apt install qt6-base-dev）。RPC 走 video_common 的
+# mprpc 链路（ZK 服务发现），异步调用避免阻塞 UI 线程。
+set(CMAKE_AUTOMOC ON)
+find_package(Qt6 REQUIRED COMPONENTS Widgets)
+add_executable(video_gui
+    ${CMAKE_CURRENT_SOURCE_DIR}/gui/main.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/gui/theme.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/gui/rpc_client.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/gui/main_window.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/gui/job_table.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/gui/worker_panel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/gui/log_panel.cpp
+    ${CMAKE_CURRENT_SOURCE_DIR}/gui/submit_dialog.cpp
+)
+target_include_directories(video_gui PRIVATE ${CMAKE_SOURCE_DIR})
+target_link_libraries(video_gui video_common Qt6::Widgets)

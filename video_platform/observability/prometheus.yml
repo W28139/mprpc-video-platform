@@ -1,0 +1,34 @@
+# ============================================================================
+# Prometheus 抓取配置 — video_platform（阶段 11 可观测性）
+# ============================================================================
+# 用法：
+#   prometheus --config.file=video_platform/observability/prometheus.yml
+#
+# 各服务 metrics 端口（video_platform/conf/*.conf 的 metrics_port 配置）：
+#   9091 job_service       9092 scheduler_service
+#   9093 worker_manager    9094 result_collector
+#   9095 transcode_worker (worker_001)  9096 (worker_002)  9097 (worker_003)
+# 单机部署时 5 个服务端口互斥；单服务独立主机部署时可统一用 9090。
+# ============================================================================
+
+global:
+  scrape_interval: 15s      # 抓取频率
+  evaluation_interval: 30s  # 告警规则评估频率
+  scrape_timeout: 10s
+
+rule_files:
+  - alerts.yml
+
+scrape_configs:
+  - job_name: video_platform
+    static_configs:
+      - targets:
+          - 127.0.0.1:9091   # job_service
+          - 127.0.0.1:9092   # scheduler_service
+          - 127.0.0.1:9093   # worker_manager
+          - 127.0.0.1:9094   # result_collector
+          - 127.0.0.1:9095   # transcode_worker (worker_001)
+          - 127.0.0.1:9096   # transcode_worker (worker_002, 可选实例)
+          - 127.0.0.1:9097   # transcode_worker (worker_003, 可选实例)
+        labels:
+          env: dev
