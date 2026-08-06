@@ -105,9 +105,6 @@ PROTOBUF_CONSTEXPR WorkerLoad::WorkerLoad(
   , /*decltype(_impl_.cpu_usage_)*/0
   , /*decltype(_impl_.memory_usage_)*/0
   , /*decltype(_impl_.running_shards_)*/0
-  , /*decltype(_impl_.finished_shards_)*/0
-  , /*decltype(_impl_.timestamp_)*/int64_t{0}
-  , /*decltype(_impl_.failed_shards_)*/0
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct WorkerLoadDefaultTypeInternal {
   PROTOBUF_CONSTEXPR WorkerLoadDefaultTypeInternal()
@@ -194,9 +191,6 @@ const uint32_t TableStruct_common_2eproto::offsets[] PROTOBUF_SECTION_VARIABLE(p
   PROTOBUF_FIELD_OFFSET(::video_platform::WorkerLoad, _impl_.cpu_usage_),
   PROTOBUF_FIELD_OFFSET(::video_platform::WorkerLoad, _impl_.memory_usage_),
   PROTOBUF_FIELD_OFFSET(::video_platform::WorkerLoad, _impl_.running_shards_),
-  PROTOBUF_FIELD_OFFSET(::video_platform::WorkerLoad, _impl_.finished_shards_),
-  PROTOBUF_FIELD_OFFSET(::video_platform::WorkerLoad, _impl_.failed_shards_),
-  PROTOBUF_FIELD_OFFSET(::video_platform::WorkerLoad, _impl_.timestamp_),
 };
 static const ::_pbi::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) = {
   { 0, -1, -1, sizeof(::video_platform::JobInfo)},
@@ -238,27 +232,24 @@ const char descriptor_table_protodef_common_2eproto[] PROTOBUF_SECTION_VARIABLE(
   " \001(\005\022\032\n\022max_running_shards\030\010 \001(\005\022,\n\006stat"
   "us\030\t \001(\0162\034.video_platform.WorkerStatus\022\026"
   "\n\016last_heartbeat\030\n \001(\003\022\021\n\tcpu_usage\030\013 \001("
-  "\005\022\024\n\014memory_usage\030\014 \001(\005\"\243\001\n\nWorkerLoad\022\021"
-  "\n\tworker_id\030\001 \001(\t\022\021\n\tcpu_usage\030\002 \001(\005\022\024\n\014"
-  "memory_usage\030\003 \001(\005\022\026\n\016running_shards\030\004 \001"
-  "(\005\022\027\n\017finished_shards\030\005 \001(\005\022\025\n\rfailed_sh"
-  "ards\030\006 \001(\005\022\021\n\ttimestamp\030\007 \001(\003*\260\001\n\tJobSta"
-  "tus\022\026\n\022JOB_STATUS_UNKNOWN\020\000\022\017\n\013JOB_PENDI"
-  "NG\020\001\022\021\n\rJOB_SPLITTING\020\002\022\022\n\016JOB_SCHEDULIN"
-  "G\020\003\022\017\n\013JOB_RUNNING\020\004\022\017\n\013JOB_MERGING\020\005\022\017\n"
-  "\013JOB_SUCCESS\020\006\022\016\n\nJOB_FAILED\020\007\022\020\n\014JOB_CA"
-  "NCELED\020\010*\301\001\n\013ShardStatus\022\030\n\024SHARD_STATUS"
-  "_UNKNOWN\020\000\022\021\n\rSHARD_CREATED\020\001\022\021\n\rSHARD_W"
-  "AITING\020\002\022\022\n\016SHARD_ASSIGNED\020\003\022\021\n\rSHARD_RU"
-  "NNING\020\004\022\021\n\rSHARD_SUCCESS\020\005\022\020\n\014SHARD_FAIL"
-  "ED\020\006\022\022\n\016SHARD_RETRYING\020\007\022\022\n\016SHARD_CANCEL"
-  "ED\020\010*e\n\014WorkerStatus\022\031\n\025WORKER_STATUS_UN"
-  "KNOWN\020\000\022\021\n\rWORKER_ONLINE\020\001\022\022\n\016WORKER_OFF"
-  "LINE\020\002\022\023\n\017WORKER_DRAINING\020\003b\006proto3"
+  "\005\022\024\n\014memory_usage\030\014 \001(\005\"`\n\nWorkerLoad\022\021\n"
+  "\tworker_id\030\001 \001(\t\022\021\n\tcpu_usage\030\002 \001(\005\022\024\n\014m"
+  "emory_usage\030\003 \001(\005\022\026\n\016running_shards\030\004 \001("
+  "\005*\214\001\n\tJobStatus\022\026\n\022JOB_STATUS_UNKNOWN\020\000\022"
+  "\017\n\013JOB_PENDING\020\001\022\022\n\016JOB_SCHEDULING\020\003\022\017\n\013"
+  "JOB_RUNNING\020\004\022\017\n\013JOB_SUCCESS\020\006\022\016\n\nJOB_FA"
+  "ILED\020\007\022\020\n\014JOB_CANCELED\020\010*\256\001\n\013ShardStatus"
+  "\022\030\n\024SHARD_STATUS_UNKNOWN\020\000\022\021\n\rSHARD_WAIT"
+  "ING\020\002\022\022\n\016SHARD_ASSIGNED\020\003\022\021\n\rSHARD_RUNNI"
+  "NG\020\004\022\021\n\rSHARD_SUCCESS\020\005\022\020\n\014SHARD_FAILED\020"
+  "\006\022\022\n\016SHARD_RETRYING\020\007\022\022\n\016SHARD_CANCELED\020"
+  "\010*P\n\014WorkerStatus\022\031\n\025WORKER_STATUS_UNKNO"
+  "WN\020\000\022\021\n\rWORKER_ONLINE\020\001\022\022\n\016WORKER_OFFLIN"
+  "E\020\002b\006proto3"
   ;
 static ::_pbi::once_flag descriptor_table_common_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_common_2eproto = {
-    false, false, 1675, descriptor_table_protodef_common_2eproto,
+    false, false, 1531, descriptor_table_protodef_common_2eproto,
     "common.proto",
     &descriptor_table_common_2eproto_once, nullptr, 0, 4,
     schemas, file_default_instances, TableStruct_common_2eproto::offsets,
@@ -280,10 +271,8 @@ bool JobStatus_IsValid(int value) {
   switch (value) {
     case 0:
     case 1:
-    case 2:
     case 3:
     case 4:
-    case 5:
     case 6:
     case 7:
     case 8:
@@ -300,7 +289,6 @@ const ::PROTOBUF_NAMESPACE_ID::EnumDescriptor* ShardStatus_descriptor() {
 bool ShardStatus_IsValid(int value) {
   switch (value) {
     case 0:
-    case 1:
     case 2:
     case 3:
     case 4:
@@ -323,7 +311,6 @@ bool WorkerStatus_IsValid(int value) {
     case 0:
     case 1:
     case 2:
-    case 3:
       return true;
     default:
       return false;
@@ -2255,9 +2242,6 @@ WorkerLoad::WorkerLoad(const WorkerLoad& from)
     , decltype(_impl_.cpu_usage_){}
     , decltype(_impl_.memory_usage_){}
     , decltype(_impl_.running_shards_){}
-    , decltype(_impl_.finished_shards_){}
-    , decltype(_impl_.timestamp_){}
-    , decltype(_impl_.failed_shards_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -2270,8 +2254,8 @@ WorkerLoad::WorkerLoad(const WorkerLoad& from)
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.cpu_usage_, &from._impl_.cpu_usage_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.failed_shards_) -
-    reinterpret_cast<char*>(&_impl_.cpu_usage_)) + sizeof(_impl_.failed_shards_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.running_shards_) -
+    reinterpret_cast<char*>(&_impl_.cpu_usage_)) + sizeof(_impl_.running_shards_));
   // @@protoc_insertion_point(copy_constructor:video_platform.WorkerLoad)
 }
 
@@ -2284,9 +2268,6 @@ inline void WorkerLoad::SharedCtor(
     , decltype(_impl_.cpu_usage_){0}
     , decltype(_impl_.memory_usage_){0}
     , decltype(_impl_.running_shards_){0}
-    , decltype(_impl_.finished_shards_){0}
-    , decltype(_impl_.timestamp_){int64_t{0}}
-    , decltype(_impl_.failed_shards_){0}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.worker_id_.InitDefault();
@@ -2321,8 +2302,8 @@ void WorkerLoad::Clear() {
 
   _impl_.worker_id_.ClearToEmpty();
   ::memset(&_impl_.cpu_usage_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.failed_shards_) -
-      reinterpret_cast<char*>(&_impl_.cpu_usage_)) + sizeof(_impl_.failed_shards_));
+      reinterpret_cast<char*>(&_impl_.running_shards_) -
+      reinterpret_cast<char*>(&_impl_.cpu_usage_)) + sizeof(_impl_.running_shards_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -2362,30 +2343,6 @@ const char* WorkerLoad::_InternalParse(const char* ptr, ::_pbi::ParseContext* ct
       case 4:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 32)) {
           _impl_.running_shards_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
-          CHK_(ptr);
-        } else
-          goto handle_unusual;
-        continue;
-      // int32 finished_shards = 5;
-      case 5:
-        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 40)) {
-          _impl_.finished_shards_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
-          CHK_(ptr);
-        } else
-          goto handle_unusual;
-        continue;
-      // int32 failed_shards = 6;
-      case 6:
-        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 48)) {
-          _impl_.failed_shards_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
-          CHK_(ptr);
-        } else
-          goto handle_unusual;
-        continue;
-      // int64 timestamp = 7;
-      case 7:
-        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 56)) {
-          _impl_.timestamp_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -2447,24 +2404,6 @@ uint8_t* WorkerLoad::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteInt32ToArray(4, this->_internal_running_shards(), target);
   }
 
-  // int32 finished_shards = 5;
-  if (this->_internal_finished_shards() != 0) {
-    target = stream->EnsureSpace(target);
-    target = ::_pbi::WireFormatLite::WriteInt32ToArray(5, this->_internal_finished_shards(), target);
-  }
-
-  // int32 failed_shards = 6;
-  if (this->_internal_failed_shards() != 0) {
-    target = stream->EnsureSpace(target);
-    target = ::_pbi::WireFormatLite::WriteInt32ToArray(6, this->_internal_failed_shards(), target);
-  }
-
-  // int64 timestamp = 7;
-  if (this->_internal_timestamp() != 0) {
-    target = stream->EnsureSpace(target);
-    target = ::_pbi::WireFormatLite::WriteInt64ToArray(7, this->_internal_timestamp(), target);
-  }
-
   if (PROTOBUF_PREDICT_FALSE(_internal_metadata_.have_unknown_fields())) {
     target = ::_pbi::WireFormat::InternalSerializeUnknownFieldsToArray(
         _internal_metadata_.unknown_fields<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(::PROTOBUF_NAMESPACE_ID::UnknownFieldSet::default_instance), target, stream);
@@ -2503,21 +2442,6 @@ size_t WorkerLoad::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_running_shards());
   }
 
-  // int32 finished_shards = 5;
-  if (this->_internal_finished_shards() != 0) {
-    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_finished_shards());
-  }
-
-  // int64 timestamp = 7;
-  if (this->_internal_timestamp() != 0) {
-    total_size += ::_pbi::WireFormatLite::Int64SizePlusOne(this->_internal_timestamp());
-  }
-
-  // int32 failed_shards = 6;
-  if (this->_internal_failed_shards() != 0) {
-    total_size += ::_pbi::WireFormatLite::Int32SizePlusOne(this->_internal_failed_shards());
-  }
-
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -2548,15 +2472,6 @@ void WorkerLoad::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PRO
   if (from._internal_running_shards() != 0) {
     _this->_internal_set_running_shards(from._internal_running_shards());
   }
-  if (from._internal_finished_shards() != 0) {
-    _this->_internal_set_finished_shards(from._internal_finished_shards());
-  }
-  if (from._internal_timestamp() != 0) {
-    _this->_internal_set_timestamp(from._internal_timestamp());
-  }
-  if (from._internal_failed_shards() != 0) {
-    _this->_internal_set_failed_shards(from._internal_failed_shards());
-  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -2581,8 +2496,8 @@ void WorkerLoad::InternalSwap(WorkerLoad* other) {
       &other->_impl_.worker_id_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(WorkerLoad, _impl_.failed_shards_)
-      + sizeof(WorkerLoad::_impl_.failed_shards_)
+      PROTOBUF_FIELD_OFFSET(WorkerLoad, _impl_.running_shards_)
+      + sizeof(WorkerLoad::_impl_.running_shards_)
       - PROTOBUF_FIELD_OFFSET(WorkerLoad, _impl_.cpu_usage_)>(
           reinterpret_cast<char*>(&_impl_.cpu_usage_),
           reinterpret_cast<char*>(&other->_impl_.cpu_usage_));

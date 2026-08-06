@@ -21,27 +21,13 @@ using namespace video_platform;
 // JobService — 接收用户提交任务、查询任务状态、取消任务
 // ============================================================================
 
-/// @brief JobService RPC 实现
-///
-/// 由 job_client（CLI 工具）通过 ZK 发现的 JobService_Stub 调用。
-/// 是用户操作整个视频处理平台的唯一入口。
-///
-/// 阶段 4 改进：
-/// - SubmitJob：创建 JobRecord 后立即 RPC 调用 Scheduler.ScheduleJob
-///   触发异步切分和调度（不等待 Scheduler 完成才返回）
-/// - 将 shard_duration_sec 写入 JobRecord，传递给 Scheduler
-/// - 新增 input_path 必填校验，防无效提交
-///
-/// 错误处理策略：
-/// SubmitJob 的 Scheduler.ScheduleJob 调用失败不回滚 job 创建 ——
-/// job 已持久化到 JobStore，Scheduler 的后台 SchedulingLoop 可通过重新
-/// 扫描发现未切分的 job（后续增强），或支持手动触发调度。
 class JobServiceImpl : public JobService {
 public:
     /// @brief 提交视频处理任务
-    ///
-    /// 流程：校验参数 → 创建 JobRecord → 写入 JobStore →
-    ///       调用 Scheduler.ScheduleJob 触发切分和调度
+    
+    // 对外接口，用于提交任务
+    // 内部是把任务交给schedule做切分，把切分好的放入数据库，把结果返回过来，最后返给调用方
+    // job进入pending(已提交，等待系统处理) -> schedule
     void SubmitJob(::google::protobuf::RpcController* controller,
                    const ::SubmitJobRequest* request,
                    ::SubmitJobResponse* response,
@@ -80,12 +66,11 @@ public:
         job.created_at         = NowMs();
         job.updated_at         = NowMs();
 
-        // 阶段 11：任务提交观测（参数校验通过、平台实际受理后才计数，
-        // 保证 job_failed_rate 的分母=平台受理数）
+        // 任务提交观测（参数校验通过、平台实际受理后才计数，保证 job_failed_rate 的分母 = 平台受理数）
         mprpc::MetricsRegistry::GetInstance()
             .Counter("job_submitted_total", "提交的任务总数").Inc();
 
-        // 写入内存存储
+        // 写入MySQL内存存储
         JobStore::GetInstance().Insert(job);
         LOG_INFO("JobService::SubmitJob created job_id=%s", job_id.c_str());
 
@@ -94,6 +79,7 @@ public:
         response->set_error_msg("");
         response->set_job_id(job_id);
 
+        // 初步构造，不改变 Job 状态，不写入分片数
         auto* jobInfo = response->mutable_job_info();
         jobInfo->set_job_id(job.job_id);
         jobInfo->set_user_id(job.user_id);
@@ -109,7 +95,7 @@ public:
         jobInfo->set_created_at(job.created_at);
         jobInfo->set_updated_at(job.updated_at);
 
-        // ── 调用 Scheduler.ScheduleJob 触发切分和调度 ─────────────────
+        // 调用 Scheduler.ScheduleJob 触发切分和调度
         // 最多重试 3 次，防止单次网络抖动导致 job 永久卡死在 PENDING
         bool schedule_ok = false;
         int32_t shard_count_from_scheduler = 0;
@@ -133,7 +119,7 @@ public:
                 LOG_INFO("JobService::SubmitJob job_id=%s: Scheduler accepted (attempt %d)",
                          job_id.c_str(), attempt);
                 // 直接从 ScheduleJobResponse 获取 shard_count（直接数据路径，避免侧信道）
-                // 阶段 9：shard 列表不再收集——数据已由 Scheduler 写入 MySQL 共享
+                // shard 列表不再收集——数据已由 Scheduler 写入 MySQL 共享
                 shard_count_from_scheduler = sched_resp.shard_count();
                 schedule_ok = true;
                 break;
@@ -152,25 +138,27 @@ public:
         // 切片成功后的逻辑
         if (schedule_ok)
         {
-            // 使用 ScheduleJobResponse 返回的 shard_count 更新 JobStore里job_id该JobRecord的信息
-            // refreshed_opt的类型为JobRecord，更新状态信息、分片数信息、最新更新时间信息等信息
-            auto refreshed_opt = JobStore::GetInstance().Get(job_id);
-            if (refreshed_opt.has_value())
+            // latest_job_opt的类型为JobRecord，用于更新状态信息、分片数信息、最新更新时间信息等信息
+            auto latest_job_opt = JobStore::GetInstance().Get(job_id);
+            // 查询数据库里有没有job_id这个任务
+            if (latest_job_opt.has_value())
             {
-                auto refreshed = refreshed_opt.value();
-                int from_status = refreshed.status;   // 快照前置状态（条件更新防覆盖）
-                refreshed.status = static_cast<int32_t>(JobStatus::JOB_SCHEDULING);
-                refreshed.shard_count = shard_count_from_scheduler;
-                refreshed.updated_at = NowMs();
-                JobStore::GetInstance().UpdateIfStatus(job_id, {from_status}, refreshed);
-                // 同步更新响应中的 job_info, jobInfo 是指向 RPC 响应 的指针response,它最终会被序列化发给客户端
+                // 有的话，获取该 JobRecord 实例 (此时已经被schedule切片逻辑更新过了)
+                auto latest_job = latest_job_opt.value(); 
+                int from_status = latest_job.status;   // 快照前置状态（在修改最新状态前，先把状态保存下来）
+                // 设置job的最新状态为 JOB_SCHEDULING
+                // 更新数据库里该JobStore的信息
+                latest_job.status = static_cast<int32_t>(JobStatus::JOB_SCHEDULING);
+                latest_job.shard_count = shard_count_from_scheduler;
+                latest_job.updated_at = NowMs();
+                JobStore::GetInstance().UpdateIfStatus(job_id, {from_status}, latest_job);
+
+                // 更新response信息
                 jobInfo->set_status(JobStatus::JOB_SCHEDULING);
                 jobInfo->set_shard_count(shard_count_from_scheduler);
-                jobInfo->set_updated_at(refreshed.updated_at);
+                jobInfo->set_updated_at(latest_job.updated_at);
             }
-
-            // 阶段 9：不再从 ScheduleJob 响应构造 shard 本地副本——
-            // Scheduler 已将 shard 写入 MySQL，QueryJob 直接读取同一份数据。
+ 
             LOG_INFO("JobService::SubmitJob job_id=%s: %d shards created "
                      "(shared via MySQL)",
                      job_id.c_str(), shard_count_from_scheduler);
@@ -190,6 +178,8 @@ public:
 
         done->Run();
     }
+
+
 
     /// @brief 查询任务状态和进度
     void QueryJob(::google::protobuf::RpcController* controller,
@@ -489,31 +479,31 @@ static void PendingScanLoop(std::atomic<bool>& stop_flag)
             if (!sched_ctrl.Failed() && sched_resp.accepted())
             {
                 // 更新 JobStore 中的状态和 shard_count
-                auto refreshed_opt = JobStore::GetInstance().Get(job.job_id);
-                if (refreshed_opt.has_value())
+                auto latest_job_opt = JobStore::GetInstance().Get(job.job_id);
+                if (latest_job_opt.has_value())
                 {
-                    auto refreshed = refreshed_opt.value();
+                    auto latest_job = latest_job_opt.value();
                     // #7 修复：仅当仍为 PENDING 时才推进到 SCHEDULING。
                     // 此前直接覆写状态，绕过 UpdateJobStatus 的单调性保护：
                     // 响应丢失场景下可能把已 SUCCESS 的 job 回退为 SCHEDULING
                     // （永久卡非终态），取消竞争场景下可能把已 CANCELED 的
                     // job 复活继续执行。先 check 再 Update。
-                    if (refreshed.status != static_cast<int32_t>(JobStatus::JOB_PENDING))
+                    if (latest_job.status != static_cast<int32_t>(JobStatus::JOB_PENDING))
                     {
                         LOG_WARN("PendingScanLoop: job_id=%s status=%d no longer "
                                  "PENDING, skip status overwrite (fix #7)",
-                                 job.job_id.c_str(), refreshed.status);
+                                 job.job_id.c_str(), latest_job.status);
                     }
                     else
                     {
                         // 成功的话更新状态为 scaned 切片状态
                         // 条件更新（阶段 9）：仅当仍为 PENDING 时才推进
-                        refreshed.status = static_cast<int32_t>(JobStatus::JOB_SCHEDULING);
-                        refreshed.shard_count = sched_resp.shard_count();
-                        refreshed.updated_at = NowMs();
+                        latest_job.status = static_cast<int32_t>(JobStatus::JOB_SCHEDULING);
+                        latest_job.shard_count = sched_resp.shard_count();
+                        latest_job.updated_at = NowMs();
                         JobStore::GetInstance().UpdateIfStatus(
                             job.job_id,
-                            {static_cast<int32_t>(JobStatus::JOB_PENDING)}, refreshed);
+                            {static_cast<int32_t>(JobStatus::JOB_PENDING)}, latest_job);
                     }
                 }
 

@@ -19,26 +19,16 @@
 
 using namespace video_platform;
 
-// ============================================================================
 // WorkerManagerService — Worker 注册、心跳、查询
-// ============================================================================
 
-/// @brief WorkerManagerService RPC 实现
-///
-/// 负责维护所有 Worker 节点的生命周期：
-/// - RegisterWorker：新 Worker 启动时调用，写入 WorkerStore
-/// - Heartbeat：Worker 周期性上报负载，更新 heartbeat 时间戳和运行状态
-/// - ListWorkers：让 Scheduler 查询可用的 ONLINE Worker
-///
-/// 阶段 5 增强：心跳超时后通知 Scheduler 重调度该 Worker 上的 RUNNING shard
-/// （通过 SchedulerService.NotifyWorkerOffline RPC）。
+// 负责维护所有 Worker 节点的生命周期：
+// - RegisterWorker：新 Worker 启动时调用，写入 WorkerStore
+// - Heartbeat：Worker 周期性上报负载，更新 heartbeat 时间戳和运行状态
+// - ListWorkers：让 Scheduler 查询可用的 ONLINE Worker
+
 class WorkerManagerServiceImpl : public WorkerManagerService {
 public:
-    /// @brief Worker 注册
-    ///
-    /// 请求包含 Worker 的硬件信息（cores/mem/gpu）和能力上限（max_running_shards）。
-    /// 注册后状态为 WORKER_ONLINE，Scheduler 即可发现此节点。
-    /// worker_id 已存在时 Insert 返回 false（幂等）。
+    // Worker 注册上报
     void RegisterWorker(::google::protobuf::RpcController* controller,
                         const ::RegisterWorkerRequest* request,
                         ::RegisterWorkerResponse* response,
@@ -74,12 +64,10 @@ public:
         done->Run();
     }
 
-    /// @brief Worker 心跳上报
-    ///
-    /// Worker 每 3 秒调用一次
-    // 1. 保活（存活检测） Worker 每 3 秒调一次，WorkerManager 收到后更新 last_heartbeat 时间戳(心跳断了 20 秒，Worker 就被判定死亡)
-    // 2. 负载上报,请求携带 WorkerLoad。UpdateHeartbeat 把这些值写入 WorkerRecord 的负载快照，Scheduler 的 ListWorkers拿到后做加权评分选 worker
-    // 3. 反向告知存活状态 — 响应里的 alive （Worker 收到 alive=false（说明 manager 已把它标记死亡））
+    // 每个Worker循环调用，作为心跳上报给manager
+    // 1. 存活检测  Worker 每 3 秒调一次，WorkerManager 收到后更新 last_heartbeat 时间戳(心跳断了 20 秒，Worker 就被判定死亡)
+    // 2. 负载上报,把work信息写入redis
+    // 3. 通过response里的alive,清楚本worker在workermanager里的状态
     void Heartbeat(::google::protobuf::RpcController* controller,
                    const ::HeartbeatRequest* request,
                    ::HeartbeatResponse* response,
@@ -92,17 +80,12 @@ public:
                  load.memory_usage(),
                  load.running_shards());
 
-        // 原子更新：在 unique_lock 内完成 查找→更新 heartbeat/status/running_shards/cpu/mem
+        // 依据心跳，填入work最新信息，如果work死亡，那就返回false
         bool alive = WorkerStore::GetInstance().UpdateHeartbeat(
             load.worker_id(), load.running_shards(),
             load.cpu_usage(), load.memory_usage());
 
-        // 阶段 10：心跳双写 Redis 负载快照（HSET worker:load {worker_id} → 快照串）。
-        // Scheduler 直接从 Redis 读快照，省掉 ListWorkers RPC 往返。
-        // 快照串格式：ip|port|cpu_cores|memory_mb|max_running|current_running|cpu_usage|memory_usage|ts
-        // - 从 MySQL 读全量记录拼快照：心跳请求只带 WorkerLoad（cpu/mem/running），
-        //   ip/port/max_running 是注册时写入的，MySQL 是唯一真相源
-        // - Redis 写入失败只 WARN：Scheduler 回退 ListWorkers RPC，核心链路不受影响
+        // 心跳双写 Redis 负载快照
         // - alive=false 表示 Worker 已被标记死亡，不写快照（避免"幽灵快照"误导调度）
         if (alive)
         {
@@ -134,10 +117,7 @@ public:
         done->Run();
     }
 
-    /// @brief 列出 Worker 列表
-    ///
-    /// Scheduler 在分配 shard 前调用，获取所有 ONLINE 节点。
-    /// @param request.filter_status 按状态过滤，WORKER_STATUS_UNKNOWN（0）表示全部
+    // 列出 Worker 列表
     void ListWorkers(::google::protobuf::RpcController* controller,
                      const ::ListWorkersRequest* request,
                      ::ListWorkersResponse* response,
@@ -176,38 +156,15 @@ public:
     }
 };
 
-// ============================================================================
-// HeartbeatTimeoutCheck — 心跳超时检测线程（阶段 5：自动故障恢复）
-// ============================================================================
-//
-// 本线程周期扫描所有 ONLINE Worker 的 last_heartbeat，检测超时并触发恢复。
-//
-// 阶段 5 端到端恢复流程（核心链路）：
-//   1. HeartbeatTimeoutCheck 检测到 Worker 超时（10 秒无心跳）
-//   2. WorkerStore::MarkOfflineIfTimeout 原子标记 OFFLINE
-//      （与 Heartbeat RPC 的 UpdateHeartbeat 互斥，消除 TOCTOU）
-//   3. RPC → SchedulerService::NotifyWorkerOffline(worker_id, "TIMEOUT")
-//   4. Scheduler 在本地 ShardStore 中 ListByWorker(worker_id)，
-//      找到所有 ASSIGNED/RUNNING 的 shard
-//   5. 逐个 shard 执行重调度：
-//      - retry_count >= max_retry → SHARD_FAILED → 可能 JOB_FAILED
-//      - retry_count <  max_retry → retry_count++ → SHARD_WAITING
-//   6. SchedulingLoop 在后续扫描中将 WAITING shard 分配给其他 ONLINE Worker
-//
-// 设计要点：
-// - WorkerManager 不直接操作 ShardStore（那是 Scheduler 进程的数据），
-//   而是通过 RPC 通知 Scheduler 自主处理。保持各服务的 Store 边界清晰。
-// - NotifyWorkerOffline RPC 失败时不重试——心跳超时检查每 2 秒运行一次，
-//   如果 Scheduler 暂时不可用，下一轮会再次检测并重试通知。
-// - Worker 已经 OFFLINE 的情况下再次触发 MarkOfflineIfTimeout 为 no-op，
-//   不会重复通知 Scheduler。
 
+// HeartbeatTimeoutCheck — 心跳超时检测线程
+// 本线程周期扫描所有 ONLINE Worker 的 last_heartbeat，检测超时并触发恢复。
 static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
 {
-    constexpr int64_t kHeartbeatTimeoutMs = 20000;  // 阶段 8 #12：20 秒（≈2 个心跳周期）无心跳 → OFFLINE
+    constexpr int64_t kHeartbeatTimeoutMs = 20000;  // 20 秒无心跳 → OFFLINE
     constexpr int64_t kCheckIntervalMs    = 2000;   // 每 2 秒扫描一次
 
-    // 阶段 8 #11：NotifyWorkerOffline RPC 失败的 worker 需要持续重试
+    // NotifyWorkerOffline RPC 失败的 worker 需要持续重试
     static std::unordered_set<std::string> pending_notify;
     static std::mutex notify_mutex;
 
@@ -222,7 +179,7 @@ static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
         int64_t now = NowMs();
         auto workers = WorkerStore::GetInstance().ListAll();
 
-        // ── 1. 检查 ONLINE Worker 是否超时 ──────────────────────────
+        // 检查 ONLINE Worker 是否超时
         for (const auto& w : workers)
         {
             if (w.status != static_cast<int32_t>(WorkerStatus::WORKER_ONLINE))
@@ -231,6 +188,7 @@ static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
             if (now - w.last_heartbeat <= kHeartbeatTimeoutMs)
                 continue;
 
+            // 外层快照判断超时，这里直接查数据库进行验证，判断是否真超时
             if (WorkerStore::GetInstance().MarkOfflineIfTimeout(
                     w.worker_id, now, kHeartbeatTimeoutMs))
             {
@@ -241,7 +199,7 @@ static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
                          (long long)now,
                          (long long)(now - w.last_heartbeat));
 
-                // ── 通知 Scheduler ──────────────────────────────
+                // 通知 Scheduler，该worker已死亡，需要重新处理该worker上的shard
                 {
                     MprpcChannel sched_channel;
                     SchedulerService_Stub sched_stub(&sched_channel);
@@ -268,7 +226,7 @@ static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
                                  w.worker_id.c_str(),
                                  nw_ctrl.Failed() ? nw_ctrl.ErrorText().c_str()
                                                   : nw_resp.error_msg().c_str());
-                        // 阶段 8 #11：RPC 失败时加入待重试集合
+                        // RPC 失败时加入待重试集合
                         std::lock_guard<std::mutex> lock(notify_mutex);
                         pending_notify.insert(w.worker_id);
                     }
@@ -276,7 +234,7 @@ static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
             }
         }
 
-        // ── 2. 阶段 8 #11：重试之前失败的 NotifyWorkerOffline ─────
+        // 重试之前失败的 NotifyWorkerOffline（增加代码健壮性）
         {
             std::vector<std::string> to_retry;
             {
@@ -286,11 +244,7 @@ static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
 
             for (const auto& worker_id : to_retry)
             {
-                // #5 修复：重试前复查 worker 存活状态。
-                // 场景：网络分区 20s 被标 OFFLINE → 通知失败入集合 →
-                // worker 心跳恢复（UpdateHeartbeat 置回 ONLINE）→ 若仍重发
-                // NotifyWorkerOffline，Scheduler 会把存活 worker 正在执行的
-                // shard 重置 WAITING 重新分配 → 双份转码。
+                // 重试前复查 worker 存活状态
                 auto w_opt = WorkerStore::GetInstance().Get(worker_id);
                 if (w_opt.has_value()
                     && w_opt->status == static_cast<int32_t>(WorkerStatus::WORKER_ONLINE))
@@ -302,7 +256,7 @@ static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
                     pending_notify.erase(worker_id);
                     continue;
                 }
-
+                // 这次是真死了，而且RPC还失败了，那就再试一次
                 MprpcChannel sched_channel;
                 SchedulerService_Stub sched_stub(&sched_channel);
 
@@ -323,6 +277,7 @@ static void HeartbeatTimeoutCheck(std::atomic<bool>& stop_flag)
                     std::lock_guard<std::mutex> lock(notify_mutex);
                     pending_notify.erase(worker_id);
                 }
+                // 还是失败,那就继续在pending_notify里等待下层次RPC调用，直到成功
                 else
                 {
                     LOG_WARN("WorkerManager: retry NotifyWorkerOffline still failed for %s: %s",

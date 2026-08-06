@@ -538,41 +538,6 @@ VideoInfo FfmpegExecutor::Probe(const std::string& input_path)
 }
 
 // ============================================================================
-// Slice — 视频切片（fork+execvp，不走 shell）
-// ============================================================================
-
-FfmpegResult FfmpegExecutor::Slice(const std::string& input_path,
-                                    int64_t start_ms,
-                                    int64_t duration_ms,
-                                    const std::string& output_path)
-{
-    MakeDirs(output_path.substr(0, output_path.find_last_of('/')));
-
-    std::vector<std::string> args = {
-        "ffmpeg", "-y",
-        "-ss", std::to_string(start_ms / 1000.0),
-        "-t",  std::to_string(duration_ms / 1000.0),
-        "-i", input_path,
-        "-c:v", "libx264", "-preset", "ultrafast", "-c:a", "aac",
-        output_path
-    };
-
-    FfmpegResult result = ExecuteCommand(args);
-    if (result.success)
-    {
-        result.output_path = output_path;
-        struct stat st;
-        if (stat(output_path.c_str(), &st) != 0 || st.st_size == 0)
-        {
-            result.success   = false;
-            result.exit_code = -1;
-            result.error_msg = "slice output file is empty or missing: " + output_path;
-        }
-    }
-    return result;
-}
-
-// ============================================================================
 // Transcode — 视频转码（fork+execvp，不走 shell，修复进度百分比）
 // ============================================================================
 
@@ -650,42 +615,6 @@ FfmpegResult FfmpegExecutor::Transcode(const std::string& input_path,
     }
 
     FfmpegResult result = ExecuteCommand(args, wrapped_cb, should_cancel);
-    if (result.success)
-    {
-        result.output_path = output_path;
-    }
-    return result;
-}
-
-// ============================================================================
-// Screenshot — 截图
-// ============================================================================
-//
-// 阶段6遗留项5：转码成功后由 FfmpegExecute 调用，截取
-// start_ms + duration_ms/2 时间点单帧，随 ReportShardResult 上报
-// （screenshot_path 字段，写入 ShardRecord）。目前下游无消费方。
-//
-// -ss 在 -i 前 = fast input seeking（先跳到最近关键帧再精确解码），
-// 只解码一个 GOP 而非从头解码。
-//
-// ⚠️ 已知问题：命令拼接仅双引号包裹路径 → 命令注入（#4）。
-// ============================================================================
-
-FfmpegResult FfmpegExecutor::Screenshot(const std::string& input_path,
-                                         int64_t timestamp_ms,
-                                         const std::string& output_path)
-{
-    MakeDirs(output_path.substr(0, output_path.find_last_of('/')));
-
-    std::vector<std::string> args = {
-        "ffmpeg", "-y",
-        "-ss", std::to_string(timestamp_ms / 1000.0),
-        "-i", input_path,
-        "-vframes", "1",
-        output_path
-    };
-
-    FfmpegResult result = ExecuteCommand(args);
     if (result.success)
     {
         result.output_path = output_path;

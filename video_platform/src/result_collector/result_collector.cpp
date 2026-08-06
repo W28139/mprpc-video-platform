@@ -90,38 +90,6 @@ public:
     static void TerminalSweepLoop(std::atomic<bool>& stop_flag);
 
     /// @brief Worker 上报 shard 执行进度
-    /// @brief Worker 执行期间的周期进度上报（0-100，Mock 每 1 秒一次）
-    ///
-    /// ⚠️ 当前为「仅日志」接口：收到进度只打 LOG_INFO，不做任何落库
-    /// 或状态更新——`ShardInfo` 没有 progress 字段，平台上也不存在
-    /// 消费该进度的下游（`QueryJob` 只返回状态机，不带百分比）。
-    ///
-    /// 实时进度如需对外展示（如前端进度条），需要：
-    /// 1. `common.proto` 的 ShardInfo 增加 progress 字段
-    /// 2. 本方法将进度写入 ShardStore
-    /// 3. `QueryJob` / `QueryShard` 响应中透出该字段
-    ///
-    /// @note 直连 Worker 的 QueryShard 可查询实时进度（读 Worker 内存），
-    ///       不经由此接口，因此这里不维护进度状态也不会丢失信息。
-    void ReportShardProgress(::google::protobuf::RpcController* controller,
-                             const ::ReportShardProgressRequest* request,
-                             ::ReportShardProgressResponse* response,
-                             ::google::protobuf::Closure* done) override
-    {
-        LOG_INFO("ResultCollectorService::ReportShardProgress job_id=%s, shard_id=%s, "
-                 "worker=%s, attempt=%s, progress=%d%%",
-                 request->job_id().c_str(),
-                 request->shard_id().c_str(),
-                 request->worker_id().c_str(),
-                 request->attempt_id().c_str(),
-                 request->progress());
-
-        response->set_error_code(0);
-        response->set_error_msg("");
-        response->set_recorded(true);
-        done->Run();
-    }
-
     /// @brief Worker 上报 shard 最终执行结果（聚合核心入口 — 阶段 5 增强）
     ///
     /// 由 WorkerServiceImpl::MockExecute() 在 shard 执行完成后调用。
@@ -246,7 +214,6 @@ public:
             shard.attempt_id = attempt_id;
             shard.assigned_worker_id = worker_id;
             shard.output_path = request->output_path();
-            shard.screenshot_path = request->screenshot_path();
             shard.updated_at = NowMs();
             ShardStore::GetInstance().UpdateIfStatus(shard_id, {from_status}, shard);
         }
@@ -257,7 +224,7 @@ public:
                  attempt_id.c_str());
 
         // 阶段 10：shard 状态推进后失效进度缓存，让 QueryJob 及时看到新状态。
-        // 进行中的进度变化（ReportShardProgress）靠 60s TTL 过期自然刷新；
+        // 进行中状态（RUNNING）靠 60s TTL 过期自然刷新；
         // 结果落定（SUCCESS/FAILED）则主动 DEL，终态判定不滞后。
         // Redis 不可用时静默跳过（降级）。
         {

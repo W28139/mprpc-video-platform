@@ -27,7 +27,7 @@ static const char* kCreateTables[] = {
         "assigned_worker VARCHAR(64) NOT NULL DEFAULT '', attempt_id VARCHAR(128) NOT NULL DEFAULT '', "
         "retry_count INT NOT NULL DEFAULT 0, max_retry INT NOT NULL DEFAULT 3, "
         "input_path VARCHAR(512) NOT NULL DEFAULT '', output_path VARCHAR(512) NOT NULL DEFAULT '', "
-        "screenshot_path VARCHAR(512) NOT NULL DEFAULT '', target_resolution VARCHAR(16) NOT NULL DEFAULT '', "
+        "target_resolution VARCHAR(16) NOT NULL DEFAULT '', "
         "target_bitrate INT NOT NULL DEFAULT 0, created_at BIGINT NOT NULL DEFAULT 0, "
         "updated_at BIGINT NOT NULL DEFAULT 0, PRIMARY KEY (shard_id), "
         "INDEX idx_job (job_id), INDEX idx_worker (assigned_worker), INDEX idx_status (status)"

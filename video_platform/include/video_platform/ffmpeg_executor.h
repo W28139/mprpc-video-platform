@@ -29,7 +29,7 @@ struct FfmpegResult {
     bool        success     = false;   ///< 命令是否执行成功（退出码 == 0）
     int         exit_code   = 0;       ///< 进程退出码
     std::string error_msg;             ///< 失败时的 stderr 摘要（最多 512 字节）
-    std::string output_path;           ///< 输出文件路径（Slice / Transcode 调用后回填）
+    std::string output_path;           ///< 输出文件路径（Transcode / Merge 调用后回填）
     int64_t     elapsed_ms  = 0;       ///< 实际耗时（毫秒）
 };
 
@@ -52,9 +52,6 @@ struct VideoInfo {
 ///   // 探测视频
 ///   auto info = FfmpegExecutor::Probe("/path/to/video.mp4");
 ///   if (!info.valid) { ... }
-///
-///   // 切片
-///   auto slice = FfmpegExecutor::Slice("/path/to/video.mp4", 0, 10000, "/tmp/part_0.mp4");
 ///
 ///   // 转码（带进度回调）
 ///   auto result = FfmpegExecutor::Transcode(
@@ -87,26 +84,6 @@ public:
     /// 解析失败时返回 valid=false。
     static VideoInfo Probe(const std::string& input_path);
 
-    // ── 视频切片 ───────────────────────────────────────────────────────────
-
-    /// @brief 按时间范围从视频中切片
-    /// @param input_path   输入视频文件路径
-    /// @param start_ms     切片起始时间（毫秒）
-    /// @param duration_ms  切片时长（毫秒）
-    /// @param output_path  输出切片文件路径
-    /// @return FfmpegResult，success=true 表示切片成功
-    ///
-    /// 执行命令：
-    ///   ffmpeg -y -ss {start_ms}ms -t {duration_ms}ms -i {input_path}
-    ///          -c copy -avoid_negative_ts make_zero {output_path}
-    ///
-    /// 使用 -c copy 进行流复制（不重新编码），速度快但不保证关键帧精确对齐。
-    /// 切片时间点可能被调整到最近的关键帧，这是第一版的已知限制。
-    static FfmpegResult Slice(const std::string& input_path,
-                              int64_t start_ms,
-                              int64_t duration_ms,
-                              const std::string& output_path);
-
     // ── 视频转码 ───────────────────────────────────────────────────────────
 
     /// @brief 转码视频（可指定分辨率、码率、时间范围，带进度回调和取消检查）
@@ -137,20 +114,6 @@ public:
                                   int64_t duration_ms,
                                   std::function<void(int)> progress_callback,
                                   std::function<bool()> should_cancel = nullptr);
-
-    // ── 截图 ───────────────────────────────────────────────────────────────
-
-    /// @brief 在视频指定时间点截图
-    /// @param input_path   输入视频文件路径
-    /// @param timestamp_ms 截图时间点（毫秒）
-    /// @param output_path  输出图片路径（.jpg / .png）
-    /// @return FfmpegResult，success=true 表示截图成功
-    ///
-    /// 执行命令：
-    ///   ffmpeg -y -ss {timestamp_ms}ms -i {input_path} -vframes 1 {output_path}
-    static FfmpegResult Screenshot(const std::string& input_path,
-                                   int64_t timestamp_ms,
-                                   const std::string& output_path);
 
     // ── 视频合并 ───────────────────────────────────────────────────────────
 

@@ -70,10 +70,8 @@ namespace video_platform {
 enum JobStatus : int {
   JOB_STATUS_UNKNOWN = 0,
   JOB_PENDING = 1,
-  JOB_SPLITTING = 2,
   JOB_SCHEDULING = 3,
   JOB_RUNNING = 4,
-  JOB_MERGING = 5,
   JOB_SUCCESS = 6,
   JOB_FAILED = 7,
   JOB_CANCELED = 8,
@@ -101,7 +99,6 @@ inline bool JobStatus_Parse(
 }
 enum ShardStatus : int {
   SHARD_STATUS_UNKNOWN = 0,
-  SHARD_CREATED = 1,
   SHARD_WAITING = 2,
   SHARD_ASSIGNED = 3,
   SHARD_RUNNING = 4,
@@ -135,13 +132,12 @@ enum WorkerStatus : int {
   WORKER_STATUS_UNKNOWN = 0,
   WORKER_ONLINE = 1,
   WORKER_OFFLINE = 2,
-  WORKER_DRAINING = 3,
   WorkerStatus_INT_MIN_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::min(),
   WorkerStatus_INT_MAX_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::max()
 };
 bool WorkerStatus_IsValid(int value);
 constexpr WorkerStatus WorkerStatus_MIN = WORKER_STATUS_UNKNOWN;
-constexpr WorkerStatus WorkerStatus_MAX = WORKER_DRAINING;
+constexpr WorkerStatus WorkerStatus_MAX = WORKER_OFFLINE;
 constexpr int WorkerStatus_ARRAYSIZE = WorkerStatus_MAX + 1;
 
 const ::PROTOBUF_NAMESPACE_ID::EnumDescriptor* WorkerStatus_descriptor();
@@ -1233,9 +1229,6 @@ class WorkerLoad final :
     kCpuUsageFieldNumber = 2,
     kMemoryUsageFieldNumber = 3,
     kRunningShardsFieldNumber = 4,
-    kFinishedShardsFieldNumber = 5,
-    kTimestampFieldNumber = 7,
-    kFailedShardsFieldNumber = 6,
   };
   // string worker_id = 1;
   void clear_worker_id();
@@ -1278,33 +1271,6 @@ class WorkerLoad final :
   void _internal_set_running_shards(int32_t value);
   public:
 
-  // int32 finished_shards = 5;
-  void clear_finished_shards();
-  int32_t finished_shards() const;
-  void set_finished_shards(int32_t value);
-  private:
-  int32_t _internal_finished_shards() const;
-  void _internal_set_finished_shards(int32_t value);
-  public:
-
-  // int64 timestamp = 7;
-  void clear_timestamp();
-  int64_t timestamp() const;
-  void set_timestamp(int64_t value);
-  private:
-  int64_t _internal_timestamp() const;
-  void _internal_set_timestamp(int64_t value);
-  public:
-
-  // int32 failed_shards = 6;
-  void clear_failed_shards();
-  int32_t failed_shards() const;
-  void set_failed_shards(int32_t value);
-  private:
-  int32_t _internal_failed_shards() const;
-  void _internal_set_failed_shards(int32_t value);
-  public:
-
   // @@protoc_insertion_point(class_scope:video_platform.WorkerLoad)
  private:
   class _Internal;
@@ -1317,9 +1283,6 @@ class WorkerLoad final :
     int32_t cpu_usage_;
     int32_t memory_usage_;
     int32_t running_shards_;
-    int32_t finished_shards_;
-    int64_t timestamp_;
-    int32_t failed_shards_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -2746,66 +2709,6 @@ inline void WorkerLoad::_internal_set_running_shards(int32_t value) {
 inline void WorkerLoad::set_running_shards(int32_t value) {
   _internal_set_running_shards(value);
   // @@protoc_insertion_point(field_set:video_platform.WorkerLoad.running_shards)
-}
-
-// int32 finished_shards = 5;
-inline void WorkerLoad::clear_finished_shards() {
-  _impl_.finished_shards_ = 0;
-}
-inline int32_t WorkerLoad::_internal_finished_shards() const {
-  return _impl_.finished_shards_;
-}
-inline int32_t WorkerLoad::finished_shards() const {
-  // @@protoc_insertion_point(field_get:video_platform.WorkerLoad.finished_shards)
-  return _internal_finished_shards();
-}
-inline void WorkerLoad::_internal_set_finished_shards(int32_t value) {
-  
-  _impl_.finished_shards_ = value;
-}
-inline void WorkerLoad::set_finished_shards(int32_t value) {
-  _internal_set_finished_shards(value);
-  // @@protoc_insertion_point(field_set:video_platform.WorkerLoad.finished_shards)
-}
-
-// int32 failed_shards = 6;
-inline void WorkerLoad::clear_failed_shards() {
-  _impl_.failed_shards_ = 0;
-}
-inline int32_t WorkerLoad::_internal_failed_shards() const {
-  return _impl_.failed_shards_;
-}
-inline int32_t WorkerLoad::failed_shards() const {
-  // @@protoc_insertion_point(field_get:video_platform.WorkerLoad.failed_shards)
-  return _internal_failed_shards();
-}
-inline void WorkerLoad::_internal_set_failed_shards(int32_t value) {
-  
-  _impl_.failed_shards_ = value;
-}
-inline void WorkerLoad::set_failed_shards(int32_t value) {
-  _internal_set_failed_shards(value);
-  // @@protoc_insertion_point(field_set:video_platform.WorkerLoad.failed_shards)
-}
-
-// int64 timestamp = 7;
-inline void WorkerLoad::clear_timestamp() {
-  _impl_.timestamp_ = int64_t{0};
-}
-inline int64_t WorkerLoad::_internal_timestamp() const {
-  return _impl_.timestamp_;
-}
-inline int64_t WorkerLoad::timestamp() const {
-  // @@protoc_insertion_point(field_get:video_platform.WorkerLoad.timestamp)
-  return _internal_timestamp();
-}
-inline void WorkerLoad::_internal_set_timestamp(int64_t value) {
-  
-  _impl_.timestamp_ = value;
-}
-inline void WorkerLoad::set_timestamp(int64_t value) {
-  _internal_set_timestamp(value);
-  // @@protoc_insertion_point(field_set:video_platform.WorkerLoad.timestamp)
 }
 
 #ifdef __GNUC__

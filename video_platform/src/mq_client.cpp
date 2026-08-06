@@ -228,6 +228,7 @@ bool MqClient::ConnectConsume()
     return true;
 }
 
+
 bool MqClient::PublishShardWaiting(const std::string& shard_id)
 {
     std::lock_guard<std::mutex> lock(publish_mutex_);

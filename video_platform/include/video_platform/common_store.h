@@ -115,7 +115,6 @@ struct ShardRecord {
     int32_t     max_retry = 3;         ///< 最大重试次数（默认 3）
     std::string input_path;            ///< 输入文件路径（通常与 job 相同或切片路径）
     std::string output_path;           ///< 输出文件路径
-    std::string screenshot_path;       ///< 截图文件路径（转码成功后自动截取）
     std::string target_resolution;     ///< 目标分辨率（如 "1280x720"），从 JobInfo 透传
     int32_t     target_bitrate = 0;    ///< 目标码率（kbps），0=保持原码率，从 JobInfo 透传
     int64_t     created_at = 0;        ///< 创建时间戳（毫秒）
@@ -234,8 +233,10 @@ public:
     // ── 原子方法（单条条件 SQL，MySQL 服务端原子执行，消除 TOCTOU 竞争） ──
 
     /// @brief 原子更新心跳时间戳、运行中 shard 数、CPU/内存使用率。
-    /// 单条 UPDATE ... WHERE worker_id，未命中（worker 不存在）返回 false。
-    /// @return true 表示 worker_id 存在且已更新，false 表示未找到。
+    /// 单条 UPDATE ... WHERE worker_id AND status<>OFFLINE，
+    /// 未命中（worker 不存在或已被标记 OFFLINE）返回 false，不再刷新记录。
+    /// 已 OFFLINE 的 Worker 必须重新注册（InsertOrUpdate）才能恢复 ONLINE。
+    /// @return true 表示记录存在且未死亡，已更新；false 表示未找到或已标记死亡。
     bool UpdateHeartbeat(const std::string& worker_id, int32_t running_shards,
                          int32_t cpu_usage = 0, int32_t memory_usage = 0);
 

@@ -22,66 +22,10 @@
 
 using namespace video_platform;
 
-// ============================================================================
-// SchedulerService — 任务切分、调度与故障恢复（阶段 5：完整重试链路）
-// ============================================================================
-//
-// Scheduler 是系统中最核心的调度节点。它负责：
-// 1. ScheduleJob：接收 JobService 提交的 job，按时间切片拆分为 N 个 shard
-// 2. RescheduleShard：接收来自 ResultCollector（Worker 执行失败）或
-//    NotifyWorkerOffline（Worker 心跳超时）的重调度请求
-// 3. NotifyWorkerOffline：Worker 心跳超时后，批量重调度该 Worker 的 RUNNING shard
-// 4. SchedulingLoop（后台线程）：Pull 模式循环扫描 WAITING shard，
-//    从 WorkerManager 拉取 ONLINE Worker，贪心匹配并 AssignShard
-//
-// 阶段 5 核心增强：
-// - RescheduleShard 完整实现：
-//   retry_count >= max_retry → 永久 SHARD_FAILED → CheckAndMarkJobFailed → 可能 JOB_FAILED
-//   retry_count <  max_retry → retry_count++ → SHARD_RETRYING → SHARD_WAITING → 下一轮重分配
-// - NotifyWorkerOffline：遍历该 Worker 的所有 ASSIGNED/RUNNING shard，逐个执行重调度
-// - 启动恢复：SchedulingLoop 首次运行时扫描残留的 ASSIGNED/RUNNING shard，
-//   重置为 WAITING（不增加 retry_count，因为是 Scheduler 崩溃，不是 Worker 故障）
-// - CheckAndMarkJobFailed：当 RescheduleShard 标记 SHARD_FAILED 后，
-//   检查该 job 所有 shard 是否都进入终态，若是且有 FAILED → JOB_FAILED
-// 阶段 9（MySQL 持久化）：
-// - 三个 Store 以 MySQL 为唯一数据源，多进程天然共享同一份数据
-// - 删除跨进程同步：UpdateJobStatus RPC / NotifyJobServiceStatus /
-//   ScheduleJob 反向通知全部移除（JobService 直接查 MySQL）
-// - 状态推进一律用 UpdateIfStatus（快照前置状态作条件），
-//   防止旧快照覆盖其他进程已推进的状态（如 RC 写入的 SUCCESS）
-//
-// ⚠️ 阶段 9 起：JobStore/ShardStore 以 MySQL 为唯一数据源，多进程共享
-// 同一份数据，跨进程状态同步不再需要 RPC（JobService/ResultCollector 直接读 MySQL）。
 
-/// @brief SchedulerService RPC 实现
-///
-/// 阶段 5 实现：
-/// - ScheduleJob：将 job 按时间切片拆分为 N 个 shard，写入 ShardStore
-/// - RescheduleShard：完整重试逻辑（retry_count vs max_retry → FAILED 或 WAITING）
-/// - NotifyWorkerOffline：Worker 心跳超时后，重调度该 Worker 的 RUNNING shard
-///
-/// 后台线程 SchedulingLoop 周期扫描 WAITING shard，匹配 ONLINE Worker
-/// 并通过直连调用 WorkerService.AssignShard 分配。
-///
-/// 启动恢复：SchedulingLoop 首次运行时扫描残留的 ASSIGNED/RUNNING shard，
-/// 重置为 WAITING（不增加 retry_count），应对 Scheduler 自身崩溃。
-///
-/// ⚠️ 跨进程存储：JobStore/ShardStore 是进程内单例。
-
-// #2 修复：串行化 ScheduleJob 的「幂等检查 + ffprobe 探测 + 切分落库」。
-// SubmitJob 的内联重试与 JobService 的 PendingScanLoop 可对同一 job 并发调用
-// ScheduleJob：若无互斥，两个请求都看到空 shard 集，会各自探测并混合落库
-// （如 4 片计划与 8 片计划的 shard 交错），shard 集合与 shard_count 不一致。
-// ScheduleJob 是低频路径（job 提交/重试），全局互斥足够。
 static std::mutex g_schedule_job_mutex;
 
-// #17 修复：提取统一的「job 终态判定 + shard 终态守卫」helper，
-// 替换 NotifyWorkerOffline / ASSIGNED 重扫 / RUNNING 重扫 / 分配循环
-// 四处重复的 ~15 行拷贝（此前已发生漂移——WAITING 分支漏清
-// assigned_worker_id/attempt_id；RescheduleShard 漏贴守卫正是同类拷贝
-// 漂移的实例）。仅操作单例 Store，可被成员函数与静态线程函数共用。
-
-/// @brief job 是否已到达终态（SUCCESS/FAILED/CANCELED）
+// job 是否已到达终态（SUCCESS/FAILED/CANCELED）
 static bool IsJobTerminal(int32_t job_status)
 {
     return job_status == static_cast<int32_t>(JobStatus::JOB_CANCELED)
@@ -89,18 +33,19 @@ static bool IsJobTerminal(int32_t job_status)
         || job_status == static_cast<int32_t>(JobStatus::JOB_FAILED);
 }
 
-/// @brief 若 job 已终态，把 shard 标记为 CANCELED（终态任务的残留执行
-///        不得被重新分配/重调度），已写入 Store。
-/// @return true=job 终态且 shard 已被标记 CANCELED；false=job 非终态
+// 若 job 已终态，把 shard 标记为 CANCELED（终态任务的残留执行不得被重新分配/重调度）。
 static bool MarkShardCanceledIfJobTerminal(const std::string& shard_id,
                                            const std::string& job_id,
                                            ShardRecord& shard)
 {
+    // 看看Job存不存在
     auto j_opt = JobStore::GetInstance().Get(job_id);
     if (!j_opt.has_value()) return false;
+    // 看看job有没有进入终态
     if (!IsJobTerminal(j_opt->status)) return false;
 
-    int from_status = shard.status;   // 快照前置状态（条件更新防覆盖并发推进）
+    // 进入终态，代表Job结束，分配已经完成，重置该分片，设置状态
+    int from_status = shard.status; 
     shard.status = static_cast<int32_t>(ShardStatus::SHARD_CANCELED);
     shard.assigned_worker_id.clear();
     shard.attempt_id.clear();
@@ -109,49 +54,31 @@ static bool MarkShardCanceledIfJobTerminal(const std::string& shard_id,
     return true;
 }
 
-/// @brief 发布 shard 等待分配事件（shard.waiting 队列）。
-///
-/// 阶段 10 第 2 批：Pull→Push。任何 shard 状态变为 WAITING 的路径都应调用，
-/// 让 Scheduler 的 MQ 消费线程立即分配，替代"等 SchedulingLoop 轮询"。
-/// 调用点：ScheduleJob 切分新建 / RescheduleShard 重试 / NotifyWorkerOffline
-/// 离线重置 / SchedulingLoop 超时重扫与启动恢复重置。
-///
-/// 失败语义：发布失败只 WARN 不重试——SchedulingLoop 兜底扫描（MQ 在线时
-/// 降频 5s）仍会扫到该 shard 分配，任务不丢，只是延迟退化为轮询。
-static void PublishShardWaiting(const std::string& shard_id)
+        
+// 任何 shard 状态变为 WAITING 的路径都应调用，让 Scheduler 的 MQ 消费线程立即分配
+static void NotifyShardWaiting(const std::string& shard_id)
 {
-    auto& mq = MqClient::GetInstance();
-    if (!mq.inited() || !mq.enabled()) return;
-    if (!mq.PublishShardWaiting(shard_id))
+    auto& mq = MqClient::GetInstance();         // 获取mq实例
+    if (!mq.inited() || !mq.enabled()) return;  // 门卫：没启用就静默跳过
+
+    // 发布 shard.waiting 事件：Push 即时分配, 失败退化为轮询兜底
+    if (!mq.PublishShardWaiting(shard_id)) 
     {
-        LOG_WARN("PublishShardWaiting: publish %s failed, fallback to "
+        LOG_WARN("NotifyShardWaiting: publish %s failed, fallback to "
                  "SchedulingLoop polling", shard_id.c_str());
     }
 }
 
 class SchedulerServiceImpl : public SchedulerService {
 public:
-    /// @brief 对 job 进行切分并启动调度
-    ///
-    /// 由 JobService.SubmitJob() 通过 ZK 发现的 SchedulerService_Stub 调用。
-    ///
-    /// 步骤：
-    /// 1. 从请求的 JobInfo 构造/获取本地 JobRecord 副本（首次调用时本地不存在）
-    /// 2. ffprobe 探测真实视频时长，失败则回退到 job_duration_fallback_sec
-    /// 3. 计算 shard_count = job_duration / shard_duration，最少 1 个
-    /// 4. 创建 ShardRecord 写入 ShardStore（status=WAITING，由 SchedulingLoop 异步分配）
-    /// 5. 更新 Job 状态 → SCHEDULING，回填 shard_count
-    ///
-    /// @note 本方法只做切分和写入，不做 Worker 分配。
-    ///       Worker 分配由后台 SchedulingLoop 异步完成，"Pull 模式"。
-    /// 3. 计算 shard 数量并按时间切片创建 ShardRecord
-    /// 4. 写入 ShardStore，更新 JobStore
+    //  对 job 进行切分并启动调度
+    // 由 JobService.SubmitJob() 通过 ZK 发现的 SchedulerService_Stub 调用。
+    // 本方法只做切分和写入，不做 Worker 分配。
     void ScheduleJob(::google::protobuf::RpcController* controller,
                      const ::ScheduleJobRequest* request,
                      ::ScheduleJobResponse* response,
                      ::google::protobuf::Closure* done) override
     {
-        // #2 修复：整体加锁——幂等早退检查、ffprobe 探测、切分落库
         // 必须作为原子单元，防止并发 ScheduleJob 混合分片计划。
         std::lock_guard<std::mutex> schedule_lock(g_schedule_job_mutex);
 
@@ -161,59 +88,21 @@ public:
         LOG_INFO("SchedulerService::ScheduleJob job_id=%s, input=%s",
                  job_id.c_str(), jobInfo.input_path().c_str());
 
-        // 1. 从请求的 JobInfo 创建本地 JobRecord 副本
-        //    （JobStore 是进程内单例，Scheduler 进程需要自己的本地副本，
-        //     JobService 写入的数据在另一个进程的 JobStore 中，不可见）
+        
+        // 获取Job实例,从数据库读取该job数据
         JobRecord local_job;
         bool job_exists = false;
         auto existing = JobStore::GetInstance().Get(job_id);
+        // 读取成功
         if (existing.has_value())
         {
-            // 已有本地副本：可能是 JobService 重试导致 ScheduleJob 被调用多次
+            // 拿到jobstore实例
             local_job = existing.value();
             job_exists = true;
-
-            // 检测是否之前对该job已经分过shard了
-            // 阶段 8 #14：若已有 shard，幂等早退——不再重新探测/切分，
-            // 避免重复 ffprobe + 生成超 EOF 的冗余 shard
-            auto existing_shards = ShardStore::GetInstance().ListByJob(job_id);
-            if (!existing_shards.empty())
-            {
-                LOG_INFO("SchedulerService::ScheduleJob job_id=%s: already has %zu shards, "
-                         "returning existing plan (idempotent, fix #14)",
-                         job_id.c_str(), existing_shards.size());
-
-                response->set_error_code(0);
-                response->set_error_msg("");
-                response->set_accepted(true);
-                response->set_shard_count(static_cast<int32_t>(existing_shards.size()));
-                // 把分片信息传回去
-                for (const auto& s : existing_shards)
-                {
-                    auto* si = response->add_shards();
-                    si->set_shard_id(s.shard_id);
-                    si->set_job_id(s.job_id);
-                    si->set_shard_index(s.shard_index);
-                    si->set_start_ms(s.start_ms);
-                    si->set_duration_ms(s.duration_ms);
-                    si->set_status(static_cast<ShardStatus>(s.status));
-                    si->set_retry_count(s.retry_count);
-                    si->set_max_retry(s.max_retry);
-                    si->set_input_path(s.input_path);
-                    si->set_output_path(s.output_path);
-                    si->set_target_resolution(s.target_resolution);
-                    si->set_target_bitrate(s.target_bitrate);
-                    si->set_created_at(s.created_at);
-                    si->set_updated_at(s.updated_at);
-                }
-                done->Run();
-                return;
-            }
         }
+        // 数据库没有的话，就从request里直接拿，然后放入数据库中
         else
         {
-            // 首次调度：从 RPC 请求的 proto JobInfo 构造本地 JobRecord
-            // proto JobInfo 不含 shard_duration_sec，该字段使用配置默认值
             local_job.job_id             = jobInfo.job_id();
             local_job.user_id            = jobInfo.user_id();
             local_job.input_path         = jobInfo.input_path();
@@ -224,21 +113,56 @@ public:
             local_job.priority           = jobInfo.priority();
             local_job.status             = static_cast<int32_t>(JobStatus::JOB_PENDING);
             local_job.shard_count        = 0;
-            local_job.shard_duration_sec = jobInfo.shard_duration_sec();  // 从 JobInfo proto 读取用户指定值
+            local_job.shard_duration_sec = jobInfo.shard_duration_sec(); 
             local_job.created_at         = NowMs();
             local_job.updated_at         = NowMs();
             JobStore::GetInstance().Insert(local_job);
             LOG_INFO("SchedulerService::ScheduleJob job_id=%s: created local copy from request",
                      job_id.c_str());
         }
+        // 判断该jobstore是否已经切过片(比如之前调用过，只不过失败了需要重试)
+        auto existing_shards = ShardStore::GetInstance().ListByJob(job_id);
+        // 存在的话就直接传回去数据
+        if (!existing_shards.empty())
+        {
+            LOG_INFO("SchedulerService::ScheduleJob job_id=%s: already has %zu shards, "
+                     "returning existing plan (idempotent, fix #14)",
+                     job_id.c_str(), existing_shards.size());
 
-        // 2. 探测视频真实时长，确定切分参数
-        // 拿到 mprpc 框架全局配置对象的引用
-        auto& config = MprpcApplication::GetConfig();
-        // 用 ffprobe 探测输入视频的真实时长（阶段 6）
+            response->set_error_code(0);
+            response->set_error_msg("");
+            response->set_accepted(true);
+            response->set_shard_count(static_cast<int32_t>(existing_shards.size()));
+            // 把分片信息传回去
+            for (const auto& s : existing_shards)
+            {
+                auto* si = response->add_shards();
+                si->set_shard_id(s.shard_id);
+                si->set_job_id(s.job_id);
+                si->set_shard_index(s.shard_index);
+                si->set_start_ms(s.start_ms);
+                si->set_duration_ms(s.duration_ms);
+                si->set_status(static_cast<ShardStatus>(s.status));
+                si->set_retry_count(s.retry_count);
+                si->set_max_retry(s.max_retry);
+                si->set_input_path(s.input_path);
+                si->set_output_path(s.output_path);
+                si->set_target_resolution(s.target_resolution);
+                si->set_target_bitrate(s.target_bitrate);
+                si->set_created_at(s.created_at);
+                si->set_updated_at(s.updated_at);
+            }
+            done->Run();
+            return;
+        }
+
+        // 确定切分参数
+        auto& config = MprpcApplication::GetConfig();   // 拿到 mprpc 框架全局配置对象的引用
         int64_t job_duration_ms = 0;
         {
             auto video_info = FfmpegExecutor::Probe(local_job.input_path);
+            
+            // 调用Probe方法,探测视频真实时长
             if (video_info.valid && video_info.duration_ms > 0)
             {
                 job_duration_ms = video_info.duration_ms;
@@ -248,9 +172,9 @@ public:
                          video_info.width, video_info.height,
                          video_info.codec_name.c_str());
             }
+            // 探测失败时回退到配置默认值
             else
             {
-                // 探测失败时回退到配置默认值（兼容非视频输入）
                 int fallback_sec = config.LoadInt("job_duration_fallback_sec", 60, 1, 86400);
                 job_duration_ms = static_cast<int64_t>(fallback_sec) * 1000;
                 LOG_WARN("SchedulerService::ScheduleJob job_id=%s: ffprobe failed, "
@@ -265,7 +189,7 @@ public:
                             : config.LoadInt("shard_duration_sec", 20, 1, 3600);
         int64_t shard_duration_ms = static_cast<int64_t>(shard_dur_sec) * 1000;
 
-        // 按真实时长计算 shard 数量
+        // 按真实时长计算 shard 数量,切片小于1的就直接按1
         int shard_count = static_cast<int>((job_duration_ms + shard_duration_ms - 1)
                                            / shard_duration_ms);
         if (shard_count < 1) shard_count = 1;
@@ -275,14 +199,12 @@ public:
                  job_id.c_str(), shard_count,
                  (long long)job_duration_ms, (long long)shard_duration_ms);
 
-        // 3. 更新 Job 状态 → SPLITTING，回填真实时长
-        local_job.status = static_cast<int32_t>(JobStatus::JOB_SPLITTING);
+        // 回填真实时长并落库（切分完成后统一置 SCHEDULING）
         local_job.duration_sec = job_duration_ms / 1000;
         local_job.updated_at = NowMs();
-        // JobStore类中，是存放所有JobRecord,用哈希表存放，提供多种更新方法
         JobStore::GetInstance().Update(job_id, local_job);
 
-        // 4. 按时间切片创建 ShardRecord
+        // 按时间切片创建 ShardRecord
         std::vector<ShardRecord> created_shards;
         for (int i = 0; i < shard_count; ++i)
         {
@@ -292,7 +214,8 @@ public:
                                 ? (job_duration_ms - shard_start)
                                 : shard_duration_ms;
             if (shard_dur <= 0) shard_dur = shard_duration_ms;  // 防御
-
+            
+            // 创建该job对应的每个切片shard实例，每个切片初始化为wait状态
             ShardRecord shard;
             shard.shard_id    = job_id + "_shard_" + std::to_string(i);
             shard.job_id      = job_id;
@@ -318,6 +241,7 @@ public:
             shard.created_at       = NowMs();
             shard.updated_at       = NowMs();
 
+            // 把每个切片存入内存
             ShardStore::GetInstance().Insert(shard);
             created_shards.push_back(shard);
             LOG_INFO("SchedulerService: created shard %s [%lld-%lld ms]",
@@ -326,7 +250,7 @@ public:
                      (long long)(shard.start_ms + shard.duration_ms));
         }
 
-        // 5. 更新 Job 状态 → SCHEDULING，回填 shard_count
+        // 切完片及时更新该job状态，此时进入scheduling(正在为 shard 匹配 Worker)状态
         local_job.shard_count = shard_count;
         local_job.status = static_cast<int32_t>(JobStatus::JOB_SCHEDULING);
         local_job.updated_at = NowMs();
@@ -335,19 +259,11 @@ public:
         LOG_INFO("SchedulerService::ScheduleJob job_id=%s: %d shards created, status=SCHEDULING",
                  job_id.c_str(), shard_count);
 
-        // ── 阶段 10：发布 shard.waiting 事件（Push 调度） ───────────────
-        // 每个 shard 一条消息，消费端（本进程 MQ 线程）收到后立即分配，
-        // 替代"等 SchedulingLoop 轮询"（平均 1s 延迟 → <100ms）。
-        // 注意：路线图写"JobService → job.events"，实现上切分在
-        // Scheduler.ScheduleJob 完成，故发布端在 Scheduler（见 log11 Q&A）。
+        // 把每个切片shard，发布到消息队列
         for (const auto& s : created_shards)
         {
-            PublishShardWaiting(s.shard_id);
+            NotifyShardWaiting(s.shard_id);
         }
-
-        // ── 阶段 9：不再反向通知 JobService ─────────────────────────────
-        // MySQL 为唯一数据源：shard/jobs 表全链路共享，JobService 的
-        // QueryJob / PendingScanLoop 直接读取同一份数据，无需 RPC 同步。
 
         // 把shard切片信息传回去
         response->set_error_code(0);
@@ -356,7 +272,7 @@ public:
         response->set_job_id(job_id);
         response->set_shard_count(shard_count);  // 直接数据路径，避免侧信道依赖
 
-        // 将 shard 列表填入 response，让 JobService 可构造本地 ShardStore 副本
+        // 将 shard 列表填入 response（历史遗留，目前感觉保留意义不大）
         for (const auto& s : created_shards)
         {
             auto* si = response->add_shards();
@@ -375,7 +291,6 @@ public:
             si->set_created_at(s.created_at);
             si->set_updated_at(s.updated_at);
         }
-
         done->Run();
     }
 
@@ -533,7 +448,7 @@ public:
                  shard_id.c_str(), shard.retry_count, shard.max_retry);
 
         // 阶段 10：重试的 shard 也发事件立即重分配（不等轮询）
-        PublishShardWaiting(shard_id);
+        NotifyShardWaiting(shard_id);
 
         response->set_error_code(0);
         response->set_error_msg("");
@@ -541,11 +456,7 @@ public:
         done->Run();
     }
 
-    /// @brief Worker 心跳超时通知 — 重调度该 Worker 上所有运行中的 shard
-    ///
-    /// 由 WorkerManager 在检测到 Worker 心跳超时后调用。
-    /// 在本地 ShardStore 中查找该 Worker 的 ASSIGNED/RUNNING shard，
-    /// 逐个执行重调度逻辑（内联，避免递归 RPC）。
+    // Worker 心跳超时通知 — 重调度该 Worker 上所有运行中的 shard
     void NotifyWorkerOffline(::google::protobuf::RpcController* controller,
                              const ::NotifyWorkerOfflineRequest* request,
                              ::NotifyWorkerOfflineResponse* response,
@@ -559,8 +470,7 @@ public:
         auto shards = ShardStore::GetInstance().ListByWorker(worker_id);
         int rescheduled = 0;
 
-        // 条件更新前置状态：仅当 shard 仍是 ASSIGNED/RUNNING 时才重调度
-        // （RC 可能已并发写入 SUCCESS/FAILED，不得用旧快照覆盖）
+        // 仅当 shard 仍是 ASSIGNED/RUNNING 时才重调度
         constexpr int32_t s_assigned = static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED);
         constexpr int32_t s_running  = static_cast<int32_t>(ShardStatus::SHARD_RUNNING);
 
@@ -574,9 +484,7 @@ public:
             if (!fresh_opt.has_value()) continue;
             auto shard = fresh_opt.value();
 
-            // #17 修复：job 已终态（SUCCESS/FAILED/CANCELED）的 shard 不重调度。
-            // 此前 Worker 死亡会把已完成任务（ResultCollector 已标记 SUCCESS，但本进程 Store 未同步）的 shard 重置为 WAITING 并重新分配，
-            // 造成重复转码。终态任务的残留执行直接 CANCELED（helper 统一维护）。
+            // job 已终态（SUCCESS/FAILED/CANCELED）的 shard 不重调度
             if (MarkShardCanceledIfJobTerminal(s.shard_id, shard.job_id, shard))
             {
                 LOG_INFO("SchedulerService::NotifyWorkerOffline: shard %s "
@@ -601,7 +509,6 @@ public:
             {
                 // 增加重试计数，重置为 WAITING
                 shard.retry_count++;
-                // 阶段 11：shard 重试观测（Worker 离线触发的重试同样计入）
                 mprpc::MetricsRegistry::GetInstance()
                     .Counter("shard_retry_total", "shard 重试总次数").Inc();
                 shard.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
@@ -611,8 +518,7 @@ public:
                 ShardStore::GetInstance().UpdateIfStatus(
                     s.shard_id, {s_assigned, s_running}, shard);
                 ++rescheduled;
-                // 阶段 10：离线重置的 shard 发事件立即重分配（不等轮询）
-                PublishShardWaiting(s.shard_id);
+                NotifyShardWaiting(s.shard_id);
                 LOG_INFO("SchedulerService::NotifyWorkerOffline: shard %s → WAITING "
                          "(retry=%d/%d)",
                          s.shard_id.c_str(), shard.retry_count, shard.max_retry);
@@ -831,12 +737,10 @@ public:
     }
 
 private:
-    /// @brief 检查 job 下所有 shard 是否都已进入终态，
-    ///        若有 FAILED 且无进行中的 shard，标记 JOB_FAILED
-    ///
-    /// 在 RescheduleShard 标记 SHARD_FAILED 后调用。
+    // 检查 job 下所有 shard 是否都已进入终态，若有 FAILED 且无进行中的 shard，标记 JOB_FAILED
     void CheckAndMarkJobFailed(const std::string& job_id)
     {
+        // 获取该 job 所有切片 shards
         auto shards = ShardStore::GetInstance().ListByJob(job_id);
         if (shards.empty()) return;
 
@@ -850,19 +754,21 @@ private:
             int s_canceled = static_cast<int32_t>(ShardStatus::SHARD_CANCELED);
             if (st != s_success && st != s_failed && st != s_canceled)
             {
+                // 有进行中的shard，因此未进入终态
                 all_terminal = false;
                 break;
             }
+            // 存在失败的shard
             if (st == s_failed) any_failed = true;
         }
 
         if (!all_terminal || !any_failed) return;
 
-        // 所有 shard 都在终态且至少有一个 FAILED → JOB_FAILED
-        // 条件更新：仅当 job 仍是快照状态时推进，防止覆盖 RC 已写入的终态
+        // 所有 shard 都在终态且至少有一个 FAILED → JOB_FAILED （任务失败）
         auto job_opt = JobStore::GetInstance().Get(job_id);
         if (job_opt.has_value())
         {
+            // 只要有一个片failed，那就说明job任务失败（因为片是唯一的，失败了任务永远合不成）
             auto job = job_opt.value();
             int from_status = job.status;
             job.status = static_cast<int32_t>(JobStatus::JOB_FAILED);
@@ -876,25 +782,12 @@ private:
 
 };
 
-// ============================================================================
-// LoadOnlineWorkers — 阶段 10：ONLINE Worker 列表加载（Redis 快照优先）
-// ============================================================================
 
-/// @brief 加载 ONLINE Worker 列表，写入 resp（ListWorkersResponse 同构）。
-///
-/// 阶段 10 改造：WorkerManager 心跳时双写 Redis 快照（HSET worker:load，
-/// 快照串格式 `ip|port|cpu_cores|memory_mb|max_running|current_running|cpu_usage|memory_usage|ts`），
-/// 这里优先从 Redis 一次 HGETALL 读取，省掉 ListWorkers RPC 往返；
-/// 失败/无数据时回退 ListWorkers RPC（按次降级，Redis 恢复后自动切回）。
-///
-/// 过期语义：快照 ts 与心跳时间一致，超过 20s（WorkerManager 心跳超时阈值）
-/// 视为 OFFLINE 丢弃——与 ListWorkers filter=ONLINE 等价。
-///
-/// @return true=resp 已填充（无论数据来源）；false=两种途径都失败，调用方应跳过本轮
+// 用于查询返回ONLINE Worker列表
 static bool LoadOnlineWorkers(WorkerManagerService_Stub& wm_stub,
                               ListWorkersResponse& resp)
 {
-    // ── 1. Redis 快照 ─────────────────────────────────────────────────
+    // 优先查询：Redis 快照
     auto& redis = RedisClient::GetInstance();
     if (redis.inited() && redis.enabled())
     {
@@ -906,7 +799,8 @@ static bool LoadOnlineWorkers(WorkerManagerService_Stub& wm_stub,
             bool any_live = false;
             for (const auto& [worker_id, payload] : snapshots)
             {
-                // 解析快照串：ip|port|cpu_cores|memory_mb|max_running|current_running|cpu_usage|memory_usage|ts
+                // 解析快照串
+                // 快照串格式 `ip|port|cpu_cores|memory_mb|max_running|current_running|cpu_usage|memory_usage|ts`）
                 std::string::size_type pos = 0, next = 0;
                 std::string fields[9];
                 int idx = 0;
@@ -953,7 +847,8 @@ static bool LoadOnlineWorkers(WorkerManagerService_Stub& wm_stub,
         }
     }
 
-    // ── 2. 回退：ListWorkers RPC（阶段 9 原路径） ─────────────────────
+    // 回退调用：ListWorkers RPC （开销会大一些）
+    // 这里拿到数据无需写回redis，因为redis会由WorkerManager心跳更新
     ListWorkersRequest req;
     req.set_filter_status(WorkerStatus::WORKER_ONLINE);
     ListWorkersResponse rpc_resp;
@@ -967,45 +862,22 @@ static bool LoadOnlineWorkers(WorkerManagerService_Stub& wm_stub,
                                : rpc_resp.error_msg().c_str());
         return false;
     }
-    // 此日志只在 Redis 降级时出现（Redis 在线走快照分支）——运维可据此
-    // 识别系统当前处于"降级运行"状态
     LOG_INFO("LoadOnlineWorkers: %d ONLINE workers from ListWorkers RPC (redis degraded)",
              rpc_resp.workers_size());
+             
+    // 把拿到的数据放入resp中
     resp.Swap(&rpc_resp);
     return true;
 }
 
-// ============================================================================
-// TryAssignShard — 单 shard 分配（阶段 10：轮询与 MQ 消费线程共用）
-// ============================================================================
-
-/// @brief 尝试为单个 WAITING shard 分配 Worker 并推进 ASSIGNED。
-///
-/// 阶段 10 抽取：SchedulingLoop 轮询扫描与 MQ 消费线程（shard.waiting 消息
-/// 触发即时分配）共用同一分配逻辑，保证打分/锁/推进行为完全一致。
-///
-/// 并发安全：两个来源可能同时为同一 shard 调用本函数（轮询兜底 vs MQ 消息、
-/// 消息重复投递）。三重防护：
-///   1. 分布式锁（Redis SETNX，见下）
-///   2. MySQL 条件更新（WAITING→ASSIGNED，SQL 单语句原子）
-///   3. 分配前检查：shard 状态非 WAITING 直接拒绝（调用方已查过，
-///      这里再查一次防竞窗）
-///
-/// @param shard  待分配 shard 快照（调用方需确认其 status==WAITING）
-/// @param workers ONLINE worker 列表（LoadOnlineWorkers 结果）
-/// @param round_assigned 本回合已分配计数（防同一轮对同一 Worker 超额分配；
-///                       轮询来源按轮共享，MQ 来源每次调用独立）
-/// @param caller 日志来源标识（"SchedulingLoop" / "MqConsume"）
-/// @return true=已推进 ASSIGNED；false=未分配（终态/无 worker/锁占用/失败）
+// 为单个 WAITING shard 分配 worker 并推进 ASSIGNED（轮询与 MQ 消费线程共用）
 static bool TryAssignShard(const ShardRecord& shard,
                            const ListWorkersResponse& workers,
                            std::unordered_map<std::string, int>& round_assigned,
                            const char* caller)
 {
-    // ── -1. 状态复核：调用方快照可能过期 ──────────────────────────────
-    // 轮询与 MQ 消息双路径并发（或消息重复投递）时，调用方拿到的 WAITING
-    // 快照可能已被另一条路径推进为 ASSIGNED。此处复核兜底，避免对已分配
-    // shard 再发一次 AssignShard RPC（浪费 worker 资源）。
+    // 状态复核,重新查库——shard 现在还是不是 WAITING
+    // 避免传进来的快照shard已经过期（毕竟并发，可能两个相同shard被同时调用,后调用的就会过期）
     {
         auto fresh_opt = ShardStore::GetInstance().Get(shard.shard_id);
         if (!fresh_opt.has_value())
@@ -1021,10 +893,8 @@ static bool TryAssignShard(const ShardRecord& shard,
         }
     }
 
-    // ── 0. 终态检查：job 已终态的残留 shard 直接 CANCELED，不分配 ──
+    // 终态检查：job 已终态的残留 shard 直接 CANCELED，不分配
     //（终态通知到达前被重置为 WAITING 的残留 shard，此处兜底拦截）
-    // 注：helper 需要修改入参以写入 CANCELED 状态，传本地副本
-    //（TryAssignShard 的 shard 为 const，后面构造 AssignShard 请求用原值）
     ShardRecord terminal_check = shard;
     if (MarkShardCanceledIfJobTerminal(terminal_check.shard_id,
                                        terminal_check.job_id, terminal_check))
@@ -1034,7 +904,7 @@ static bool TryAssignShard(const ShardRecord& shard,
         return false;
     }
 
-    // ── 1. 加权评分选择 Worker（阶段 7） ─────────────────────────────
+    // 加权评分选择 Worker
     // score = available_slots * 10 - cpu_usage * 0.5 - memory_usage * 0.2
     // 空闲槽位越多、负载越低的 Worker 得分越高
     const WorkerInfo* best_worker = nullptr;
@@ -1042,7 +912,8 @@ static bool TryAssignShard(const ShardRecord& shard,
 
     for (const auto& w : workers.workers())
     {
-        int already = round_assigned[w.worker_id()];  // 本回合已分配
+        // round_assigned 本回合已分配计数（防同一轮对同一 Worker 超额分配；轮询来源按轮共享，MQ 来源每次调用独立）
+        int already = round_assigned[w.worker_id()]; 
         int available = w.max_running_shards()
                       - w.current_running_shards()
                       - already;
@@ -1063,15 +934,14 @@ static bool TryAssignShard(const ShardRecord& shard,
     {
         LOG_WARN("%s: no worker with available slots for shard %s (workers=%d)",
                  caller, shard.shard_id.c_str(), workers.workers_size());
-        return false;  // 由轮询兜底/后续消息再试
+        return false; 
     }
 
     // 本地槽位计数 +1
     round_assigned[best_worker->worker_id()]++;
 
-    // ── 2. 分布式锁（阶段 10）：SETNX 防多实例/重复投递重复分配 ─────
-    // - 锁 key：shard:lock:{shard_id}，value：scheduler:{pid}，TTL 10s
-    //   （TTL 防持锁进程崩溃后死锁）
+    // 分布式锁：SETNX 防多实例/重复投递重复分配
+    // - 锁 key：shard:lock:{shard_id}，value：scheduler:{pid}，TTL 10s（TTL 防持锁进程崩溃后死锁）
     // - 释放时 GET 校验 value 相同才 DEL，防误删他人锁
     // - Redis 故障降级放行：MySQL 条件更新（WAITING→ASSIGNED）兜底
     auto& redis = RedisClient::GetInstance();
@@ -1081,28 +951,35 @@ static bool TryAssignShard(const ShardRecord& shard,
     if (redis.inited() && redis.enabled())
     {
         lock_value = "scheduler:" + std::to_string(::getpid());
+
+        // 抢该 shard 的分布式锁（SET NX EX 原子）：防多实例/双路径重复分配
+        // 抢到 → 持锁执行下方分配
         if (redis.SetNxEx(lock_key, lock_value, 10))
         {
             lock_acquired = true;
         }
+        // 没抢到 → 走 else 区分"被占用"与"Redis 故障"
         else
         {
             // 区分"锁被占用"与"Redis 故障"：
-            // 占用 → 本实例跳过（其他实例正在分配）；
-            // 故障/锁不存在 → 降级放行（MySQL 条件更新兜底）
             std::string cur;
             bool found = false;
             if (redis.Get(lock_key, cur, found) && found)
             {
+                // 锁被占用 → 其他实例正在分配，本实例跳过
                 LOG_INFO("%s: shard %s locked by another instance (value=%s), skip",
                          caller, shard.shard_id.c_str(), cur.c_str());
                 return false;
             }
-            LOG_WARN("%s: distributed lock unavailable for %s, degrade to MySQL "
-                     "conditional update", caller, shard.shard_id.c_str());
+            else
+            {
+                // Redis 故障 / 锁不存在 → 降级放行，MySQL 条件更新兜底
+                LOG_WARN("%s: distributed lock unavailable for %s, degrade to MySQL "
+                         "conditional update", caller, shard.shard_id.c_str());
+            }
         }
     }
-    // 锁释放：值校验 + DEL（Redis 故障时 GET 失败，锁自然 TTL 过期）
+    // 写针对上锁释放方法，给下面调用：值校验 + DEL（Redis 故障时 GET 失败，锁自然 TTL 过期）
     auto release_lock = [&]() {
         if (!lock_acquired) return;
         std::string cur;
@@ -1111,7 +988,7 @@ static bool TryAssignShard(const ShardRecord& shard,
             redis.Del(lock_key);
     };
 
-    // ── 3. 直连 Worker 的 AssignShard ────────────────────────────────
+    // 直连 Worker 的 AssignShard
     constexpr int64_t kAssignTimeoutMs = 5000;  // AssignShard RPC 超时
     MprpcChannel worker_channel(best_worker->ip(),
                                 static_cast<uint16_t>(best_worker->port()));
@@ -1149,7 +1026,8 @@ static bool TryAssignShard(const ShardRecord& shard,
         return false;
     }
 
-    // ── 4. 更新 shard 状态 → ASSIGNED ───────────────────────────────
+    // 更新 shard 状态 → RUNNING
+    // Worker 同步接受（accepted=true 才走到这里），分配成功即开始执行。
     // 重新从 ShardStore 读取最新状态，避免用快照副本覆盖并发修改
     {
         auto fresh_opt = ShardStore::GetInstance().Get(shard.shard_id);
@@ -1158,21 +1036,23 @@ static bool TryAssignShard(const ShardRecord& shard,
             release_lock();
             return false;
         }
+        // 获取该切片，并进行修改状态以及其他信息
         auto fresh = fresh_opt.value();
-        fresh.status = static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED);
+        fresh.status = static_cast<int32_t>(ShardStatus::SHARD_RUNNING);
         fresh.assigned_worker_id = best_worker->worker_id();
         fresh.attempt_id = fresh.shard_id + "_attempt_" + std::to_string(fresh.retry_count);
         fresh.updated_at = NowMs();
+
         // 条件更新：仅当仍是 WAITING 才推进（防并发取消/终态覆盖/重复分配）
         ShardStore::GetInstance().UpdateIfStatus(
             fresh.shard_id,
             {static_cast<int32_t>(ShardStatus::SHARD_WAITING)}, fresh);
     }
 
-    // 分配完成，释放分布式锁（值校验防误删他人锁）
+    // 分配完成，释放分布式锁
     release_lock();
 
-    // ── 5. 更新 job 状态 → RUNNING（若是首次分配） ───────────────────
+    // 更新 job 状态 → RUNNING（若是首次分配）
     auto job_opt = JobStore::GetInstance().Get(shard.job_id);
     if (job_opt.has_value() &&
         job_opt->status == static_cast<int32_t>(JobStatus::JOB_SCHEDULING))
@@ -1186,7 +1066,7 @@ static bool TryAssignShard(const ShardRecord& shard,
             {static_cast<int32_t>(JobStatus::JOB_SCHEDULING)}, job);
     }
 
-    // ── 6. 日志 ─────────────────────────────────────────────────────
+    // 日志
     int remaining = best_worker->max_running_shards()
                   - best_worker->current_running_shards()
                   - round_assigned[best_worker->worker_id()];
@@ -1203,51 +1083,18 @@ static bool TryAssignShard(const ShardRecord& shard,
     return true;
 }
 
-// ============================================================================
 // SchedulingLoop — 后台调度循环（Pull 模式）
-// ============================================================================
-
-/// @brief 在后台线程中运行调度循环，由 main() 在 Provider 启动前创建
-///
-/// 设计：Pull 模式 —— 主动扫描 WAITING shard（等待被操作的片） 并拉取 ONLINE Worker(就绪的工作者) 列表，
-/// 而非在 ScheduleJob 中同步分配。优点：
-/// - ScheduleJob 不会被慢 Worker 阻塞（Worker 可能过载或网络慢）
-/// - Worker 列表变化（上线/离线）时分配逻辑自动感知
-/// - Worker 暂时不可用时（无可用槽位），shard 留在队列中等待下一轮
-///
-/// 阶段 10（Push 调度）后的职责变化：
-/// - MQ 在线：分配由 MqConsumeLoop（shard.waiting 消息）即时触发，
-///   本循环降频为兜底扫描（5s）——覆盖消息发布失败/丢失的极端场景，
-///   保底延迟 5s，正常路径 <100ms
-/// - MQ 掉线：MqConsumeLoop 重连失败，本循环检测 connected()==false
-///   自动恢复 2s 全量扫描（退化为阶段 9 行为，系统仍可用）
-/// - 超时重扫/启动恢复仍在本循环（与 MQ 无关的可靠性职责）
-///
-/// Worker 选择策略（当前：贪心最优槽位）：
-///   available_slots = max_running_shards - current_running_shards
-///   选 available_slots 最大的 Worker
-///   阶段 7 将扩展为资源感知评分：score = slots*10 - cpu*0.5 - mem*0.2
-///
-/// RPC 通信方式：
-/// - WorkerManager.ListWorkers → ZK 发现（只需要查到哪个 Worker 在线即可）
-/// - WorkerService.AssignShard → 直连 MprpcChannel(ip, port)
-///   因为必须调用特定 Worker，不能走 ZK 随机轮询
-///
-/// 线程安全：本函数运行在独立线程中，所有 Store 操作通过读写锁保护。
-/// 与 MqConsumeLoop 并发分配同一 shard 时，由 TryAssignShard 的
-/// 状态复核 + 分布式锁 + MySQL 条件更新三重防护兜底。
-///
-/// @param stop_flag 主线程设置此标志为 true 时，循环退出
+// 在后台线程中运行调度循环，由 main() 在 Provider 启动前创建
 static void SchedulingLoop(std::atomic<bool>& stop_flag)
 {
-    constexpr int64_t kScheduleIntervalMs     = 2000;  // Pull 模式：每 2 秒扫描一次
-    constexpr int64_t kScheduleIntervalMsIdle = 5000;  // MQ 在线时兜底间隔
+    constexpr int64_t kScheduleIntervalMs     = 2000;  // MQ 不在线时,Pull模式每 2 秒扫描一次
+    constexpr int64_t kScheduleIntervalMsIdle = 5000;  // MQ 在线时, Pull模式每5秒扫描一次
     constexpr int64_t kTimeoutRescanIntervalMs = 30000; // 超时重扫周期（按时间，与间隔解耦）
 
     // 等待 Provider 启动完成
     std::this_thread::sleep_for(std::chrono::seconds(1));
 
-    // ── 阶段 10：MQ 在线时本循环降频为兜底 ────────────────────────────
+    // 初步判断 mq 在线状态
     auto& mq = MqClient::GetInstance();
     bool mq_active = mq.inited() && mq.enabled() && mq.connected();
     int64_t interval_ms = mq_active ? kScheduleIntervalMsIdle
@@ -1255,37 +1102,26 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
     LOG_INFO("SchedulingLoop thread started, interval=%lldms (mq=%s)",
              (long long)interval_ms, mq_active ? "push" : "pull");
 
-    // ── 启动恢复：扫描残留的 ASSIGNED/RUNNING shard ─────────────────
+    // 启动恢复：扫描残留的 ASSIGNED/RUNNING shard 
     // 场景：Scheduler 进程崩溃（kill -9、OOM、段错误），然后被监控系统重启。
-    // 崩溃前可能已经通过 AssignShard 将 shard 分配给了 Worker，shard 状态为
-    // ASSIGNED 或 RUNNING。重启后 SchedulingLoop 只扫描 WAITING 状态，
-    // 这些 shard 永远不会被重新调度——成为永久的"孤儿 shard"。
-    //
-    // 恢复策略：启动时将残留的 ASSIGNED/RUNNING shard 重置为 WAITING。
-    // - 不增加 retry_count（这是 Scheduler 崩溃，不是 Worker 执行失败）
-    // - 清除 assigned_worker_id 和 attempt_id（旧 Worker 可能已不存在）
-    // - reset 后 SchedulingLoop 下一轮扫描时会自动重新分配
-    // - 若旧 Worker 仍在运行且正在执行该 shard，它会正常上报结果；
-    //   ResultCollector 的 attempt_id 校验会处理新旧 attempt 的冲突
-    //
-    // 注意：两个 ListByStatus 返回的是快照副本，所以每次更新前重新 Get() 一次。
-    // 这是阶段 4 #S4 bug 的防御措施——防止快照覆盖并发修改。
+    // 崩溃前可能已经通过 AssignShard 将 shard 分配给了 Worker，shard 状态为 ASSIGNED 或 RUNNING。
+    // 重启后 SchedulingLoop 只扫描 WAITING 状态，这些 shard 永远不会被重新调度——成为永久的"孤儿 shard"。
     {
         LOG_INFO("SchedulingLoop: running startup recovery scan...");
-        // 条件更新（阶段 9）：单条 UPDATE ... WHERE status IN (ASSIGNED,RUNNING)，
-        // 天然替代原"Get 重读 + Update"的快照覆盖防御（阶段 4 #S4），
-        // 且不会覆盖 RC 已并发写入的 SUCCESS/FAILED 终态。
         constexpr int32_t s_assigned = static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED);
         constexpr int32_t s_running  = static_cast<int32_t>(ShardStatus::SHARD_RUNNING);
 
+        // 两个 ListByStatus 返回的是快照副本，所以每次更新前重新 Get() 一次。
         auto assigned_shards = ShardStore::GetInstance().ListByStatus(s_assigned);
         auto running_shards  = ShardStore::GetInstance().ListByStatus(s_running);
 
         int recovered = 0;
         for (const auto& s : assigned_shards)
         {
-            ShardRecord fresh = s;   // 快照副本，条件更新保证不覆盖并发修改
+            // 快照副本，条件更新保证不覆盖并发修改
+            ShardRecord fresh = s;   
             fresh.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
+            // 清除 assigned_worker_id 和 attempt_id（旧 Worker 可能已不存在）
             fresh.assigned_worker_id.clear();
             fresh.attempt_id.clear();
             fresh.updated_at = NowMs();
@@ -1293,15 +1129,15 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                     s.shard_id, {s_assigned, s_running}, fresh))
             {
                 ++recovered;
-                // 阶段 10：恢复的 shard 发事件（消费线程可能未启动，消息积压
-                // 在队列中，线程启动后消费即分配——与轮询双路径互不冲突）
-                PublishShardWaiting(s.shard_id);
+                // 恢复的 shard 发事件立即重分配
+                NotifyShardWaiting(s.shard_id);
                 LOG_INFO("SchedulingLoop: startup recovery: reset %s ASSIGNED → WAITING",
                          s.shard_id.c_str());
             }
         }
         for (const auto& s : running_shards)
         {
+            // 快照副本，条件更新保证不覆盖并发修改
             ShardRecord fresh = s;
             fresh.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
             fresh.assigned_worker_id.clear();
@@ -1311,8 +1147,8 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                     s.shard_id, {s_assigned, s_running}, fresh))
             {
                 ++recovered;
-                // 阶段 10：恢复的 shard 发事件立即重分配
-                PublishShardWaiting(s.shard_id);
+                // 恢复的 shard 发事件立即重分配
+                NotifyShardWaiting(s.shard_id);
                 LOG_INFO("SchedulingLoop: startup recovery: reset %s RUNNING → WAITING",
                          s.shard_id.c_str());
             }
@@ -1328,22 +1164,24 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
     // WorkerManager 通过 ZK 发现
     WorkerManagerService_Stub wm_stub(new MprpcChannel());
 
-    // ── 阶段 7：Metrics 计数器 ────────────────────────────────────────
-    int64_t metrics_round    = 0;
-    int64_t shards_assigned  = 0;
+    // Metrics 计数器 
+    int64_t metrics_round    = 0;   // 循环次数
+    int64_t shards_assigned  = 0;   // shards分配个数
 
-    // ── #1 修复：超时重扫的进度观察状态 ────────────────────────────────
-    // 30s ASSIGNED 超时命中后，先直连原 Worker QueryShard 确认是否仍在执行：
-    // progress 前进 → 正常执行（刷新观察窗）；停滞 ≥2 轮 → 判定卡死才重置。
-    // 仅 SchedulingLoop 单线程访问，无需加锁。
-    struct ProgressWatch { int progress = -1; int stall_rounds = 0; };
+    // 以下用于卡死检测
+    struct ProgressWatch 
+    { 
+        int progress = -1;      // 上次观察到的进度百分比（0-100）
+        int stall_rounds = 0;   // 连续几轮没看到进度前进（停滞计数器）
+    };
+    // progress_watch_ 的唯一用途是 ASSIGNED/RUNNING 超时时的卡死检测
     std::unordered_map<std::string, ProgressWatch> progress_watch_;
-    int64_t last_rescan_ms = 0;  // 超时重扫时间戳（按时间驱动，见主循环）
+    // 超时重扫时间戳（按时间驱动，见主循环）
+    int64_t last_rescan_ms = 0; 
 
     while (!stop_flag)
     {
-        // 阶段 10：interval 随 MQ 状态动态调整——MQ 在线降频兜底，
-        // 掉线恢复 2s 全量扫描（MQ 掉线由 MqConsumeLoop 销毁连接触发）
+        // 依据mq在线状态，确定循环频率
         bool mq_active = mq.inited() && mq.enabled() && mq.connected();
         interval_ms = mq_active ? kScheduleIntervalMsIdle
                                 : kScheduleIntervalMs;
@@ -1352,14 +1190,15 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
 
         ++metrics_round;
 
-        // 阶段 11：调度循环单次迭代耗时观测（扫描+分配工作量，不含 sleep）。
-        // RAII 守卫声明在迭代体顶部——循环体内 20+ 个 continue 分支
-        //（超时重扫/分配循环的提前退出）由析构统一计入，避免漏测
+        // 一个"守卫"结构体
         struct ScheduleLoopIterGuard
         {
+            // 构造时：记开始时间
             std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
+            // 析构时：算耗时上报
             ~ScheduleLoopIterGuard()
             {
+                // 耗时 = 现在 - 开始
                 double ms = std::chrono::duration<double, std::milli>(
                     std::chrono::steady_clock::now() - t0).count();
                 mprpc::MetricsRegistry::GetInstance()
@@ -1370,13 +1209,9 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
             }
         } iter_guard;
 
-        // ── 0. 阶段 8：RUNNING/ASSIGNED 超时重扫（每 30 秒，按时间） ──
-        // 修复 Bug #2：当 Scheduler 重启后（ShardStore 为空，此扫描无操作），
-        // 真正的修复是 JobService 的 PendingScanLoop。但本扫描处理另一场景：
-        // Worker 接受 shard 后卡死（ffmpeg 挂死但心跳存活），导致 shard 永久
-        // 停留在 ASSIGNED/RUNNING。超时后重置为 WAITING 让其他 Worker 接管。
-        // 阶段 10：由"每 15 轮"改为按时间判断——interval 随 MQ 状态变化
-        //（2s↔5s），按轮次会导致重扫周期漂移（15 轮 × 5s = 75s）。
+        // RUNNING/ASSIGNED 超时重扫
+        // Worker 接受 shard 后卡死（ffmpeg 挂死但心跳存活），导致 shard 永久停留在 ASSIGNED/RUNNING。
+        // 超时后重置为 WAITING 让其他 Worker 接管。
         int64_t now_ms = NowMs();
         if (now_ms - last_rescan_ms >= kTimeoutRescanIntervalMs)
         {
@@ -1385,26 +1220,17 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
             constexpr int64_t kRunningTimeoutMs  = 300000;  // RUNNING 5 分钟超时
             int64_t now = NowMs();
 
-            // ── 0.1 查询 ONLINE Worker 地址表 ──────────────────────
-            // #1 修复：重扫命中后先确认原 Worker 是否仍在执行，而不是无条件重置。
-            // worker_id → (ip, port) 映射用于 QueryShard 确认 + CancelShard 通知。
-            // 注意：ListWorkers 失败时 worker_addr 为空 → 各 shard 命中
-            // 「worker 不在 ONLINE 列表」分支全部跳过，效果等同保守跳过本轮重扫。
+            // 重扫命中后先确认原 Worker 是否仍在执行，而不是无条件重置。
+            // 查询 ONLINE Worker 地址表（Redis 快照优先，回退 RPC），
+            // 把 workid ip port 记录下来
             std::unordered_map<std::string,
                                std::pair<std::string, uint16_t>> worker_addr;
             {
-                ListWorkersRequest lw_req;
-                lw_req.set_filter_status(WorkerStatus::WORKER_ONLINE);
                 ListWorkersResponse lw_resp;
-                MprpcController lw_ctrl;
-                lw_ctrl.SetTimeoutMs(3000);
-                wm_stub.ListWorkers(&lw_ctrl, &lw_req, &lw_resp, nullptr);
-                if (lw_ctrl.Failed() || lw_resp.error_code() != 0)
+                if (!LoadOnlineWorkers(wm_stub, lw_resp))
                 {
-                    LOG_WARN("SchedulingLoop: ListWorkers failed during timeout "
-                             "rescan, skip rescan this round: %s",
-                             lw_ctrl.Failed() ? lw_ctrl.ErrorText().c_str()
-                                              : lw_resp.error_msg().c_str());
+                    LOG_WARN("SchedulingLoop: LoadOnlineWorkers failed during "
+                             "timeout rescan, skip rescan this round");
                 }
                 else
                 {
@@ -1416,10 +1242,10 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                 }
             }
 
-            // ── 0.2 清理 progress_watch_ 中已离开 ASSIGNED/RUNNING 的条目 ──
-            // （shard 被 RescheduleShard/离线通知等移出后不再重扫，防内存泄漏）
+            // 清理 progress_watch_ 中已离开 ASSIGNED/RUNNING 的条目
             {
                 std::unordered_set<std::string> active;
+                // active里的shard是从MySQL里获取的最新的shard状态
                 for (const auto& s : ShardStore::GetInstance().ListByStatus(
                          static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED)))
                     active.insert(s.shard_id);
@@ -1445,12 +1271,15 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
             for (const auto& s : assigned_shards)
             {
                 if (now - s.updated_at <= kAssignedTimeoutMs) continue;
+                // 已经超时，get获取（先判断是否超时再get,避免重复开销）
                 auto fresh_opt = ShardStore::GetInstance().Get(s.shard_id);
                 if (!fresh_opt.has_value()) continue;
+                // 拿到对应的shard片
                 auto fresh = fresh_opt.value();
+                // 状态已变化，跳过
                 if (fresh.status != static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED))
-                    continue;  // 状态已变化，跳过
-                // #17 修复：job 已终态（如任务已完成但终态通知丢失）的残留 shard
+                    continue;  
+                // job 已终态（如任务已完成但终态通知丢失）的残留 shard
                 // 不应重新分配，直接 CANCELED（helper 统一维护）
                 if (MarkShardCanceledIfJobTerminal(s.shard_id, fresh.job_id, fresh))
                 {
@@ -1460,28 +1289,30 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                              s.shard_id.c_str());
                     continue;
                 }
-                // ── #1 修复：先确认原 Worker 是否仍在执行，再决定是否重置 ──
+                // 先确认原 Worker 是否仍在执行，再决定是否重置
                 // 30s 超时只是「无信号」信号，不代表卡死——Worker 执行期间
-                // 不向 Scheduler 上报任何进度（进度只发 ResultCollector），
                 // 正常转码也会命中。直连原 Worker QueryShard 确认：
                 // - 执行中（progress 前进）→ 刷新观察窗，不重置；
                 // - 停滞 ≥2 轮（~60s 无进展）→ 判定卡死，才重置；
                 // - 已结束（progress>=100 或 -1）→ 等结果上报，不重置。
+
+                // 判断该shard的work是否在ONLINE 列表
                 auto addr_it = worker_addr.find(fresh.assigned_worker_id);
                 if (addr_it == worker_addr.end())
                 {
-                    // 原 Worker 不在 ONLINE 列表：已离线/注销，
-                    // 不重置——NotifyWorkerOffline 会负责重调度
+                    // 原 Worker 不在 ONLINE 列表：已离线/注销
+                    // 跳过该片，不重置——NotifyWorkerOffline 会负责重调度
                     LOG_WARN("SchedulingLoop: ASSIGNED timeout for shard %s but "
                              "worker %s not ONLINE, skip (NotifyWorkerOffline "
                              "handles it)",
                              s.shard_id.c_str(), fresh.assigned_worker_id.c_str());
                     continue;
                 }
-                const auto& w_ip   = addr_it->second.first;
-                uint16_t     w_port = addr_it->second.second;
+                const auto& w_ip = addr_it->second.first;
+                uint16_t  w_port = addr_it->second.second;
 
                 {
+                    // 确认该work对应的执行状态
                     MprpcChannel query_channel(w_ip, w_port);
                     WorkerService_Stub query_stub(&query_channel);
 
@@ -1492,12 +1323,10 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                     q_ctrl.SetTimeoutMs(3000);
                     query_stub.QueryShard(&q_ctrl, &q_req, &q_resp, nullptr);
 
+                    // RPC的问题，框架没能连通
                     if (q_ctrl.Failed())
                     {
-                        // 无法确认执行状态。注意：worker 进程可能活着且心跳
-                        // 正常、仅 RPC 服务停摆（work 线程卡死）——此时
-                        // NotifyWorkerOffline 兜底不触发，不能无限跳过。
-                        // 连续 2 轮无法确认 → 与 progress 停滞同语义，判定卡死。
+                        // 利用progress_watch_追踪该shard的信息
                         auto fw = progress_watch_.find(s.shard_id);
                         int stall = (fw == progress_watch_.end())
                                   ? 1 : fw->second.stall_rounds + 1;
@@ -1505,6 +1334,7 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                                           ? -1 : fw->second.progress;
                         progress_watch_[s.shard_id] =
                             ProgressWatch{last_progress, stall};
+                        // 小于两轮，那就再试一次，continue一次
                         if (stall < 2)
                         {
                             LOG_WARN("SchedulingLoop: ASSIGNED timeout for shard %s, "
@@ -1515,7 +1345,7 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                                      q_ctrl.ErrorText().c_str());
                             continue;
                         }
-                        // 2 轮均无法确认 → 落到下方卡死重置路径
+                        // 两轮均无法确认 → 落到下方卡死重置路径
                         LOG_WARN("SchedulingLoop: ASSIGNED timeout for shard %s, "
                                  "QueryShard to worker %s failed for 2 rounds: %s, "
                                  "treat as stalled",
@@ -1523,125 +1353,123 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                                  fresh.assigned_worker_id.c_str(),
                                  q_ctrl.ErrorText().c_str());
                     }
+                    // RPC连接成功
                     else
                     {
-                    int progress = q_resp.progress();
-                    if (progress < 0)
-                    {
-                        // shard 已不在 worker（执行完已清理）→ 结果已上报/在途，
-                        // 不重置避免双份执行
-                        progress_watch_.erase(s.shard_id);
-                        LOG_INFO("SchedulingLoop: ASSIGNED timeout for shard %s but "
-                                 "worker %s no longer holds it (progress=-1), "
-                                 "skip reset",
-                                 s.shard_id.c_str(), fresh.assigned_worker_id.c_str());
-                        continue;
-                    }
-                    // progress in [0,100]：worker 仍持有该 shard。
-                    // 注意 progress=100 只代表「转码完成」，不代表执行已结束——
-                    // ffmpeg 可能在收尾阶段挂起（pipe 不 EOF、结果不上报），
-                    // 同样纳入停滞检测，避免这种形态的卡死永不兜底。
-                    auto watch_it = progress_watch_.find(s.shard_id);
-                    bool progressed = (watch_it == progress_watch_.end())
-                                   || (progress > watch_it->second.progress);
-                    if (progressed)
-                    {
-                        // 进度前进（或首次观察到）→ 正常执行中，刷新观察窗
-                        progress_watch_[s.shard_id] = ProgressWatch{progress, 0};
-                        fresh.updated_at = NowMs();
-                        ShardStore::GetInstance().UpdateIfStatus(
-                            s.shard_id,
-                            {static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED)}, fresh);
-                        LOG_INFO("SchedulingLoop: ASSIGNED timeout for shard %s but "
-                                 "still executing on worker %s (progress=%d%%), "
-                                 "refresh window and skip reset",
-                                 s.shard_id.c_str(), fresh.assigned_worker_id.c_str(),
-                                 progress);
-                        continue;
-                    }
-
-                    // 进度停滞：连续观察，达到 2 轮（~60s 无进展）判定卡死
-                    int stall = watch_it->second.stall_rounds + 1;
-                    if (stall < 2)
-                    {
-                        progress_watch_[s.shard_id] = ProgressWatch{progress, stall};
-                        LOG_WARN("SchedulingLoop: ASSIGNED timeout for shard %s, "
-                                 "progress stalled at %d%% on worker %s (round %d/2), "
-                                 "observe one more round",
-                                 s.shard_id.c_str(), progress,
-                                 fresh.assigned_worker_id.c_str(), stall);
-                        continue;
-                    }
-
-                    // ── 判定卡死 → 重置（#1 修复：语义修正）──
-                    // 1. 通知原 Worker 取消（best-effort，reason=TIMEOUT），
-                    //    旧 ffmpeg 被 kill，不浪费资源、不留迟到结果。
-                    //    带 attempt_id 精确匹配：shard 可能已被并发重新分配为
-                    //    新 attempt（重扫与分配循环是不同线程），旧 attempt 的
-                    //    取消不得误伤新执行。
-                    std::string stalled_worker = fresh.assigned_worker_id;
-                    std::string stalled_attempt = fresh.attempt_id;
-                    {
-                        MprpcChannel cancel_channel(w_ip, w_port);
-                        WorkerService_Stub cancel_stub(&cancel_channel);
-                        CancelShardRequest cs_req;
-                        cs_req.set_shard_id(s.shard_id);
-                        cs_req.set_reason("TIMEOUT");
-                        cs_req.set_attempt_id(stalled_attempt);
-                        CancelShardResponse cs_resp;
-                        MprpcController cs_ctrl;
-                        cs_ctrl.SetTimeoutMs(3000);
-                        cancel_stub.CancelShard(&cs_ctrl, &cs_req, &cs_resp, nullptr);
-                        if (cs_ctrl.Failed() || !cs_resp.canceled())
+                        int progress = q_resp.progress();
+                        if (progress < 0)
                         {
-                            LOG_WARN("SchedulingLoop: CancelShard notify worker %s "
-                                     "for shard %s failed: %s",
-                                     stalled_worker.c_str(), s.shard_id.c_str(),
-                                     cs_ctrl.Failed() ? cs_ctrl.ErrorText().c_str()
-                                                      : cs_resp.error_msg().c_str());
+                            // shard 已不在 worker（执行完已清理）
+                            // 不重置避免双份执行
+                            progress_watch_.erase(s.shard_id);
+                            LOG_INFO("SchedulingLoop: ASSIGNED timeout for shard %s but "
+                                     "worker %s no longer holds it (progress=-1), "
+                                     "skip reset",
+                                     s.shard_id.c_str(), fresh.assigned_worker_id.c_str());
+                            continue;
                         }
-                    }
-                    progress_watch_.erase(s.shard_id);
+                        // progress in [0,100]：worker 仍持有该 shard
+                        auto watch_it = progress_watch_.find(s.shard_id);
+                        
+                        // progressed判断progress_watch_里没有该shard，或者进度是否在变化
+                        bool progressed = (watch_it == progress_watch_.end())
+                                       || (progress > watch_it->second.progress);
+                        // 进度前进（或首次观察到）→ 正常执行中，刷新观察窗
+                        if (progressed)
+                        {
+                            progress_watch_[s.shard_id] = ProgressWatch{progress, 0};
+                            fresh.updated_at = NowMs();
+                            ShardStore::GetInstance().UpdateIfStatus(
+                                s.shard_id,
+                                {static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED)}, fresh);
+                            LOG_INFO("SchedulingLoop: ASSIGNED timeout for shard %s but "
+                                     "still executing on worker %s (progress=%d%%), "
+                                     "refresh window and skip reset",
+                                     s.shard_id.c_str(), fresh.assigned_worker_id.c_str(),
+                                     progress);
+                            continue;
+                        }
 
-                    if (fresh.retry_count >= fresh.max_retry)
-                    {
-                        // 重试预算已耗尽 → 终态 CANCELED，不再分配
-                        fresh.status = static_cast<int32_t>(ShardStatus::SHARD_CANCELED);
+                        // 进度停滞：连续观察，达到 2 轮判定卡死
+                        int stall = watch_it->second.stall_rounds + 1;
+                        if (stall < 2)
+                        {
+                            // 更新progress_watch_的状态信息
+                            progress_watch_[s.shard_id] = ProgressWatch{progress, stall};
+                            LOG_WARN("SchedulingLoop: ASSIGNED timeout for shard %s, "
+                                     "progress stalled at %d%% on worker %s (round %d/2), "
+                                     "observe one more round",
+                                     s.shard_id.c_str(), progress,
+                                     fresh.assigned_worker_id.c_str(), stall);
+                            continue;
+                        }
+
+                        // 判定卡死 → 重置
+                        std::string stalled_worker = fresh.assigned_worker_id;
+                        std::string stalled_attempt = fresh.attempt_id;
+                        {
+                            // 通知原 Worker 取消（best-effort，reason=TIMEOUT）
+                            MprpcChannel cancel_channel(w_ip, w_port);
+                            WorkerService_Stub cancel_stub(&cancel_channel);
+                            CancelShardRequest cs_req;
+                            cs_req.set_shard_id(s.shard_id);
+                            cs_req.set_reason("TIMEOUT");
+                            cs_req.set_attempt_id(stalled_attempt);
+                            CancelShardResponse cs_resp;
+                            MprpcController cs_ctrl;
+                            cs_ctrl.SetTimeoutMs(3000);
+                            cancel_stub.CancelShard(&cs_ctrl, &cs_req, &cs_resp, nullptr);
+                            if (cs_ctrl.Failed() || !cs_resp.canceled())
+                            {
+                                LOG_WARN("SchedulingLoop: CancelShard notify worker %s "
+                                         "for shard %s failed: %s",
+                                         stalled_worker.c_str(), s.shard_id.c_str(),
+                                         cs_ctrl.Failed() ? cs_ctrl.ErrorText().c_str()
+                                                          : cs_resp.error_msg().c_str());
+                            }
+                        }
+                        progress_watch_.erase(s.shard_id);
+                        // 准备把该shard进行重新分配
+                        // 先判断该shard重试次数
+                        if (fresh.retry_count >= fresh.max_retry)
+                        {
+                            // 重试预算已耗尽 → 终态 CANCELED，不再分配
+                            fresh.status = static_cast<int32_t>(ShardStatus::SHARD_CANCELED);
+                            fresh.updated_at = NowMs();
+                            ShardStore::GetInstance().UpdateIfStatus(
+                                s.shard_id,
+                                {static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED)}, fresh);
+                            ++timed_out;
+                            LOG_WARN("SchedulingLoop: shard %s stalled on worker %s and "
+                                     "retry exhausted (%d/%d), marked CANCELED",
+                                     s.shard_id.c_str(), stalled_worker.c_str(),
+                                     fresh.retry_count, fresh.max_retry);
+                            continue;
+                        }
+
+                        // 递增 retry_count → 新 attempt_id 与旧执行不同
+                        // RC 的 attempt 校验可正确拒绝旧 Worker 的迟到结果
+                        fresh.retry_count++;
+                        // 阶段 11：shard 重试观测（ASSIGNED 卡死超时重试）
+                        mprpc::MetricsRegistry::GetInstance()
+                            .Counter("shard_retry_total", "shard 重试总次数").Inc();
+                        fresh.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
+                        fresh.assigned_worker_id.clear();
+                        fresh.attempt_id.clear();
                         fresh.updated_at = NowMs();
                         ShardStore::GetInstance().UpdateIfStatus(
                             s.shard_id,
                             {static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED)}, fresh);
                         ++timed_out;
-                        LOG_WARN("SchedulingLoop: shard %s stalled on worker %s and "
-                                 "retry exhausted (%d/%d), marked CANCELED",
+                        // 重置为 WAITING 的 shard 发事件立即重分配
+                        NotifyShardWaiting(s.shard_id);
+                        LOG_WARN("SchedulingLoop: shard %s stalled on worker %s (attempt=%s), "
+                                 "canceled and reset to WAITING (retry=%d/%d)",
                                  s.shard_id.c_str(), stalled_worker.c_str(),
+                                 stalled_attempt.c_str(),
                                  fresh.retry_count, fresh.max_retry);
-                        continue;
-                    }
-
-                    // 2. 递增 retry_count → 新 attempt_id 与旧执行不同，
-                    //    RC 的 attempt 校验可正确拒绝旧 Worker 的迟到结果
-                    fresh.retry_count++;
-                    // 阶段 11：shard 重试观测（ASSIGNED 卡死超时重试）
-                    mprpc::MetricsRegistry::GetInstance()
-                        .Counter("shard_retry_total", "shard 重试总次数").Inc();
-                    fresh.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
-                    fresh.assigned_worker_id.clear();
-                    fresh.attempt_id.clear();
-                    fresh.updated_at = NowMs();
-                    ShardStore::GetInstance().UpdateIfStatus(
-                        s.shard_id,
-                        {static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED)}, fresh);
-                    ++timed_out;
-                    // 阶段 10：重置为 WAITING 的 shard 发事件立即重分配
-                    PublishShardWaiting(s.shard_id);
-                    LOG_WARN("SchedulingLoop: shard %s stalled on worker %s (attempt=%s), "
-                             "canceled and reset to WAITING (retry=%d/%d)",
-                             s.shard_id.c_str(), stalled_worker.c_str(),
-                             stalled_attempt.c_str(),
-                             fresh.retry_count, fresh.max_retry);
-                    }   // else（QueryShard 成功分支）闭合
-                }       // 查询块闭合
+                    }   
+                }     
             }
             // 同样方法处理 running_shards
             for (const auto& s : running_shards)
@@ -1652,8 +1480,8 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                 auto fresh = fresh_opt.value();
                 if (fresh.status != static_cast<int32_t>(ShardStatus::SHARD_RUNNING))
                     continue;
-                // #17 修复：job 已终态的残留 RUNNING shard 直接 CANCELED，
-                // 避免重置为 WAITING 后被重复分配（helper 统一维护）
+                // job 已终态的残留 RUNNING shard 直接 CANCELED，
+                // 避免重置为 WAITING 后被重复分配
                 if (MarkShardCanceledIfJobTerminal(s.shard_id, fresh.job_id, fresh))
                 {
                     ++timed_out;
@@ -1662,8 +1490,7 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                              s.shard_id.c_str());
                     continue;
                 }
-                // ── #1 修复：重置语义修正（与 ASSIGNED 分支对齐）──
-                // RUNNING 5 分钟超时本身已是很强的卡死信号（远超正常转码时长），
+                // RUNNING 5 分钟超时本身已是很强的卡死信号（远超正常转码时长）
                 // 无需 QueryShard 确认，直接：通知原 Worker 取消 + retry 语义修正。
                 std::string stalled_worker = fresh.assigned_worker_id;
                 std::string stalled_attempt = fresh.attempt_id;
@@ -1710,7 +1537,7 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                 }
 
                 fresh.retry_count++;
-                // 阶段 11：shard 重试观测（RUNNING 超时重试）
+                // shard 重试观测
                 mprpc::MetricsRegistry::GetInstance()
                     .Counter("shard_retry_total", "shard 重试总次数").Inc();
                 fresh.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
@@ -1721,8 +1548,8 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                     s.shard_id,
                     {static_cast<int32_t>(ShardStatus::SHARD_RUNNING)}, fresh);
                 ++timed_out;
-                // 阶段 10：重置为 WAITING 的 shard 发事件立即重分配
-                PublishShardWaiting(s.shard_id);
+                // 重置为 WAITING 的 shard 发事件立即重分配
+                NotifyShardWaiting(s.shard_id);
                 LOG_WARN("SchedulingLoop: RUNNING timeout for shard %s (worker=%s, "
                          "stale=%lldms), canceled and reset to WAITING (retry=%d/%d)",
                          s.shard_id.c_str(), stalled_worker.c_str(),
@@ -1736,8 +1563,7 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
             }
         }
 
-        // 开始扫描需要提交的shard
-        // ── 1. 扫描 WAITING shard ─────────────────────────────────────
+        // 开始扫描需要提交的 WAITING shard
         auto waiting_shards = ShardStore::GetInstance().ListByStatus(
             static_cast<int32_t>(ShardStatus::SHARD_WAITING));
 
@@ -1746,7 +1572,7 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
 
         LOG_INFO("SchedulingLoop: found %zu WAITING shards", waiting_shards.size());
 
-        // ── 2. 查询 ONLINE Worker（阶段 10：Redis 快照优先，失败回退 RPC）──
+        // 查询 ONLINE Worker
         ListWorkersResponse lw_resp;
         if (!LoadOnlineWorkers(wm_stub, lw_resp))
         {
@@ -1762,7 +1588,7 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
 
         LOG_INFO("SchedulingLoop: %d ONLINE workers", lw_resp.workers_size());
 
-        // ── 3. 按优先级排序 WAITING shard（阶段 7：优先级队列） ──────
+        // 按优先级排序 WAITING shard
         // priority 越大越优先，同优先级按创建时间 FIFO
         // 批量查询 job 优先级并缓存，避免 N 次 JobStore::Get
         std::unordered_map<std::string, int32_t> job_priority_cache;
@@ -1785,15 +1611,14 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                       return a.created_at < b.created_at;  // 同优先级 FIFO
                   });
 
-        // ── 4. 对每个 WAITING shard 分配 Worker ─────────────────────
+        // 对每个 WAITING shard 分配 Worker 
         // 本地槽位计数：防止同一轮内对同一 Worker 超额分配
         // key = worker_id, value = 本回合已分配的 shard 数（从 0 累加）
         std::unordered_map<std::string, int> round_assigned;
 
         for (auto& shard : waiting_shards)
         {
-            // 阶段 10：分配逻辑抽到 TryAssignShard（轮询与 MQ 消费线程共用），
-            // 保证打分/锁/推进行为一致；轮询是 MQ 掉线或消息丢失时的兜底路径
+            // 分配逻辑抽到 TryAssignShard，保证打分/锁/推进行为一致；轮询是 MQ 掉线或消息丢失时的兜底路径
             if (TryAssignShard(shard, lw_resp, round_assigned, "SchedulingLoop"))
                 ++shards_assigned;
         }
@@ -1822,32 +1647,9 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
     LOG_INFO("SchedulingLoop thread stopped");
 }
 
-// ============================================================================
-// MqConsumeLoop — 阶段 10：MQ 消费线程（Push 调度）
-// ============================================================================
-
-/// @brief 消费 shard.waiting 队列，收到消息立即触发单 shard 分配。
-///
-/// 与 SchedulingLoop 的职责划分：
-/// - 本线程：即时分配（消息到达 → <100ms 内 AssignShard）
-/// - SchedulingLoop：兜底（消息丢失/发布失败时 5s 内扫到）+
-///   超时重扫/启动恢复等可靠性职责
-///
-/// 掉线与恢复：
-/// - MQ 故障：ConsumeBlocking 检测到连接断开并销毁连接 → 本线程循环顶部
-///   Reconnect() 失败则打 WARN 并 2s 重试；SchedulingLoop 检测到
-///   connected()==false 自动恢复 2s 全量轮询（系统降级但可用）
-/// - MQ 恢复：Reconnect() 成功 → 继续消费；SchedulingLoop 检测到连接恢复
-///   自动降频（调度切回 Push）
-///
-/// 消息语义（防重复投递）：
-/// - 消费后先查 MySQL：shard 不存在/非 WAITING → 幂等跳过（消息可能重复）
-/// - 分配由 TryAssignShard 的状态复核 + 分布式锁 + 条件更新三重防护，
-///   与轮询并发分配同一 shard 不会产生双重执行
-/// - 无论分配结果如何都 Ack：消息的"职责"是触发检查，检查已做；
-///   分配失败（无 worker 等）由轮询兜底再试，不重回队列避免无限重投
-///
-/// @param stop_flag 主线程设置此标志为 true 时，循环退出
+// MqConsumeLoop — MQ 消费线程（Push 调度）
+// - 本线程：即时分配（消息到达 → <100ms 内 AssignShard）
+// - SchedulingLoop：兜底（消息丢失/发布失败时 5s 内扫到）+超时重扫/启动恢复等可靠性职责
 static void MqConsumeLoop(std::atomic<bool>& stop_flag)
 {
     auto& mq = MqClient::GetInstance();
@@ -1858,7 +1660,7 @@ static void MqConsumeLoop(std::atomic<bool>& stop_flag)
 
     while (!stop_flag)
     {
-        // 1. 确保连接可用（MQ 故障时在此等待重连，每 2s 重试一次）
+        // 确保连接可用（MQ 故障时在此等待重连，每 2s 重试一次）
         if (!mq.connected())
         {
             if (!mq.Reconnect())
@@ -1871,7 +1673,7 @@ static void MqConsumeLoop(std::atomic<bool>& stop_flag)
             LOG_INFO("MqConsumeLoop: MQ reconnected, resume push scheduling");
         }
 
-        // 2. 阻塞消费（2s 超时：可感知 stop_flag 与连接状态变化）
+        // 阻塞消费（2s 超时：可感知 stop_flag 与连接状态变化）
         std::string body;
         int64_t delivery_tag = 0;
         if (!mq.ConsumeBlocking("shard.waiting", body, delivery_tag, 2000))
@@ -1880,7 +1682,7 @@ static void MqConsumeLoop(std::atomic<bool>& stop_flag)
             continue;  // 超时或连接断开（断开时 connected()==false → 顶部重连）
         }
 
-        // 3. 处理消息：尝试分配该 shard
+        // 处理消息：尝试分配该 shard
         const std::string& shard_id = body;
         {
             auto shard_opt = ShardStore::GetInstance().Get(shard_id);
@@ -1908,7 +1710,7 @@ static void MqConsumeLoop(std::atomic<bool>& stop_flag)
                 }
             }
         }
-        // 4. 确认消息（处理完成才 ack；ack 失败只 WARN——Broker 会重新投递，
+        // 确认消息（处理完成才 ack；ack 失败只 WARN——Broker 会重新投递，
         //    幂等检查兜底，不会重复执行）
         if (!mq.Ack(delivery_tag))
         {

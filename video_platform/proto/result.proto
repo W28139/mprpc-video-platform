@@ -7,27 +7,11 @@ option cc_generic_services = true;
 // ============================================================================
 // ResultCollectorService — 结果收集与聚合
 //
-// Worker 在 shard 执行过程中周期性上报进度，完成后上报最终结果。
+// Worker 在 shard 执行完成后上报最终结果。
 // ResultCollector 负责幂等接收、判断 job 是否全部完成、
 // 触发失败重试和最终聚合。
+// 实时转码进度由 Scheduler 直连 Worker 的 QueryShard 获取，不经过本服务。
 // ============================================================================
-
-// ── ReportShardProgress ────────────────────────────────────────────────────
-
-message ReportShardProgressRequest {
-    string shard_id   = 1;  // 正在执行的 shard ID
-    string job_id     = 2;  // 所属 job ID
-    string worker_id  = 3;  // 执行该 shard 的 Worker ID
-    string attempt_id = 4;  // 当前执行尝试 ID（与 AssignShard 时的一致）
-    int32  progress   = 5;  // 执行进度（0-100 整数百分比）
-    string message    = 6;  // 附加信息，如 ffmpeg 当前帧号 / 输出行
-}
-
-message ReportShardProgressResponse {
-    int32  error_code = 1;  // 0=成功记录
-    string error_msg  = 2;  // 错误描述
-    bool   recorded   = 3;  // true=进度已记录
-}
 
 // ── ReportShardResult ──────────────────────────────────────────────────────
 
@@ -42,7 +26,6 @@ message ReportShardResultRequest {
     string output_path     = 8;   // 输出文件路径（成功时必填，用于后续合并）
     int64  elapsed_ms      = 9;   // 执行总耗时（毫秒），用于统计和调度策略优化
     int32  shard_index     = 10;  // shard 在 job 中的序号，用于 ResultCollector 构造本地副本
-    string screenshot_path = 11;  // 截图文件路径（转码成功后自动截取视频中点帧）
 }
 
 message ReportShardResultResponse {
@@ -55,7 +38,6 @@ message ReportShardResultResponse {
 // ── Service ────────────────────────────────────────────────────────────────
 
 service ResultCollectorService {
-    rpc ReportShardProgress(ReportShardProgressRequest) returns (ReportShardProgressResponse);  // 上报执行进度
     rpc ReportShardResult(ReportShardResultRequest) returns (ReportShardResultResponse);        // 上报最终执行结果
     // 阶段 9 删除 NotifyJobCanceled：CancelJob 直接写 MySQL 标记 CANCELED，
     // RC 的 TerminalSweepLoop / CheckJobDone 读取同一份数据，无需通知。

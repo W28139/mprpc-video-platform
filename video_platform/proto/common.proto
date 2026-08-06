@@ -7,30 +7,29 @@ package video_platform;
 // ============================================================================
 
 // 任务生命周期状态
-// PENDING → SPLITTING → SCHEDULING → RUNNING → MERGING → SUCCESS
-//                                            ↘ FAILED / CANCELED
+// PENDING → SCHEDULING → RUNNING → SUCCESS
+//                          ↘ FAILED / CANCELED
+// （合并是 ResultCollector.MarkJobTerminal 内同步完成，无独立 MERGING 状态）
 enum JobStatus {
     JOB_STATUS_UNKNOWN = 0;  // 未知状态（proto 默认值）
     JOB_PENDING        = 1;  // 已提交，等待系统处理
-    JOB_SPLITTING      = 2;  // 正在拆分为 shard
     JOB_SCHEDULING     = 3;  // 正在为 shard 匹配 Worker
     JOB_RUNNING        = 4;  // shard 正在执行中
-    JOB_MERGING        = 5;  // 所有 shard 完成，正在合并结果
     JOB_SUCCESS        = 6;  // 任务成功完成
     JOB_FAILED         = 7;  // 任务失败（超过最大重试次数）
     JOB_CANCELED       = 8;  // 用户主动取消
 }
 
 // 子任务（Shard）生命周期状态
-// CREATED → WAITING → ASSIGNED → RUNNING → SUCCESS
-//                                     ↘ FAILED → RETRYING → WAITING
-//                                                ↘ (超次)  → FAILED
+// WAITING → RUNNING → SUCCESS
+//              ↘ FAILED → RETRYING → WAITING
+//                         ↘ (超次)  → FAILED
 // 任意状态 → CANCELED
+// （shard 创建即 WAITING；分配成功即 RUNNING，无独立 ASSIGNED/CREATED 停留）
 enum ShardStatus {
     SHARD_STATUS_UNKNOWN = 0;  // 未知状态（proto 默认值）
-    SHARD_CREATED        = 1;  // 已创建，尚未进入调度队列
     SHARD_WAITING        = 2;  // 在待调度队列中等待分配 Worker
-    SHARD_ASSIGNED       = 3;  // 已分配给 Worker，等待 Worker 确认
+    SHARD_ASSIGNED       = 3;  // 已分配给 Worker（保留：超时重扫的观察窗口）
     SHARD_RUNNING        = 4;  // Worker 正在执行
     SHARD_SUCCESS        = 5;  // 执行成功
     SHARD_FAILED         = 6;  // 执行失败（可重试或已超次）
@@ -43,7 +42,6 @@ enum WorkerStatus {
     WORKER_STATUS_UNKNOWN = 0;  // 未知状态（proto 默认值）
     WORKER_ONLINE         = 1;  // 在线，可接收调度
     WORKER_OFFLINE        = 2;  // 离线（心跳超时或主动下线）
-    WORKER_DRAINING       = 3;  // 排空中：不再接收新任务，等待当前任务完成
 }
 
 // ============================================================================
@@ -110,7 +108,4 @@ message WorkerLoad {
     int32  cpu_usage       = 2;  // CPU 使用率（百分比 0-100）
     int32  memory_usage    = 3;  // 内存使用率（百分比 0-100）
     int32  running_shards  = 4;  // 当前正在执行的 shard 数
-    int32  finished_shards = 5;  // 历史完成 shard 总数（本次运行周期内）
-    int32  failed_shards   = 6;  // 历史失败 shard 总数（本次运行周期内）
-    int64  timestamp       = 7;  // 负载快照采样时间戳（毫秒）
 }

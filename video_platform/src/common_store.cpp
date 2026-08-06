@@ -99,7 +99,7 @@ static JobRecord ParseJobRow(const std::vector<std::string>& r)
 
 static const char* kShardColumns =
     "shard_id,job_id,shard_index,start_ms,duration_ms,status,assigned_worker,"
-    "attempt_id,retry_count,max_retry,input_path,output_path,screenshot_path,"
+    "attempt_id,retry_count,max_retry,input_path,output_path,"
     "target_resolution,target_bitrate,created_at,updated_at";
 
 static ShardRecord ParseShardRow(const std::vector<std::string>& r)
@@ -117,11 +117,10 @@ static ShardRecord ParseShardRow(const std::vector<std::string>& r)
     shard.max_retry            = std::stoi(r[9]);
     shard.input_path           = r[10];
     shard.output_path          = r[11];
-    shard.screenshot_path      = r[12];
-    shard.target_resolution    = r[13];
-    shard.target_bitrate       = std::stoi(r[14]);
-    shard.created_at           = std::stoll(r[15]);
-    shard.updated_at           = std::stoll(r[16]);
+    shard.target_resolution    = r[12];
+    shard.target_bitrate       = std::stoi(r[13]);
+    shard.created_at           = std::stoll(r[14]);
+    shard.updated_at           = std::stoll(r[15]);
     return shard;
 }
 
@@ -319,7 +318,7 @@ bool ShardStore::Insert(const ShardRecord& shard)
         << shard.status << ",'" << g.Escape(shard.assigned_worker_id) << "','"
         << g.Escape(shard.attempt_id) << "'," << shard.retry_count << "," << shard.max_retry
         << ",'" << g.Escape(shard.input_path) << "','" << g.Escape(shard.output_path) << "','"
-        << g.Escape(shard.screenshot_path) << "','" << g.Escape(shard.target_resolution) << "',"
+        << g.Escape(shard.target_resolution) << "',"
         << shard.target_bitrate << "," << shard.created_at << "," << shard.updated_at << ")";
     if (!g.Execute(sql.str())) {
         if (g.Errno() == 1062) return false;   // duplicate key：幂等拒绝（非错误）
@@ -354,7 +353,6 @@ bool ShardStore::UpdateIfStatus(const std::string& shard_id,
         << ",max_retry=" << shard.max_retry
         << ",input_path='" << g.Escape(shard.input_path)
         << "',output_path='" << g.Escape(shard.output_path)
-        << "',screenshot_path='" << g.Escape(shard.screenshot_path)
         << "',target_resolution='" << g.Escape(shard.target_resolution)
         << "',target_bitrate=" << shard.target_bitrate
         << ",created_at=" << shard.created_at
@@ -455,14 +453,14 @@ bool ShardStore::InsertOrUpdate(const ShardRecord& shard)
         << shard.status << ",'" << g.Escape(shard.assigned_worker_id) << "','"
         << g.Escape(shard.attempt_id) << "'," << shard.retry_count << "," << shard.max_retry
         << ",'" << g.Escape(shard.input_path) << "','" << g.Escape(shard.output_path) << "','"
-        << g.Escape(shard.screenshot_path) << "','" << g.Escape(shard.target_resolution) << "',"
+        << g.Escape(shard.target_resolution) << "',"
         << shard.target_bitrate << "," << shard.created_at << "," << shard.updated_at << ") "
         << "ON DUPLICATE KEY UPDATE job_id=VALUES(job_id),shard_index=VALUES(shard_index),"
         << "start_ms=VALUES(start_ms),duration_ms=VALUES(duration_ms),status=VALUES(status),"
         << "assigned_worker=VALUES(assigned_worker),attempt_id=VALUES(attempt_id),"
         << "retry_count=VALUES(retry_count),max_retry=VALUES(max_retry),"
         << "input_path=VALUES(input_path),output_path=VALUES(output_path),"
-        << "screenshot_path=VALUES(screenshot_path),target_resolution=VALUES(target_resolution),"
+        << "target_resolution=VALUES(target_resolution),"
         << "target_bitrate=VALUES(target_bitrate),created_at=VALUES(created_at),"
         << "updated_at=VALUES(updated_at)";
     if (!g.Execute(sql.str())) {
@@ -634,7 +632,8 @@ bool WorkerStore::UpdateHeartbeat(const std::string& worker_id, int32_t running_
         << ",memory_usage=" << memory_usage
         << ",last_heartbeat=" << NowMs()
         << ",status=" << static_cast<int32_t>(WorkerStatus::WORKER_ONLINE)
-        << " WHERE worker_id='" << g.Escape(worker_id) << "'";
+        << " WHERE worker_id='" << g.Escape(worker_id) << "'"
+        << " AND status<>" << static_cast<int32_t>(WorkerStatus::WORKER_OFFLINE);
     if (!g.Execute(sql.str())) {
         LOG_ERROR("WorkerStore::UpdateHeartbeat failed (worker=%s): %s",
                   worker_id.c_str(), g.Error().c_str());
