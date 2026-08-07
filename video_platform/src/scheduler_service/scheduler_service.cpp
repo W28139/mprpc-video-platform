@@ -294,15 +294,7 @@ public:
         done->Run();
     }
 
-    /// @brief 重新调度一个 shard（失败 / 超时后触发 — 阶段 5 完整实现）
-    ///
-    /// 调用方：
-    /// - ResultCollector::ReportShardResult（Worker 返回执行失败）
-    /// - WorkerManager::HeartbeatTimeoutCheck（通过 NotifyWorkerOffline）
-    ///
-    /// 逻辑：
-    /// 1. retry_count >= max_retry → 标记 SHARD_FAILED（终态），检查 job 是否 JOB_FAILED
-    /// 2. retry_count < max_retry → retry_count++，重置为 WAITING，由 SchedulingLoop 重新分配
+    // 重新调度一个 shard（失败 / 超时后触发）
     void RescheduleShard(::google::protobuf::RpcController* controller,
                          const ::RescheduleShardRequest* request,
                          ::RescheduleShardResponse* response,
@@ -326,11 +318,6 @@ public:
         // 通过shard_id 拿到对应的shard
         auto shard = shard_opt.value();
 
-        // #3 修复：attempt 幂等校验——重复 FAILED 上报触发的二次
-        // RescheduleShard 直接拒绝，防止 retry_count 双倍消耗。
-        // 判定：请求带 attempt_id 且与 shard 当前 attempt 不一致
-        // （shard.attempt_id 已被上次重调度清空，或已推进到新 attempt）
-        // → 说明本次请求是旧 attempt 的重复处理，拒绝。
         if (!request->attempt_id().empty()
             && shard.attempt_id != request->attempt_id())
         {
@@ -345,12 +332,7 @@ public:
             return;
         }
 
-        // #4 修复：终态守卫——已终态的 shard 不复活。
-        // 此前 RescheduleShard 把任意状态的 shard（含 CANCELED）覆盖为 WAITING +
-        // retry_count++：用户 CancelJob 把 shard 标 CANCELED 后，取消窗口内
-        // worker 的 FAILED 上报到达 RC → RescheduleShard 把已取消 shard 复活
-        // 重新分配并真实转码（CANCELED 是 proto 状态机注释明确的终态）。
-        // 与 NotifyWorkerOffline / 超时重扫 / 分配循环三处的守卫保持一致。
+        // 如果该shard已经终止，那就直接return
         {
             int st = shard.status;
             int s_success  = static_cast<int32_t>(ShardStatus::SHARD_SUCCESS);
@@ -368,7 +350,7 @@ public:
                 return;
             }
 
-            // job 已终态（SUCCESS/FAILED/CANCELED）的 shard：残留执行直接
+            // 判断是否为job 已终态（SUCCESS/FAILED/CANCELED）的 shard
             // CANCELED，不重调度（与 NotifyWorkerOffline 同语义）
             auto j_opt = JobStore::GetInstance().Get(shard.job_id);
             if (j_opt.has_value())
@@ -381,10 +363,11 @@ public:
                 if (job_terminal)
                 {
                     int from_status = shard.status;   // 快照前置状态
-                    shard.status = s_canceled;
+                    shard.status = s_canceled;       
                     shard.assigned_worker_id.clear();
                     shard.attempt_id.clear();
                     shard.updated_at = NowMs();
+                    // 把shard更改为cancel
                     ShardStore::GetInstance().UpdateIfStatus(shard_id, {from_status}, shard);
                     LOG_WARN("SchedulerService::RescheduleShard shard_id=%s job %s "
                              "terminal (%d), marked CANCELED and rejected",
@@ -398,13 +381,14 @@ public:
             }
         }
 
-        // ── 检查是否已达最大重试次数 ────────────────────────────
+        // 检查是否已达最大重试次数
         if (shard.retry_count >= shard.max_retry)
         {
             LOG_WARN("SchedulerService::RescheduleShard shard_id=%s reached max retry "
                      "(%d/%d), marking SHARD_FAILED",
                      shard_id.c_str(), shard.retry_count, shard.max_retry);
 
+            // 设置shard状态为出错，然后更新
             shard.status = static_cast<int32_t>(ShardStatus::SHARD_FAILED);
             shard.updated_at = NowMs();
             ShardStore::GetInstance().UpdateIfStatus(
@@ -424,10 +408,10 @@ public:
             return;
         }
 
-        // ── 未超次：增加重试计数，重置为 WAITING ──────────────
+        // 未超次：增加重试计数，重置为 WAITING
         int from_status = shard.status;   // 快照前置状态（条件更新防覆盖）
         shard.retry_count++;
-        // 阶段 11：shard 重试观测（重试计数每次 +1 都记录）
+        // shard 重试观测（重试计数每次 +1 都记录）
         mprpc::MetricsRegistry::GetInstance()
             .Counter("shard_retry_total", "shard 重试总次数").Inc();
         shard.status = static_cast<int32_t>(ShardStatus::SHARD_RETRYING);
@@ -447,7 +431,7 @@ public:
         LOG_INFO("SchedulerService::RescheduleShard shard_id=%s → WAITING (retry=%d/%d)",
                  shard_id.c_str(), shard.retry_count, shard.max_retry);
 
-        // 阶段 10：重试的 shard 也发事件立即重分配（不等轮询）
+        // 重试的 shard 也发事件立即重分配（不等轮询）
         NotifyShardWaiting(shard_id);
 
         response->set_error_code(0);
@@ -535,17 +519,7 @@ public:
         done->Run();
     }
 
-    /// @brief 取消 job 的所有 shard 并 best-effort 通知 Worker
-    ///
-    /// 由 JobService.CancelJob 调用。Scheduler 在本地 ShardStore 中查找
-    /// 该 job 的 shard，对 RUNNING/ASSIGNED 状态的 shard 直连 Worker
-    /// 发送 CancelShard RPC。
-    ///
-    /// 最佳努力语义：
-    /// - Worker 通知失败只打 WARN 日志，不返回错误
-    /// - WorkerManager.ListWorkers RPC 失败则跳过通知阶段
-    /// - 先把本地 Store 中所有非终态 shard 标记为 CANCELED，再通知 Worker
-    ///   （修复：任务终态后残留 shard 不再被超时扫描/离线通知重新分配）
+    // 取消 job 的所有 shard 并 best-effort 通知 Worker
     void CancelJobShards(::google::protobuf::RpcController* controller,
                           const ::CancelJobShardsRequest* request,
                           ::CancelJobShardsResponse* response,
@@ -576,39 +550,16 @@ public:
             return;
         }
 
-        // 2. 先把本地 Store 中所有非终态 shard 标记为 CANCELED
-        // 修复：此前只通知 Worker 取消，本地 shard 状态不动——任务终态后
-        // 残留的 ASSIGNED/RUNNING/WAITING shard 会在 Worker 死亡时被超时
-        // 扫描重置为 WAITING 并重新分配，造成已完成任务的重复转码。
-
-        // 先标记本地，再通知 Worker（顺序不可反,Worker 取消结果上报到ResultCollector，不经过本 Store）。
-        {
-            constexpr int32_t s_canceled = static_cast<int32_t>(ShardStatus::SHARD_CANCELED);
-            for (const auto& s : shards)
-            {
-                if (s.status == s_canceled) continue;  // 已终态，跳过
-                auto fresh_opt = ShardStore::GetInstance().Get(s.shard_id);
-                if (!fresh_opt.has_value()) continue;
-                auto fresh = fresh_opt.value();
-                if (fresh.status == s_canceled) continue;
-                int from_status = fresh.status;   // 快照前置状态（条件更新防覆盖）
-                fresh.status = s_canceled;
-                fresh.updated_at = NowMs();
-                ShardStore::GetInstance().UpdateIfStatus(s.shard_id, {from_status}, fresh);
-                LOG_INFO("SchedulerService::CancelJobShards: marked shard %s CANCELED "
-                         "(prev_status=%d)", s.shard_id.c_str(), s.status);
-            }
-        }
-
-        // 3. 收集需要通知的 shard（RUNNING/ASSIGNED 且有分配 worker）
+        // 2. 收集需要通知的 shard (处于worker里的shard)
+        // 先排除SHARD_SUCCESS与SHARD_FAILED
         std::vector<std::pair<std::string, std::string>> shards_to_notify;
-        int32_t s_running  = static_cast<int32_t>(ShardStatus::SHARD_RUNNING);
-        int32_t s_assigned = static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED);
+        int32_t s_success  = static_cast<int32_t>(ShardStatus::SHARD_SUCCESS);
+        int32_t s_failed   = static_cast<int32_t>(ShardStatus::SHARD_FAILED);
 
-        // 拿到所有分片以及对应的work_id
+        // 拿分片以及对应的work_id
         for (const auto& s : shards)
         {
-            if ((s.status == s_running || s.status == s_assigned)
+            if (s.status != s_success && s.status != s_failed
                 && !s.assigned_worker_id.empty())
             {
                 shards_to_notify.emplace_back(s.shard_id, s.assigned_worker_id);
@@ -672,7 +623,7 @@ public:
                                          static_cast<uint16_t>(w.port())};
         }
 
-        // 5. 直连每个 Worker 发送 CancelShard（best-effort）
+        // 5. 直连每个 Worker 发送 CancelShard
         // 根据分片—分片所在work_id 与 work_id-对应ip_port信息，找到分片对应的具体哪个work
         for (const auto& kv : shards_to_notify)
         {
@@ -700,6 +651,7 @@ public:
             cs_req.set_shard_id(shard_id);
             cs_req.set_reason(reason);
 
+            // 对每个有shard的worker通知，取消该shard
             CancelShardResponse cs_resp;
             MprpcController cs_ctrl;
             cs_ctrl.SetTimeoutMs(3000);

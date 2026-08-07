@@ -181,7 +181,7 @@ public:
 
 
 
-    /// @brief 查询任务状态和进度
+    // 查询任务状态和进度
     void QueryJob(::google::protobuf::RpcController* controller,
                   const ::QueryJobRequest* request,
                   ::QueryJobResponse* response,
@@ -189,10 +189,7 @@ public:
     {
         LOG_INFO("JobService::QueryJob job_id=%s", request->job_id().c_str());
 
-        // 阶段 10：进度缓存——先查 Redis（TTL 60s），命中直接返回，
-        // 减少高频 QueryJob 对 ShardStore(MySQL) 的反复扫描。
-        // 进行中的进度最多滞后 60s（TTL 过期自然刷新）；
-        // RC 在 ReportShardResult 时 DEL，终态/关键推进及时可见。
+        // 进度缓存——先查 Redis
         auto& redis = RedisClient::GetInstance();
         if (redis.inited() && redis.enabled())
         {
@@ -208,6 +205,7 @@ public:
             }
         }
 
+        // Redis如果没有，那就直接查询MySQL，然后把查到的信息加入缓存
         auto job_opt = JobStore::GetInstance().Get(request->job_id());
         if (!job_opt.has_value())
         {
@@ -256,23 +254,19 @@ public:
             si->set_updated_at(s.updated_at);
         }
 
-        // 阶段 10：写进度缓存（TTL 60s）。只缓存成功响应；
-        // Redis 不可用时静默跳过（降级，下一次查询直读 MySQL）
+        // 成功拿到数据，加入redis缓存
         if (redis.inited() && redis.enabled() && response->error_code() == 0)
         {
             std::string serialized;
+            // SetEx(key, value, 60) 
+            // Redis 的 SETEX 命令：写 key + 设置 60 秒 TTL，到期自动过期
             if (response->SerializeToString(&serialized))
                 redis.SetEx("job:progress:" + request->job_id(), serialized, 60);
         }
-
         done->Run();
     }
 
-    /// @brief 取消任务（含分布式传播）
-    ///
-    /// 阶段 4 改进：除标记 JobStore 外，同步标记所有 shard 为 CANCELED，把未切分和已切分的任务都标记为取消
-    /// 防止 SchedulingLoop 继续扫描分配给已取消 job 的 WAITING shard。
-    /// 对已分配的 shard 尝试通知 Worker 取消执行（best-effort）。
+    // 取消任务
     void CancelJob(::google::protobuf::RpcController* controller,
                    const ::CancelJobRequest* request,
                    ::CancelJobResponse* response,
@@ -281,6 +275,7 @@ public:
         LOG_INFO("JobService::CancelJob job_id=%s, reason=%s",
                  request->job_id().c_str(), request->reason().c_str());
 
+        // 找不到该任务，直接取消
         auto job_opt = JobStore::GetInstance().Get(request->job_id());
         if (!job_opt.has_value())
         {
@@ -290,7 +285,6 @@ public:
             return;
         }
 
-        // 条件更新：仅当 job 仍是快照状态时推进（防覆盖 RC 已写入的终态）
         {
             auto job = job_opt.value();
             int from_status = job.status;
@@ -299,10 +293,9 @@ public:
             JobStore::GetInstance().UpdateIfStatus(request->job_id(), {from_status}, job);
         }
 
-        // ── 传播取消到所有 shard ─────────────────────────────────────
+        // 传播取消到所有 shard
         // 将所有非终态 shard 标记为 CANCELED，使 SchedulingLoop 不再扫描它们。
         // 对已分配的 shard，best-effort 通知 Worker 取消执行。
-        // 条件更新：仅当状态未变时覆盖（防与 RC 并发写入的 SUCCESS 互踩）。
         auto shards = ShardStore::GetInstance().ListByJob(request->job_id());
         int canceled_count = 0;
         for (auto& s : shards)
@@ -312,7 +305,7 @@ public:
             int s_failed   = static_cast<int32_t>(ShardStatus::SHARD_FAILED);
             int s_canceled = static_cast<int32_t>(ShardStatus::SHARD_CANCELED);
             if (st == s_success || st == s_failed || st == s_canceled)
-                continue;  // 已终态，不动（防止破坏 RC 的终态判定）
+                continue; 
             int from_status = st;   // 快照前置状态
             s.status = s_canceled;
             s.updated_at = NowMs();
@@ -322,10 +315,7 @@ public:
         LOG_INFO("JobService::CancelJob job_id=%s: canceled %d shards",
                  request->job_id().c_str(), canceled_count);
 
-        // ── Best-effort 委托 Scheduler 向 Worker 传播取消 ───────────
-        // 本地 ShardStore 不持有 assigned_worker_id（数据在 Scheduler 进程），
-        // 因此通过 Scheduler.CancelJobShards RPC 让 Scheduler 直连 Worker送 CancelShard。
-        // 无论成功与否都不影响 CancelJob 本身的返回结果。
+        // 委托 Scheduler 向 Worker 传播取消
         {
             MprpcChannel sched_channel;
             SchedulerService_Stub sched_stub(&sched_channel);
@@ -367,12 +357,7 @@ public:
         done->Run();
     }
 
-    /// @brief 列出任务概要（阶段 12 GUI 客户端：任务列表数据源）
-    ///
-    /// 按 created_at 倒序返回最多 limit 条 JobInfo（不含 shard，列表页
-    /// 只需要概要；shard 详情由 QueryJob 单独查）。无 Redis 缓存——列表
-    /// 是 2s 一次的高频查询，缓存会引入额外一致性复杂度且收益低（SQL
-    /// 单表扫描，MySQL 化后 <1ms）。
+    /// @brief 列出任务概要（GUI 客户端：任务列表数据源）
     void ListJobs(::google::protobuf::RpcController* controller,
                   const ::ListJobsRequest* request,
                   ::ListJobsResponse* response,
@@ -409,17 +394,10 @@ public:
 
 };
 
-// ============================================================================
-// PendingScanLoop — 后台 PENDING 任务兜底扫描（阶段 8 Bug #2/#3 修复）(PENDING:已提交，等待系统处理 )
-// ============================================================================
-//
-// 背景：SubmitJob 调用 Scheduler.ScheduleJob 时可能因 Scheduler 不可用而失败，
-// job 留在 PENDING 状态。本线程定期扫描 PENDING job 并重试 ScheduleJob，确保：
-// 1. Scheduler 重启后，之前 PENDING 的 job 能被重新切分调度（修复 #2）
-// 2. SubmitJob 重试耗尽后，job 不会被永久遗忘（修复 #3）
-//
-// ScheduleJob 在 Scheduler 端是幂等的（job_exists 分支），重复调用安全。
 
+// 本线程定期扫描 PENDING job 并重试 ScheduleJob，确保：
+// 1. Scheduler 重启后，之前 PENDING 的 job 能被重新切分调度
+// 2. SubmitJob 重试耗尽后，job 不会被永久遗忘
 static void PendingScanLoop(std::atomic<bool>& stop_flag)
 {
     constexpr int64_t kScanIntervalMs = 10000;  // 每 10 秒扫描一次
@@ -432,7 +410,7 @@ static void PendingScanLoop(std::atomic<bool>& stop_flag)
         std::this_thread::sleep_for(std::chrono::milliseconds(kScanIntervalMs));
         if (stop_flag) break;
 
-        // 扫描所有 PENDING 状态的 job
+        // 扫描所有当前处于 PENDING 状态的 job
         auto all_jobs = JobStore::GetInstance().ListAll();
         std::vector<JobRecord> pending_jobs;
         for (const auto& j : all_jobs)
@@ -448,6 +426,18 @@ static void PendingScanLoop(std::atomic<bool>& stop_flag)
 
         for (const auto& job : pending_jobs)
         {
+            // 调用 ScheduleJob 前先 Get 最新状态，已取消/已完成的任务直接跳过，不再触发无谓的切分 RPC
+            auto latest_job_opt = JobStore::GetInstance().Get(job.job_id);
+            if (!latest_job_opt.has_value()) continue;  // 任务已被删除（异常情况）
+            auto latest_job = latest_job_opt.value();
+            if (latest_job.status != static_cast<int32_t>(JobStatus::JOB_PENDING))
+            {
+                LOG_WARN("PendingScanLoop: job_id=%s status=%d no longer PENDING, "
+                         "skip ScheduleJob (fix #7)",
+                         job.job_id.c_str(), latest_job.status);
+                continue;
+            }
+
             // 构造 JobInfo
             JobInfo job_info;
             job_info.set_job_id(job.job_id);
@@ -463,7 +453,7 @@ static void PendingScanLoop(std::atomic<bool>& stop_flag)
             job_info.set_shard_duration_sec(job.shard_duration_sec);
             job_info.set_duration_sec(job.duration_sec);
 
-            // 调用 Scheduler.ScheduleJob（幂等）
+            // 调用 Scheduler.ScheduleJob
             MprpcChannel sched_channel;
             SchedulerService_Stub sched_stub(&sched_channel);
 
@@ -474,44 +464,32 @@ static void PendingScanLoop(std::atomic<bool>& stop_flag)
             MprpcController sched_ctrl;
             sched_ctrl.SetTimeoutMs(5000);
 
+            // 重新调用
             sched_stub.ScheduleJob(&sched_ctrl, &sched_req, &sched_resp, nullptr);
 
+            // 如果调用成功
             if (!sched_ctrl.Failed() && sched_resp.accepted())
             {
                 // 更新 JobStore 中的状态和 shard_count
-                auto latest_job_opt = JobStore::GetInstance().Get(job.job_id);
-                if (latest_job_opt.has_value())
+                // UpdateIfStatus 条件 {PENDING} 不满足则拒绝覆盖（已取消的任务不复活）
+                latest_job.status = static_cast<int32_t>(JobStatus::JOB_SCHEDULING);
+                latest_job.shard_count = sched_resp.shard_count();
+                latest_job.updated_at = NowMs();
+                if (!JobStore::GetInstance().UpdateIfStatus(
+                        job.job_id,
+                        {static_cast<int32_t>(JobStatus::JOB_PENDING)}, latest_job))
                 {
-                    auto latest_job = latest_job_opt.value();
-                    // #7 修复：仅当仍为 PENDING 时才推进到 SCHEDULING。
-                    // 此前直接覆写状态，绕过 UpdateJobStatus 的单调性保护：
-                    // 响应丢失场景下可能把已 SUCCESS 的 job 回退为 SCHEDULING
-                    // （永久卡非终态），取消竞争场景下可能把已 CANCELED 的
-                    // job 复活继续执行。先 check 再 Update。
-                    if (latest_job.status != static_cast<int32_t>(JobStatus::JOB_PENDING))
-                    {
-                        LOG_WARN("PendingScanLoop: job_id=%s status=%d no longer "
-                                 "PENDING, skip status overwrite (fix #7)",
-                                 job.job_id.c_str(), latest_job.status);
-                    }
-                    else
-                    {
-                        // 成功的话更新状态为 scaned 切片状态
-                        // 条件更新（阶段 9）：仅当仍为 PENDING 时才推进
-                        latest_job.status = static_cast<int32_t>(JobStatus::JOB_SCHEDULING);
-                        latest_job.shard_count = sched_resp.shard_count();
-                        latest_job.updated_at = NowMs();
-                        JobStore::GetInstance().UpdateIfStatus(
-                            job.job_id,
-                            {static_cast<int32_t>(JobStatus::JOB_PENDING)}, latest_job);
-                    }
+                    LOG_WARN("PendingScanLoop: job_id=%s status changed during "
+                             "ScheduleJob, skip status overwrite (fix #7)",
+                             job.job_id.c_str());
                 }
 
-                // 阶段 9：不再同步 shard 列表（MySQL 共享，QueryJob 直接读取）
+                // 不再同步 shard 列表（MySQL 共享，QueryJob 直接读取）
                 LOG_INFO("PendingScanLoop: job_id=%s rescheduled successfully, "
                          "%d shards created (shared via MySQL)",
                          job.job_id.c_str(), sched_resp.shard_count());
             }
+            // 失败
             else
             {
                 LOG_WARN("PendingScanLoop: ScheduleJob still failed for job_id=%s: %s",

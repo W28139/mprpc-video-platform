@@ -85,7 +85,7 @@ public:
             load.worker_id(), load.running_shards(),
             load.cpu_usage(), load.memory_usage());
 
-        // 心跳双写 Redis 负载快照
+        // 向 Redis 写内容
         // - alive=false 表示 Worker 已被标记死亡，不写快照（避免"幽灵快照"误导调度）
         if (alive)
         {

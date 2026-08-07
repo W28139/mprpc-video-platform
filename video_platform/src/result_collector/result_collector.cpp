@@ -22,42 +22,9 @@
 
 using namespace video_platform;
 
-// ============================================================================
-// ResultCollectorService — 结果收集与聚合（阶段 5：幂等校验 + 故障恢复）
-// ============================================================================
-//
-// ResultCollector 是调度链路的终点——Worker 执行完 shard 后向它上报结果，
-// 它负责聚合所有 shard 的状态，判定 job 的整体终态（SUCCESS / FAILED）。
-//
-// 阶段 5 核心增强：
-// 1. attempt_id 幂等校验
-//    - 从 attempt_id 中解析 retry_count（格式 "{shard_id}_attempt_{N}"）
-//    - 拒绝旧 attempt 的过期结果（incoming_retry < stored_retry）
-//    - 防止 Worker 重试后旧 attempt 的延迟结果覆盖新 attempt 的状态
-// 2. FAILED → RescheduleShard 重试链路
-//    - Worker 上报 is_success=false → 标记本地 FAILED → RPC 调用
-//      Scheduler.RescheduleShard → 成功后本地改为 RETRYING（防过早判定 JOB_FAILED）
-// 3. CheckJobDone 增强
-//    - 同时检查 SUCCESS 和 FAILED 终态
-//    - 从 JobService 查询 expected_shard_count（跨进程 RPC，带重试）
-//    - 查询成功后缓存到本地 JobStore 避免重复 RPC
-// 4. MarkJobTerminal 提取为独立方法，JOB_SUCCESS 和 JOB_FAILED 共用
-//
-// ⚠️ 跨进程存储问题：
-// ShardStore 是进程内单例，Worker 上报的 shard 在 ResultCollector 本地可能
-// 不存在（由 Scheduler 在另一个进程中创建）。首次收到结果时从请求参数构造
-// 本地副本。expected_shard_count 同样需要从 JobService 跨进程查询。
 
 /// @brief 从 attempt_id 字符串中解析重试次数
-///
-/// attempt_id 格式：{shard_id}_attempt_{N}
-/// 示例："job_xxx_shard_0_attempt_2" → 返回 2
-///
-/// 解析策略：从右侧查找最后一个 '_'，取其后的子串转为整数。
-/// 这是安全的——attempt_id 由 Scheduler 在 AssignShard 时使用固定格式构造。
-///
-/// @param attempt_id 执行尝试标识符
-/// @return 解析出的重试次数（0, 1, 2, ...），解析失败返回 0
+// attempt_id 格式：{shard_id}_attempt_{N}
 static int parseRetryFromAttempt(const std::string& attempt_id)
 {
     auto pos = attempt_id.rfind('_');
@@ -66,57 +33,21 @@ static int parseRetryFromAttempt(const std::string& attempt_id)
     catch (...) { return 0; }
 }
 
-/// @brief ResultCollectorService RPC 实现
-///
-/// 由 TranscodeWorker 的 MockExecute 线程通过 ZK 发现的
-/// ResultCollectorService_Stub 调用。每次 shard 执行结束（成功或失败）
-/// 都会触发一次 ReportShardResult，CheckJobDone 判定 job 是否到达终态。
-///
-/// 阶段 5 核心流程（6 步）：
-///   1. 查找/创建 shard 本地副本（解决跨进程存储可见性问题）
-///   2. attempt_id 幂等校验（拒绝旧 attempt 的过期结果）
-///   3. 已 SUCCESS 的幂等检查（防重复上报）
-///   4. 更新状态 → SUCCESS 或 FAILED
-///   5. 若 FAILED → RPC 调用 Scheduler.RescheduleShard 触发重试
-///   6. CheckJobDone → 判定 JOB_SUCCESS 或 JOB_FAILED
-///
-/// ⚠️ 跨进程存储：ShardStore 是进程内单例，详见业务日志第 3 篇「踩坑记录」节。
 class ResultCollectorServiceImpl : public ResultCollectorService {
 public:
-    /// @brief 周期终态扫描（阶段 8 #10 修复）— 静态成员函数
-    ///
-    /// 作为成员函数以便访问私有的 CheckJobDone / MarkJobTerminal（均为 static）。
-    /// 由 main() 启动为独立线程，每 15 秒扫描一次。
     static void TerminalSweepLoop(std::atomic<bool>& stop_flag);
 
-    /// @brief Worker 上报 shard 执行进度
-    /// @brief Worker 上报 shard 最终执行结果（聚合核心入口 — 阶段 5 增强）
-    ///
-    /// 由 WorkerServiceImpl::MockExecute() 在 shard 执行完成后调用。
-    ///
-    /// 处理流程（6 步）：
-    /// 1. 从 ShardStore 获取 shard；不存在则从请求参数构造本地副本
-    /// 2. attempt_id 幂等校验：拒绝旧 attempt 的过期结果
-    /// 3. 已 SUCCESS 的幂等检查：直接返回，不重复处理
-    /// 4. 更新 ShardStore：SUCCESS / FAILED
-    /// 5. 若 FAILED：调用 Scheduler.RescheduleShard 触发重试
-    /// 6. CheckJobDone：判断 job 终态（SUCCESS / FAILED / 等待中）
+    // 由 WorkerServiceImpl::MockExecute() 在 shard 执行完成后调用
     void ReportShardResult(::google::protobuf::RpcController* controller,
                            const ::ReportShardResultRequest* request,
                            ::ReportShardResultResponse* response,
                            ::google::protobuf::Closure* done) override
     {
-        // 阶段 10：RPC handler 转发公共处理逻辑（MQ 消费线程同样调用）
         HandleReportShardResult(request, response);
         done->Run();
     }
 
-    /// @brief 公共处理逻辑：接收并聚合 shard 执行结果。
-    ///
-    /// 阶段 10：RPC handler（Worker 直连，MQ 故障时回退路径）与
-    /// MQ 消费线程（result.pending，正常路径）共用同一实现，保证
-    /// 聚合/重试/终态判定行为完全一致。重复投递由 attempt_id + 状态
-    /// 幂等检查兜底（见函数体内 2/3 步骤）。
+    // HandleReportShardResult — 接收并聚合 Worker 上报的 shard 执行结果
     static void HandleReportShardResult(const ::ReportShardResultRequest* request,
                                         ::ReportShardResultResponse* response)
     {
@@ -135,9 +66,7 @@ public:
                  request->exit_code(),
                  (long long)request->elapsed_ms());
 
-        // 1. 从 ShardStore（MySQL）获取 shard
-        // 阶段 9：shard 由 Scheduler 切分时写入 MySQL，RC 直接读取同一份数据，
-        // 不再需要"从请求参数构造本地副本"。查不到说明数据异常，拒绝接收。
+        // 1. 从 MySQL 获取 shard
         auto shard_opt = ShardStore::GetInstance().Get(shard_id);
         if (!shard_opt.has_value())
         {
@@ -149,17 +78,11 @@ public:
             response->set_job_done(false);
             return;
         }
-
         auto shard = shard_opt.value();
 
         // 2. attempt_id 幂等校验：拒绝旧 attempt 的过期结果
-        //    时序场景：Scheduler 将 shard 重试（retry_count=0→1，新 attempt_id=xxx_attempt_1）
-        //    → SchedulingLoop 重新分配给 Worker → Worker 开始执行 attempt_1。
-        //    同时，旧 Worker 上 attempt_0 的 ReportShardResult RPC 因网络延迟此刻才到达。
-        //    如果不校验 attempt_id，attempt_0 的过期 SUCCESS 结果会覆盖 attempt_1 的状态。
-        //    通过从 attempt_id 字符串中解析 retry_count 数值，直接比较新旧。
-        int stored_retry = parseRetryFromAttempt(shard.attempt_id);
-        int incoming_retry = parseRetryFromAttempt(attempt_id);
+        int stored_retry = parseRetryFromAttempt(shard.attempt_id);     // 最新进度
+        int incoming_retry = parseRetryFromAttempt(attempt_id);         // 本次进度
         if (!shard.attempt_id.empty() && incoming_retry < stored_retry)
         {
             LOG_INFO("ResultCollectorService: rejecting stale result for shard %s "
@@ -172,7 +95,9 @@ public:
             return;
         }
 
-        // 3. 幂等检查：已 SUCCESS 的不再处理（同一 attempt 重复上报）
+        // 3. 幂等检查1：已 SUCCESS 的不再处理
+        // shard.attempt_id：MySQL 里 shard 记录的 attempt_id
+        // attempt_id：Worker 上报请求里带的 attempt_id（这次结果对应的是第几次执行）
         if (shard.status == static_cast<int32_t>(ShardStatus::SHARD_SUCCESS))
         {
             LOG_INFO("ResultCollectorService: shard %s already SUCCESS (idempotent)",
@@ -184,11 +109,7 @@ public:
             return;
         }
 
-        // 3.5 幂等检查：同一 attempt 的重复失败结果不再处理（修复 #8/#3）
-        // 防止同一 attempt 的重复 FAILED 上报双倍消耗 retry_count。
-        // #3 修复：检查范围从 FAILED 扩展到 RETRYING——首次 FAILED 上报处理后
-        // 本地状态被置为 RETRYING（:301-303），重复 FAILED 到达时状态已不是
-        // FAILED，原检查被绕过导致再次触发 RescheduleShard 双倍消耗预算。
+        // 3. 幂等检查2：忽略同一 attempt 的重复上报,执行重试逻辑
         if ((shard.status == static_cast<int32_t>(ShardStatus::SHARD_FAILED)
           || shard.status == static_cast<int32_t>(ShardStatus::SHARD_RETRYING))
             && shard.attempt_id == attempt_id)
@@ -203,11 +124,9 @@ public:
             return;
         }
 
-        // 4. 更新 shard 状态
-        // 条件更新（阶段 9）：仅当仍是快照状态时推进，防止覆盖
-        // Scheduler 并发写入的状态（如超时重扫的 WAITING 重置）
+        // 4. 更新 shard 状态，记录最新的shard
         {
-            int from_status = shard.status;   // 快照前置状态
+            int from_status = shard.status;
             shard.status = request->is_success()
                 ? static_cast<int32_t>(ShardStatus::SHARD_SUCCESS)
                 : static_cast<int32_t>(ShardStatus::SHARD_FAILED);
@@ -223,10 +142,8 @@ public:
                  request->is_success() ? "SUCCESS" : "FAILED",
                  attempt_id.c_str());
 
-        // 阶段 10：shard 状态推进后失效进度缓存，让 QueryJob 及时看到新状态。
-        // 进行中状态（RUNNING）靠 60s TTL 过期自然刷新；
-        // 结果落定（SUCCESS/FAILED）则主动 DEL，终态判定不滞后。
-        // Redis 不可用时静默跳过（降级）。
+        // shard 结果落定后失效进度缓存，保证查到的shard为最新状态
+        // 这里不更新redis是考虑redis经典设计
         {
             auto& redis = RedisClient::GetInstance();
             if (redis.inited() && redis.enabled())
@@ -234,25 +151,14 @@ public:
         }
 
         // 5. 若执行失败，调用 Scheduler.RescheduleShard 触发重试
-        //    这里是阶段 5 故障恢复的核心链路：
-        //    Worker FAILED → ResultCollector → Scheduler.RescheduleShard
-        //      → retry_count++ → 判断超限? → SHARD_FAILED(永久) : SHARD_WAITING(重分配)
-        //    → SchedulingLoop 扫描 WAITING → 重新 AssignShard → Worker 再次执行
-        //
-        //    若 RescheduleShard 成功（accepted=true），将状态改为 SHARD_RETRYING
-        //    （MySQL 共享数据，阶段 9 起），这样 CheckJobDone 不会因为看到 FAILED
-        //    而过早判定 JOB_FAILED。
-        //    若 RescheduleShard 拒绝（accepted=false，即已超 max_retry），保持 FAILED。
-
-        // shard 的转码工作本身没干成(is_success 是 Worker 填的，表示"这活干成没有")
         if (!request->is_success())
         {
             LOG_INFO("ResultCollectorService: triggering RescheduleShard for %s (reason=WORKER_FAILED)",
                      shard_id.c_str());
 
-            // 阶段 8 修复 #5：RescheduleShard RPC 带重试+退避（3 次，各 1s/2s/4s 间隔）
-            bool reschedule_ok = false;
-            bool last_was_network = false;  // #8 修复：区分网络失败与确定性拒绝
+            // RescheduleShard RPC 带重试+退避（3 次，各 1s/2s/4s 间隔）
+            bool reschedule_ok = false;     // 区分RPC是否调用成功
+            bool last_was_network = false;  // 区分网络失败与确定性拒绝
             for (int rs_attempt = 1; rs_attempt <= 3; ++rs_attempt)
             {
                 if (rs_attempt > 1)
@@ -276,6 +182,7 @@ public:
 
                 sched_stub.RescheduleShard(&rs_ctrl, &rs_req, &rs_resp, nullptr);
 
+                // 重试成功，break循环
                 if (!rs_ctrl.Failed() && rs_resp.accepted())
                 {
                     LOG_INFO("ResultCollectorService: RescheduleShard accepted for %s "
@@ -283,29 +190,39 @@ public:
                     reschedule_ok = true;
                     break;
                 }
-
-                last_was_network = rs_ctrl.Failed();
-                LOG_WARN("ResultCollectorService: RescheduleShard failed for %s "
-                         "(attempt %d/3): %s",
-                         shard_id.c_str(), rs_attempt,
-                         rs_ctrl.Failed() ? rs_ctrl.ErrorText().c_str()
-                                          : rs_resp.error_msg().c_str());
+                // 失败分两类：
+                // 网络/框架层失败（Failed()）——不知道远端是否已处理
+                // 业务层确定性拒绝（!Failed() && !accepted()）——远端明确答复（如 max_retry 耗尽），保持 FAILED
+                else if (rs_ctrl.Failed())
+                {
+                    last_was_network = true;
+                    LOG_WARN("ResultCollectorService: RescheduleShard network failed "
+                             "for %s (attempt %d/3): %s",
+                             shard_id.c_str(), rs_attempt,
+                             rs_ctrl.ErrorText().c_str());
+                }
+                else
+                {
+                    last_was_network = false;
+                    LOG_WARN("ResultCollectorService: RescheduleShard rejected for %s "
+                             "(attempt %d/3): %s",
+                             shard_id.c_str(), rs_attempt,
+                             rs_resp.error_msg().c_str());
+                }
             }
 
+            // 调用重试RPC成功，更新shard信息
             if (reschedule_ok)
             {
-                // 重试已触发，更新本地状态为 RETRYING，防止 CheckJobDone
-                // 在重试结果到达前因看到 FAILED 而过早判定 JOB_FAILED
-                // 条件更新：仅当仍是 FAILED 时推进（Scheduler 可能已重置为 WAITING）
+                
                 shard.status = static_cast<int32_t>(ShardStatus::SHARD_RETRYING);
                 shard.updated_at = NowMs();
                 ShardStore::GetInstance().UpdateIfStatus(
                     shard_id, {static_cast<int32_t>(ShardStatus::SHARD_FAILED)}, shard);
             }
+            // 三次调用都失败了，但是这是网络错误
             else if (last_was_network)
             {
-                // 3 次重试全因网络失败（Scheduler 不可达）→ 标记 RETRYING，
-                // 防止不可逆 JOB_FAILED；Scheduler 恢复后重扫/新上报会兜底。
                 LOG_ERROR("ResultCollectorService: RescheduleShard FAILED after 3 "
                           "network retries for %s, marking RETRYING",
                           shard_id.c_str());
@@ -314,15 +231,11 @@ public:
                 ShardStore::GetInstance().UpdateIfStatus(
                     shard_id, {static_cast<int32_t>(ShardStatus::SHARD_FAILED)}, shard);
             }
-            else
+            // 确定性拒绝：保持 FAILED
+            else 
             {
-                // #8 修复：确定性拒绝（accepted=false，如 max_retry 耗尽）——
-                // Scheduler 已把 shard 置 FAILED 并推进 job 终态，保持 FAILED
-                // 尊重其终态判定。此前无条件置 RETRYING 导致 RC 侧 CheckJobDone
-                // 把 RETRYING 计为 in_progress，job 在 RC 永不 FAILED，
-                // 与 Scheduler/JobService 的终态永久分叉（每 15s 空扫一次）。
                 LOG_WARN("ResultCollectorService: RescheduleShard deterministically "
-                         "rejected for %s (e.g. max retry), keeping FAILED (fix #8)",
+                         "rejected for %s (e.g. max retry), keeping FAILED ",
                          shard_id.c_str());
             }
         }
@@ -341,30 +254,13 @@ public:
     }
 
 private:
-    /// @brief 检查 job 下所有 shard 是否都已进入终态
-    ///
-    /// 阶段 5 增强：同时检查 SUCCESS 和 FAILED 终态。
-    ///
-    /// 判定逻辑：
-    /// 1. 从 ShardStore 获取该 job 所有已上报 shard
-    /// 2. 从 JobStore 获取预期的 shard_count
-    /// 3. 分类统计：success_count / failed_count / in_progress
-    /// 4. 若 success_count >= expected_shard_count → JOB_SUCCESS
-    /// 5. 若没有进行中的 shard 且有 FAILED → JOB_FAILED
-    /// 6. 否则 → 等待更多 shard 完成
-    ///
-    /// @return true 表示 job 已到达终态（SUCCESS 或 FAILED）
-    /// @return false 表示还有未完成的 shard
-    // static：仅操作单例 Store / RPC，不依赖实例状态，供静态线程函数
-    // TerminalSweepLoop 直接调用
+    //检查 job 下所有 shard 是否都已进入终态,如果是，进入MarkJobTerminal
     static bool CheckJobDone(const std::string& job_id)
     {
         auto shards = ShardStore::GetInstance().ListByJob(job_id);
         if (shards.empty()) return false;
 
-        // 从 JobStore（MySQL）获取预期的 shard 总数。
-        // 阶段 9：job 数据由 JobService/Scheduler 写入 MySQL 共享，直接可读，
-        // 不再需要"跨进程 QueryJob RPC 查询 shard_count"（阶段 5 的 3 次重试逻辑）。
+        // 从 JobStore（MySQL）获取预期的 shard 总数。=
         int32_t expected_shard_count = 0;
         auto job_opt = JobStore::GetInstance().Get(job_id);
         if (job_opt.has_value())
@@ -384,12 +280,8 @@ private:
                   || st == static_cast<int32_t>(ShardStatus::SHARD_CANCELED))
                 ++failed_count;
             else
-                ++in_progress;  // WAITING / ASSIGNED / RUNNING / RETRYING
+                ++in_progress;  
         }
-
-        // 阶段 9：shard_count 从 MySQL 共享读取（上方 Get 已覆盖），
-        // 跨进程 QueryJob RPC 查询逻辑已删除。
-
         // 若仍然未知，则无法判定终态（defer 到下次 ReportShardResult）
         if (expected_shard_count <= 0)
         {
@@ -425,23 +317,17 @@ private:
         return false;
     }
 
-    /// @brief Merge 互斥集：防止并发/重复 merge 毁掉成品视频（修复 #7）
-    /// key=job_id，value=true 表示该 job 正在被 merge 或已 merge 完成
+    // Merge 互斥集：防止并发/重复 merge 毁掉成品视频
     static std::mutex& MergeMutex() { static std::mutex m; return m; }
-    static std::unordered_set<std::string>& MergingJobs() {
-        static std::unordered_set<std::string> s; return s;
+    static std::unordered_set<std::string>& MergingJobs() 
+    {
+        static std::unordered_set<std::string> s; 
+        return s;
     }
 
-    /// @brief 标记 job 进入终态并通知 JobService
-    ///
-    /// 在 JobStore 中更新 job 状态，并通过 RPC 同步到 JobService 进程。
-    /// 阶段 5 新增：提取为独立方法，JOB_SUCCESS 和 JOB_FAILED 共用。
-    // static：仅操作单例 Store / RPC，不依赖实例状态，供静态线程函数
-    // TerminalSweepLoop 直接调用
+    // MarkJobTerminal — job 进入终态后的统一处理
     static void MarkJobTerminal(const std::string& job_id, JobStatus status)
     {
-        // 阶段 11：任务终态观测（单入口，SUCCESS/FAILED 两路共用。
-        // MQ 消费线程与 TerminalSweepLoop 线程并发调用安全——原子计数）
         auto& metrics_reg = mprpc::MetricsRegistry::GetInstance();
         if (status == JobStatus::JOB_SUCCESS)
         {
@@ -478,13 +364,6 @@ private:
             JobStore::GetInstance().Insert(local_job);
         }
 
-        // ── JOB_SUCCESS 时合并所有 shard 输出为完整视频（阶段 6 遗留项 1） ──
-        // 阶段 8 修复 #7：加互斥锁 + 原子标志，保证 merge 恰好执行一次
-        // #10/#11 修复：检查+insert+Merge+清理整体持锁（锁不再提前释放）——
-        //  ① 不同 job 的 merge 串行化，消除跨 job 共享 filelist.txt 的串片竞态；
-        //  ② merge 失败时从 MergingJobs 移除并直接返回（不置 job 终态），
-        //     由 TerminalSweepLoop 每 15s 重扫 CheckJobDone 自动重试 merge，
-        //     磁盘/ffmpeg 恢复后收敛，产物不再永久缺失。
         if (status == JobStatus::JOB_SUCCESS)
         {
             std::lock_guard<std::mutex> lock(MergeMutex());
@@ -548,15 +427,11 @@ private:
                 }
                 else
                 {
-                    // #10 修复：merge 失败可重试——从集合移除并保持 job 非终态，
-                    // TerminalSweepLoop 周期性重扫 CheckJobDone 时重试 merge。
-                    // 此前集合只增不删：失败后 job 显示 SUCCESS 但产物永久缺失，
-                    // 且集合内存无限增长。
                     MergingJobs().erase(job_id);
                     LOG_ERROR("ResultCollectorService: merge FAILED for job=%s: %s "
                               "(will retry via TerminalSweepLoop)",
                               job_id.c_str(), merge_result.error_msg.c_str());
-                    return;  // 不置 job 终态、不通知 JobService/Scheduler
+                    return; 
                 }
             }
             else
@@ -566,29 +441,11 @@ private:
             }
         }
         skip_merge: ;
-
-        // ── 阶段 9：不再反向通知 JobService / Scheduler ────────────────
-        // MySQL 为唯一数据源：job 终态与 shard 终态写入后对所有进程立即可见。
-        // - JobService 的 QueryJob / PendingScanLoop 直接读 MySQL；
-        // - Scheduler 的分配循环 / 超时重扫 / NotifyWorkerOffline 通过
-        //   MarkShardCanceledIfJobTerminal 读取 MySQL 中的 job 终态，
-        //   残留的 ASSIGNED/RUNNING shard 会被自动标记 CANCELED，不会重复分配。
-        // （原 UpdateJobStatus 通知与 CancelJobShards(JOB_TERMINAL) 通知已删除）
     }
 };
 
-// ============================================================================
-// TerminalSweepLoop — 周期终态扫描（阶段 8 #10 修复）
-// ============================================================================
-//
-// 背景：CheckJobDone 在 expected_shard_count 未知时依赖 QueryJob RPC，
-// 若 JobService 在最后一次 shard 上报时不可用 → job 永久停在非终态。
-// 本线程定期扫描所有非终态 job，重新调用 CheckJobDone 判定。
-//
-// ⚠️ 修复（阶段 8）：此前内联了一份「简化版」终态判定，只改本地 JobStore
-// 状态，缺失 Merge 产物 / 通知 JobService / 通知 Scheduler，产生半成品终态。
-// 现改为预筛后直接调用完整 CheckJobDone，与正常上报路径共用同一套逻辑。
-
+// TerminalSweepLoop — 周期终态扫描
+// 兜底轮询所有job,判断是否job任务可能完成
 void ResultCollectorServiceImpl::TerminalSweepLoop(std::atomic<bool>& stop_flag)
 {
     constexpr int64_t kSweepIntervalMs = 15000;  // 每 15 秒扫描一次
@@ -638,8 +495,7 @@ void ResultCollectorServiceImpl::TerminalSweepLoop(std::atomic<bool>& stop_flag)
                          "all terminal, checking job done",
                          job.job_id.c_str(), success_count, failed_count);
 
-                // 调用完整 CheckJobDone：终态判定 + Merge 产物（阶段 9 起
-                // job/shard 状态写入 MySQL 共享，无需再通知 JobService/Scheduler）
+                // 调用完整 CheckJobDone：终态判定 + Merge 产物
                 if (CheckJobDone(job.job_id))
                     ++resolved;
             }
@@ -652,22 +508,8 @@ void ResultCollectorServiceImpl::TerminalSweepLoop(std::atomic<bool>& stop_flag)
     LOG_INFO("TerminalSweepLoop thread stopped");
 }
 
-// ============================================================================
-// MqResultConsumeLoop — 阶段 10：消费 result.pending 队列（Push 聚合）
-// ============================================================================
 
-/// @brief 消费 Worker 上报的执行结果消息，复用公共聚合逻辑。
-///
-/// 正常路径：Worker publish result.pending（消息体 = 序列化的
-/// ReportShardResultRequest）→ 本线程解析后调用
-/// HandleReportShardResult（与 RPC handler 同一实现）。
-///
-/// 掉线语义：MQ 故障时 Worker 的 publish 失败会回退直连 RPC（Worker 侧
-/// 每次上报独立判断），本线程只需重连等待——RC 聚合功能在 MQ 掉线期间
-/// 由 RPC 路径完全承接，本线程是"加速通道"而非"唯一通道"。
-///
-/// 可靠性：处理完成才 Ack；解析失败的消息也 Ack（毒消息丢弃，避免死循环）；
-/// Ack 失败 → Broker 重新投递 → 幂等检查（attempt_id/状态）兜底不重复处理。
+// 消费 Worker 上报的执行结果消息，复用公共聚合逻辑
 static void MqResultConsumeLoop(std::atomic<bool>& stop_flag)
 {
     auto& mq = MqClient::GetInstance();

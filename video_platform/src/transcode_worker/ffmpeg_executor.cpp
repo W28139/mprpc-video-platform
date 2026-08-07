@@ -630,7 +630,7 @@ FfmpegResult FfmpegExecutor::Transcode(const std::string& input_path,
 // shard 的 output_path（按 shard_index 排序）调用本方法，产出 {job_id}_merged.mp4。
 // 用 concat demuxer + -c copy（不重编码，秒级完成）。
 //
-// ⚠️ 已知问题（阶段8审查）：
+// 已知问题（阶段8审查）：
 //  ① filelist.txt 用固定名写在输出目录下，跨 job/并发共享——ResultCollector
 //     侧并发 merge 会交错写同一文件（#7）；本方法写完即删，无残留。
 //  ② 命令拼接仅双引号包裹路径 → 命令注入（#4）。

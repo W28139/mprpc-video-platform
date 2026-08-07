@@ -194,7 +194,7 @@ public:
         done->Run();
     }
 
-    /// @brief 取消正在执行的 shard
+    // 取消正在执行的 shard
     void CancelShard(::google::protobuf::RpcController* controller,
                      const ::CancelShardRequest* request,
                      ::CancelShardResponse* response,
@@ -206,16 +206,14 @@ public:
 
         std::lock_guard<std::mutex> lock(mutex_);
         auto it = running_shards_.find(request->shard_id());
+        // 先判断该shard在不在本worker
         if (it != running_shards_.end())
         {
-            // #1 修复：attempt_id 精确匹配。重扫取消通知可能与该 shard 的
-            // 重新分配竞态——shard 已被重新分配为新 attempt 时（旧执行线程
-            // 尚未清理、map 条目已被新 RunningShard 替换），旧 attempt 的
-            // CancelShard 不得误伤新执行。请求带 attempt_id 时仅匹配当前
-            // 执行的 attempt；不匹配则视为已进入新 attempt，拒绝取消。
+            // attempt 精确匹配的校验，请求要取消的是哪次执行，Worker 上现在跑的是哪次执行，对得上才杀
             if (!request->attempt_id().empty()
                 && it->second->attempt_id != request->attempt_id())
             {
+                // 不符合取消逻辑，忽略取消该shard
                 response->set_error_code(0);
                 response->set_error_msg("shard moved to new attempt, cancel ignored");
                 response->set_canceled(false);
@@ -227,6 +225,7 @@ public:
                 done->Run();
                 return;
             }
+            // 满足条件，标记shard为取消
             it->second->cancelled = true;
             response->set_error_code(0);
             response->set_error_msg("");
@@ -243,8 +242,7 @@ public:
         done->Run();
     }
 
-    /// @brief 查询 shard 执行进度(分片级：1 个 shard 的实时进度),progress 0-100 实时百分比,毫秒级实时
-    // QueryJob（JobService :9001): 任务级：1 个 job 全貌 + 所有 shard 的状态列表
+    // 查询 shard 执行进度(分片级：1 个 shard 的实时进度),progress 0-100 实时百分比,毫秒级实时
     void QueryShard(::google::protobuf::RpcController* controller,
                     const ::QueryShardRequest* request,
                     ::QueryShardResponse* response,

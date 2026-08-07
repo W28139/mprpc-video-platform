@@ -7,7 +7,6 @@
 
 namespace video_platform {
 
-// ⚠️ 以下 DDL 必须与 video_platform/sql/schema.sql 保持一致
 static const char* kCreateTables[] = {
     "CREATE TABLE IF NOT EXISTS jobs ("
         "job_id VARCHAR(64) NOT NULL, user_id VARCHAR(64) NOT NULL DEFAULT '', "
