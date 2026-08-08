@@ -10,19 +10,6 @@
 
 namespace video_platform {
 
-// ============================================================================
-// RedisClient — hiredis 同步 API 封装
-// ============================================================================
-//
-// 设计要点：
-// - 单连接 + mutex：调用频率低，连接池没有收益；redisContext 非线程安全，
-//   所有命令在锁内执行
-// - 失败重连：redisContext 在连接断开后必须 redisFree 重建（不可复用），
-//   每条命令失败时重建并重试 1 次；重建仍失败则本次返回 false 降级
-// - 超时保护：connect/command 均设 2s 超时，Redis 卡死不会阻塞业务线程
-// - 二进制安全：hiredis 格式化命令（%s 记录长度），key/value 含空格无碍
-// ============================================================================
-
 RedisClient& RedisClient::GetInstance()
 {
     static RedisClient instance;
@@ -53,10 +40,6 @@ bool RedisClient::Init()
         return true;
     }
 
-    // 与 MysqlPool 不同：Redis 是可降级组件，连接失败不拒绝服务启动。
-    // 注意：连接失败把 enabled_ 置 false——调用方以 enabled() 判断"当前
-    // 是否可用"直接走降级路径，避免每次调用都发命令失败再降级。
-    // 运行中 Redis 故障：命令失败 → 调用方按次降级；Redis 恢复后自动切回。
     enabled_ = false;
     LOG_WARN("RedisClient connect to %s:%d failed, degrade to local "
              "cache/RPC fallback (MySQL remains source of truth)",
@@ -153,6 +136,10 @@ bool RedisClient::HGetAll(const std::string& key,
     return true;
 }
 
+
+/////////////////////////////////////
+// 分布式锁的设计
+////////////////////////////////////
 bool RedisClient::Get(const std::string& key, std::string& out, bool& found)
 {
     found = false;
@@ -168,18 +155,6 @@ bool RedisClient::Get(const std::string& key, std::string& out, bool& found)
     // nil（key 不存在）不算失败
     freeReplyObject(reply);
     return true;
-}
-
-bool RedisClient::SetEx(const std::string& key, const std::string& value,
-                        int64_t ttl_sec)
-{
-    std::lock_guard<std::mutex> lock(mutex_);
-    redisReply* reply = ExecLocked("SETEX %s %lld %s", key.c_str(),
-                                   static_cast<long long>(ttl_sec), value.c_str());
-    if (reply == nullptr) return false;
-    bool ok = reply->type == REDIS_REPLY_STATUS;  // 返回 "+OK"
-    freeReplyObject(reply);
-    return ok;
 }
 
 bool RedisClient::SetNxEx(const std::string& key, const std::string& value,

@@ -16,7 +16,6 @@
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
 #include "video_platform/mysql_pool.h"
-#include "video_platform/redis_client.h"
 #include "video_platform/mq_client.h"
 #include "video_platform/ffmpeg_executor.h"
 
@@ -141,14 +140,6 @@ public:
                  shard_id.c_str(),
                  request->is_success() ? "SUCCESS" : "FAILED",
                  attempt_id.c_str());
-
-        // shard 结果落定后失效进度缓存，保证查到的shard为最新状态
-        // 这里不更新redis是考虑redis经典设计
-        {
-            auto& redis = RedisClient::GetInstance();
-            if (redis.inited() && redis.enabled())
-                redis.Del("job:progress:" + job_id);
-        }
 
         // 5. 若执行失败，调用 Scheduler.RescheduleShard 触发重试
         if (!request->is_success())
@@ -590,8 +581,7 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    // 阶段 10：Redis/MQ 是可降级组件，Init 失败只 WARN 不拒绝启动
-    RedisClient::GetInstance().Init();
+    // 阶段 10：MQ 是可降级组件，Init 失败只 WARN 不拒绝启动
     MqClient::GetInstance().Init();
 
     // ── 阶段 11：可观测性（metrics_port<=0 时不启用，可降级组件） ──

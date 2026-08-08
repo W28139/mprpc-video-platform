@@ -80,18 +80,18 @@ public:
                  load.memory_usage(),
                  load.running_shards());
 
-        // 依据心跳，填入work最新信息，如果work死亡，那就返回false
+        // 依据心跳，填入work最新信息，如果work死亡，那就返回false(心跳先落 MySQL)
         bool alive = WorkerStore::GetInstance().UpdateHeartbeat(
             load.worker_id(), load.running_shards(),
             load.cpu_usage(), load.memory_usage());
 
-        // 向 Redis 写内容
-        // - alive=false 表示 Worker 已被标记死亡，不写快照（避免"幽灵快照"误导调度）
+        // 向 Redis 写内容（alive 才写快照，确保写入mysql成功的条件下进行)
         if (alive)
         {
             auto& redis = RedisClient::GetInstance();
             if (redis.inited() && redis.enabled())
             {
+                // mysql调用，进一步封装为键值对填入redis
                 auto w_opt = WorkerStore::GetInstance().Get(load.worker_id());
                 if (w_opt.has_value())
                 {

@@ -766,6 +766,7 @@ static bool LoadOnlineWorkers(WorkerManagerService_Stub& wm_stub,
                 if (fields[8].empty()) continue;  // 格式不完整，跳过
 
                 int64_t ts = std::atoll(fields[8].c_str());
+                // 如果 当前时间 - 上一次心跳时间 > 最大时间 ==> 超时，视为offline，不加入返回列
                 if (now - ts > kHeartbeatTimeoutMs) continue;  // 心跳超时 → OFFLINE
 
                 auto* wi = resp.add_workers();
@@ -902,6 +903,7 @@ static bool TryAssignShard(const ShardRecord& shard,
     std::string lock_value;
     if (redis.inited() && redis.enabled())
     {
+        // 保证不同进程lock_valude不同
         lock_value = "scheduler:" + std::to_string(::getpid());
 
         // 抢该 shard 的分布式锁（SET NX EX 原子）：防多实例/双路径重复分配

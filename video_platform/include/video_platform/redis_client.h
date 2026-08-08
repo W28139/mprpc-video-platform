@@ -14,7 +14,7 @@ namespace video_platform {
 // RedisClient — Redis 客户端封装（hiredis C API，阶段 10）
 // ============================================================================
 //
-// 用于读路径加速：Worker 负载快照 / Job 进度缓存 / 分布式锁。
+// 用于读路径加速：Worker 负载快照 / 分布式锁。
 //
 // 与 MysqlPool 的关键差异——**Redis 是可降级组件**：
 // - Init() 连接失败只打 WARN，不拒绝服务启动（MySQL 是唯一数据源，
@@ -53,13 +53,10 @@ public:
     bool HGetAll(const std::string& key,
                  std::vector<std::pair<std::string, std::string>>& out);
 
-    // ── KV 操作（进度缓存 / 分布式锁） ──
+    // ── KV 操作（分布式锁） ──
 
     /// @brief GET。key 不存在（nil）时返回 true 且 out 不变、found=false。
     bool Get(const std::string& key, std::string& out, bool& found);
-
-    /// @brief SETEX（带 TTL 秒），成功返回 true
-    bool SetEx(const std::string& key, const std::string& value, int64_t ttl_sec);
 
     /// @brief SET key value NX EX ttl —— 仅当 key 不存在时设置。
     /// @return true=本次成功取得锁；false=key 已存在（他人持锁）或 Redis 失败

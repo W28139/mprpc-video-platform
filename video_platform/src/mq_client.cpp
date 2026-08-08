@@ -15,29 +15,6 @@
 
 namespace video_platform {
 
-// ============================================================================
-// MqClient — rabbitmq-c (AMQP 0-9-1) 封装
-// ============================================================================
-//
-// 实现要点：
-// - **双连接 + 双锁**：发布（publish_conn_ / publish_mutex_）与消费
-//   （consume_conn_ / consume_mutex_）严格分离。消费线程在
-//   ConsumeBlocking 中阻塞等待消息（最长 2s）只持消费锁；RPC work 线程
-//   的发布只等发布锁（持锁时间 = 单条 publish，微秒级）。⚠️ 单连接单锁
-//   版本中消费阻塞会卡住 ScheduleJob 的发布，导致 RPC 超时
-//   （"recv response header error! errno:11"）——勿改回
-// - 声明幂等：exchange/queue/binding 同名同参数重复声明无害，
-//   由发布连接声明（ConnectPublish），消费连接只登录 + channel
-// - durable：exchange/queue durable + 消息 delivery-mode=2，
-//   Broker 重启消息不丢（验收标准）
-// - 手动 ACK：处理成功才 ack；失败不 ack → Broker 自动重回队列
-// - 消费超时：amqp_consume_message 带 timeval 超时，超时不是故障；
-//   连接断开（AMQP_STATUS_CONNECTION_CLOSED 等）时销毁连接并置空，
-//   调用方检查 connected() 后走降级/重连
-// - 发布失败：重建发布连接重试 1 次；仍失败返回 false（SchedulingLoop
-//   兜底轮询仍会扫到该 shard，不丢任务）
-// ============================================================================
-
 namespace {
 constexpr char kChannel = 1;  // AMQP 通道号
 
@@ -57,13 +34,6 @@ bool CheckReply(amqp_connection_state_t conn, const char* what)
     return false;
 }
 
-// 建一条裸连接（登录 + channel_open），不声明拓扑
-// @param label 日志标识（"publish"/"consume"）
-/// @brief 设置 AMQP socket 收发超时（阶段 11 修复，见 mq_client.h 注释）：
-/// rabbitmq-c 的阻塞调用（amqp_login / amqp_consume_message / publish）在
-/// 连接半开/对端异常时可能无限阻塞。SO_RCVTIMEO/SO_SNDTIMEO 兜底所有
-/// read/write：超时返回 EAGAIN → amqp 库报 SOCKET_ERROR → 消费/发布路径
-/// 销毁连接走重连/降级，线程最多阻塞 sec 秒。
 static void SetSocketTimeouts(amqp_connection_state_t conn, int sec)
 {
     if (conn == nullptr) return;
@@ -295,18 +265,12 @@ bool MqClient::PublishResult(const std::string& serialized_request)
 bool MqClient::ConsumeBlocking(const std::string& queue, std::string& body,
                                int64_t& delivery_tag, int64_t timeout_ms)
 {
-    // 消费线程专用（单线程）。⚠️ 锁不再覆盖 poll 等待——poll 只操作 fd、
-    // 不触碰 conn 内部状态，而消费连接的销毁/重建只发生在本线程（故障
-    // 分支）或启动期，poll 期间无并发写者，无需持锁。修复：消费线程紧
-    // 循环持锁（poll 2s + 立即重试）导致 connected() 的 try_lock_for(1s)
-    // 永远失败——mq=push 误判 + "consume lock busy" WARN 无限刷屏。
-    // 锁只保护 conn 内部状态的读写（basic_consume / read / 销毁）。
+
     if (!inited_ || !enabled_ || !consume_alive_.load()) return false;
     amqp_connection_state_t conn =
         static_cast<amqp_connection_state_t>(consume_conn_);
     if (conn == nullptr) return false;
 
-    // ① 每个队列只需 basic_consume 一次（消费连接重建后需重新 consume）
     {
         std::lock_guard<std::timed_mutex> lock(consume_mutex_);
         if (consume_conn_ != conn) return false;   // 防御：连接已被重建
@@ -324,13 +288,6 @@ bool MqClient::ConsumeBlocking(const std::string& queue, std::string& body,
         }
     }
 
-    // ② 阶段 11 修复：不再依赖 amqp_consume_message 的 tv 超时——rabbitmq-c
-    //    0.11 内部 poll 超时行为不可靠（实测消费线程无限阻塞持锁 8 分钟，
-    //    SchedulingLoop 的 connected() 永久等锁导致调度停摆）。改为：
-    //      1) 自己 poll(fd, timeout_ms)：超时完全可控（无锁等待）
-    //      2) 有数据时持锁 amqp_consume_message 传 {0,0} 立即尝试（不阻塞）
-    //      3) 若读半帧（数据不足一个 AMQP 帧），立即返回下轮再 poll，
-    //         SO_RCVTIMEO(2s) 兜底 read（绝无无限阻塞）
     SetSocketTimeouts(conn, 2);
     int fd = amqp_get_sockfd(conn);
     if (fd < 0)
@@ -425,15 +382,6 @@ bool MqClient::Ack(int64_t delivery_tag)
 
 bool MqClient::connected() const
 {
-    // 无锁读取（consume_alive_ 为 atomic）：消费连接的唯一写者是消费线程
-    // 自身（销毁/重建均在持锁 + store(false) 先行），其他线程只读指针与
-    // 原子标志——不再 try_lock_for(1s)。修复：ConsumeBlocking 的 poll 已
-    // 移出锁（锁占用窗口从 2s 降到毫秒级 read），本方法无需降级超时。
-    // 语义：消费连接对象是否存在。连接断开由 ConsumeBlocking 检测——
-    // 故障时销毁连接并置空（0.11.0 无 amqp_connection_closed 查询 API）。
-    // 返回 false 即"连接已断"，消费线程据此走降级/重连。
-    // 注：只反映消费连接；发布连接故障由 publish 失败 + 重建自愈，
-    // 不阻塞调度（发布失败有 SchedulingLoop 轮询兜底）。
     return consume_alive_.load() && consume_conn_ != nullptr;
 }
 
