@@ -268,26 +268,6 @@ std::vector<JobRecord> JobStore::ListAll() const
     return result;
 }
 
-std::vector<JobRecord> JobStore::ListRecent(int32_t limit) const
-{
-    MysqlConnectionGuard g(MysqlPool::GetInstance());
-    std::vector<JobRecord> result;
-    if (!g.ok()) return result;
-    std::string sql = "SELECT " + std::string(kJobColumns) + " FROM jobs";
-    if (limit > 0)
-    {
-        sql += " ORDER BY created_at DESC LIMIT " + std::to_string(limit);
-    }
-    std::vector<std::vector<std::string>> rows;
-    if (!g.Query(sql, rows)) {
-        LOG_ERROR("JobStore::ListRecent failed: %s", g.Error().c_str());
-        return result;
-    }
-    result.reserve(rows.size());
-    for (const auto& r : rows) result.push_back(ParseJobRow(r));
-    return result;
-}
-
 size_t JobStore::Count() const
 {
     MysqlConnectionGuard g(MysqlPool::GetInstance());

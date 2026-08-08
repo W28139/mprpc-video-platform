@@ -13,7 +13,6 @@
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
 #include "video_platform/mysql_pool.h"
-#include "video_platform/redis_client.h"
 
 using namespace video_platform;
 
@@ -189,23 +188,7 @@ public:
     {
         LOG_INFO("JobService::QueryJob job_id=%s", request->job_id().c_str());
 
-        // 进度缓存——先查 Redis
-        auto& redis = RedisClient::GetInstance();
-        if (redis.inited() && redis.enabled())
-        {
-            std::string cached;
-            bool found = false;
-            if (redis.Get("job:progress:" + request->job_id(), cached, found)
-                && found && response->ParseFromString(cached))
-            {
-                LOG_INFO("JobService::QueryJob job_id=%s (redis cache hit)",
-                         request->job_id().c_str());
-                done->Run();
-                return;
-            }
-        }
-
-        // Redis如果没有，那就直接查询MySQL，然后把查到的信息加入缓存
+        // 直查 MySQL（单条 PK + 一次 ListByJob 共 <0.5ms，无需缓存）
         auto job_opt = JobStore::GetInstance().Get(request->job_id());
         if (!job_opt.has_value())
         {
@@ -254,15 +237,6 @@ public:
             si->set_updated_at(s.updated_at);
         }
 
-        // 成功拿到数据，加入redis缓存
-        if (redis.inited() && redis.enabled() && response->error_code() == 0)
-        {
-            std::string serialized;
-            // SetEx(key, value, 60) 
-            // Redis 的 SETEX 命令：写 key + 设置 60 秒 TTL，到期自动过期
-            if (response->SerializeToString(&serialized))
-                redis.SetEx("job:progress:" + request->job_id(), serialized, 60);
-        }
         done->Run();
     }
 
@@ -354,41 +328,6 @@ public:
 
         response->set_error_code(0);
         response->set_error_msg("");
-        done->Run();
-    }
-
-    /// @brief 列出任务概要（GUI 客户端：任务列表数据源）
-    void ListJobs(::google::protobuf::RpcController* controller,
-                  const ::ListJobsRequest* request,
-                  ::ListJobsResponse* response,
-                  ::google::protobuf::Closure* done) override
-    {
-        LOG_INFO("JobService::ListJobs limit=%d", request->limit());
-
-        auto jobs = JobStore::GetInstance().ListRecent(request->limit());
-        response->set_error_code(0);
-        response->set_error_msg("");
-
-        for (const auto& j : jobs)
-        {
-            auto* info = response->add_jobs();
-            info->set_job_id(j.job_id);
-            info->set_user_id(j.user_id);
-            info->set_input_path(j.input_path);
-            info->set_output_path(j.output_path);
-            info->set_target_format(j.target_format);
-            info->set_target_resolution(j.target_resolution);
-            info->set_target_bitrate(j.target_bitrate);
-            info->set_duration_sec(j.duration_sec);
-            info->set_priority(j.priority);
-            info->set_status(static_cast<JobStatus>(j.status));
-            info->set_shard_count(j.shard_count);
-            info->set_created_at(j.created_at);
-            info->set_updated_at(j.updated_at);
-            info->set_shard_duration_sec(j.shard_duration_sec);
-        }
-
-        LOG_INFO("JobService::ListJobs: returned %d jobs", response->jobs_size());
         done->Run();
     }
 
@@ -530,9 +469,6 @@ int main(int argc, char** argv)
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }
-
-    // 阶段 10：Redis 是可降级组件，Init 失败只 WARN 不拒绝启动
-    RedisClient::GetInstance().Init();
 
     // ── 阶段 11：可观测性（metrics_port<=0 时不启用，可降级组件） ──
     int metrics_port = MprpcApplication::GetConfig().LoadInt("metrics_port", 0, 0, 65535);

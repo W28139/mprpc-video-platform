@@ -58,25 +58,12 @@ message CancelJobResponse {
     string error_msg  = 2;  // 失败时的错误描述
 }
 
-// ── ListJobs（阶段 12 GUI 客户端）──────────────────────────────────────────
-
-message ListJobsRequest {
-    int32 limit = 1;  // 最多返回条数，<=0 返回全部（按 created_at 倒序）
-}
-
-message ListJobsResponse {
-    int32  error_code = 1;  // 0=成功
-    string error_msg  = 2;  // 失败时的错误描述
-    repeated JobInfo jobs  = 3;  // 任务概要列表（不含 shard），按创建时间倒序
-}
-
 // ── Service ────────────────────────────────────────────────────────────────
 
 service JobService {
     rpc SubmitJob(SubmitJobRequest) returns (SubmitJobResponse);       // 提交视频处理任务
     rpc QueryJob(QueryJobRequest) returns (QueryJobResponse);          // 查询任务状态与所有 shard
     rpc CancelJob(CancelJobRequest) returns (CancelJobResponse);       // 取消任务
-    rpc ListJobs(ListJobsRequest) returns (ListJobsResponse);          // 列出任务概要（阶段 12 GUI）
     // 阶段 9 删除 UpdateJobStatus：Store 已 MySQL 化，跨进程状态同步不再需要 RPC，
     // 各服务直接读取 MySQL 共享数据。
 }

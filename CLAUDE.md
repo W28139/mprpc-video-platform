@@ -27,7 +27,7 @@ muduo_im 是一个基于 Reactor 模式的 Linux C++ 网络库及其上层 RPC �
 | 9. 数据持久化（MySQL） | ✅ 完成（2026-08-03） |
 | 10. 中间件集成（Redis+MQ） | ✅ 完成（2026-08-03，三批全部完成；2026-08-04 复验修复 MqClient 消费锁缺陷；真实 Broker 重启实测待用户 sudo） |
 | 11. 可观测性升级（Prometheus+Grafana） | ✅ 完成（2026-08-03，配置产物交付 + curl/日志告警实测；Prometheus/Grafana 部署待用户按 README 安装） |
-| 12. 客户端 GUI（Qt6 桌面应用） | ✅ 完成（2026-08-04，`bin/video_gui`；GUI 交互验收待用户操作） |
+| 12. 客户端 GUI（Qt6 桌面应用） | ~~完成~~ 已删除（2026-08-08 移出项目，详见下文说明） |
 | 13. 容器化与 CI/CD | ✅ 完成（2026-08-04，`docker/` + `docker-compose.yml` + `.github/workflows/ci.yml`；compose 一键启动/集成测试/--scale 全部本机实测通过，CI 绿勾待 push） |
 
 ## 阶段 6 完成内容
@@ -323,23 +323,19 @@ AsyncLogger::init() → MprpcApplication::Init(argc, argv) → RpcProvider.Notif
 核心改动：
 - **Docker 化**：`docker/Dockerfile`（多阶段：builder 编译全部二进制 + runtime 精简镜像，`-DENABLE_NATIVE_MARCH=OFF` 去掉 march=native 保可移植）；`docker/conf/` ×6 docker 专用配置（`rpcserverip=0.0.0.0` + host 指向 compose 服务名）；`docker-compose.yml` 编排 4 中间件（zookeeper:3.8 + mysql:8.0 + redis:7 + rabbitmq:3.12，healthcheck + `depends_on: condition: service_healthy`）+ 5 平台服务（共享单镜像、command 区分、worker 不映射端口支持 `--scale`）；视频经 `./data/videos`、`./data/output` 挂载
 - **CI**：`.github/workflows/ci.yml` — build（apt 装依赖 + cmake + upload bin/ artifact）→ unit-test（43/43）→ integration（`docker compose up -d --build` + `scripts/integration_test.sh`：testsrc 生成 30s 视频 → exec job_client 管道提交 → `--watch` 到 SUCCESS → 校验 merged 产物，Dockerfile 的唯一真实验证点）→ benchmark（rpc_echo_server + `bench_rpc_stress --direct --keepalive -c 50 -m 200 -s 64`）
-- **配套代码改动**：① `video_platform/CMakeLists.txt` Qt6 REQUIRED → QUIET+if（无 Qt6 时跳过 GUI，本机不受影响）② 根 `CMakeLists.txt` 新增 `ENABLE_NATIVE_MARCH` 选项 ③ `transcode_worker.cpp` 新增 `ResolveWorkerId()`（环境变量 WORKER_ID > 配置 > hostname，支持 scale 副本唯一 worker_id；main 启动校验同步改造）
+- **配套代码改动**：① 根 `CMakeLists.txt` 新增 `ENABLE_NATIVE_MARCH` 选项 ② `transcode_worker.cpp` 新增 `ResolveWorkerId()`（环境变量 WORKER_ID > 配置 > hostname，支持 scale 副本唯一 worker_id；main 启动校验同步改造）（阶段 13 当时的 Qt6 QUIET+if 兼容改动已于 2026-08-08 随 GUI 删除一并移除，CMakeLists 不再有 Qt6 依赖）
 - **实测修复（4 个真实环境缺陷 + 2 个部署问题）**：① Docker/CI 基础镜像 22.04 → 24.04（22.04 的 protobuf 3.12 与提交的 3.21 生成码不兼容）② `ZookeeperUtil.h` include zookeeper.h 前加 `#define THREADED`（noble 3.9.1 同步 API 被宏包裹，本机旧头文件掩盖）③ 新增 `mprpc/include/mprpcutil.h` `GetLocalIp()`——rpcserverip=0.0.0.0 时 ZK 注册/Worker 上报自动换容器实际 IP（否则消费者连 0.0.0.0 必失败）④ worker main 的 `LoadRequired("worker_id")` 漏改导致 docker 启动崩溃循环 ⑤ ZK healthcheck 需显式 `bash -c`（CMD-SHELL 走 dash 不支持 /dev/tcp）⑥ 宿主端口被本机部署占用 → compose 改用替代端口 21810/23306/19001 等（容器内不变）
 - **实测结果**：9 容器一键启动 + 集成测试 PASS（提交→转码→合并→SUCCESS + 产物校验）+ `--scale transcode_worker=3` 唯一 worker_id；**遗留**：CI 绿勾待 push（`git push origin main`）
 
-### 阶段 12（✅ 2026-08-04）
+### 阶段 12 已删除（2026-08-08）
 
-Qt6 桌面客户端，详见 `doc/更新业务日志/14. 阶段12客户端GUI.md`。
+Qt6 桌面客户端（2026-08-04 完成，`video_platform/gui/` + `bin/video_gui` + `ListJobs` RPC + `video_gui.conf`）因与分布式主线叙事脱节、技术含量有限（2s 轮询 + 简单展示），**全部代码已移出项目**：
 
-核心改动：
-- **服务端**：`job.proto` 新增 `ListJobs` RPC（`ListJobsRequest{limit}` → `repeated JobInfo`，按 created_at 倒序）；`JobStore::ListRecent(limit)`（SQL = ListAll + `ORDER BY created_at DESC LIMIT n`）；`JobServiceImpl::ListJobs` handler（无 Redis 缓存——列表 2s 高频 + 单表 SQL <1ms，缓存无收益）
-- **GUI**（`video_platform/gui/`，`bin/video_gui`，Qt6.4.2 + `CMAKE_AUTOMOC`，link `video_common`）：
-  - `rpc_client.h/.cpp` — **QRunnable + QThreadPool 异步封装**（mprpc stub 同步阻塞，绝不能进 UI 线程）：Submit/Query/ListJobs/ListWorkers/Cancel 5 个 RPC，信号回 UI 线程；`JobItem/ShardItem/WorkerItem` 轻量结构跨线程
-  - `main_window` — 三页签（任务/Worker/日志）+ 2s QTimer 统一刷新 + 选中行 QueryJob 详情（进度条）；双击 SUCCESS 行 → `QProcess::startDetached("ffplay", {output_path/{job_id}_merged.mp4})` 预览
-  - `job_table` — 任务列表 7 列、状态彩色；`worker_panel` — Worker 负载（CPU/内存 ≥80% 红、≥50% 黄）；`log_panel` — tail `program_log/` 最新文件（偏移续读、跟随按天轮转）；`submit_dialog` — 拖拽视频自动填路径 + 下拉分辨率/格式 + 码率/优先级/shard 时长
-- **环境**：`sudo apt install qt6-base-dev`；`conf/video_gui.conf` 只需 zookeeperip/port
-- 启动：`./bin/video_gui -i video_platform/conf/video_gui.conf`（WSLg DISPLAY=:0）
-- 遗留：GUI 交互验收（拖拽/双击预览）待用户操作；筛选/排序（QSortFilterProxyModel）可后续加
+- `video_platform/gui/` 目录、`conf/video_gui.conf`、`bin/video_gui` — 删除
+- `video_platform/CMakeLists.txt` Qt6 构建段（含阶段 13 的 QUIET+if 兼容）— 删除，项目不再依赖 Qt6
+- `job.proto` `ListJobs` RPC + `JobStore::ListRecent` + `JobServiceImpl::ListJobs` handler — 删除（proto 已重新生成）
+- `doc/更新业务日志/14. 阶段12客户端GUI.md` — 删除；`04_开发路线图.md` 阶段 12 章节标注移除
+- 命令行交互保留：`bin/job_client`（提交/查询/取消）
 
 ### 阶段 10 复验发现并修复（2026-08-04，详见 log 14 Bug 1）
 
@@ -381,7 +377,6 @@ MySQL 持久化替代内存 Store，详见 `doc/更新业务日志/10. 阶段9�
 - 新增 `redis_client.h/.cpp`（hiredis 封装：单连接+mutex、失败重连 1 次、2s 超时、**可降级组件语义**——连接失败只 WARN 不拒绝启动，区别于 MySQL 的 fail-fast）
 - WorkerManager Heartbeat 双写 Redis 快照（`HSET worker:load`，值内嵌 ts）
 - Scheduler `LoadOnlineWorkers` helper：Redis 快照优先（20s ts 过期过滤），失败/无数据回退 ListWorkers RPC（按次降级，恢复自动切回）
-- JobService QueryJob 进度缓存（`SETEX job:progress:{id}` TTL 60s，只缓存成功响应）；RC 结果落定时 DEL
 - 分布式锁：AssignShard 前 `SETNX shard:lock:{id} EX 10`，值校验释放，Redis 故障降级放行（MySQL 条件更新兜底）
 
 **第二批（RabbitMQ）核心改动**：
