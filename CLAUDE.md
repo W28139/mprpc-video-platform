@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## 项目概述
 
-muduo_im 是一个基于 Reactor 模式的 Linux C++ 网络库及其上层 RPC 框架，并基于它们构建了分布式视频处理平台。分为三个子项目：
+mprpc-video-platform（即原 muduo_im）是一个基于 Reactor 模式的 Linux C++ 网络库及其上层 RPC 框架，并基于它们构建了分布式视频处理平台。分为三个子项目：
 
 - **wevix_muduo**：自研网络库（受 muduo 启发），提供 TCP 服务器、事件循环、IO 多路复用（epoll）、线程池、内存池、异步日志
 - **mprpc**：基于 wevix_muduo 构建的 RPC 框架，使用 protobuf 序列化 + ZooKeeper 服务注册发现
@@ -12,7 +12,7 @@ muduo_im 是一个基于 Reactor 模式的 Linux C++ 网络库及其上层 RPC �
 
 ## 当前开发进度
 
-按照 `doc/视频转码平台/04_开发路线图.md` 的 8 阶段规划：
+项目按阶段推进，完整进度见下方表格（阶段规划详见 `doc/系统设计.md`、`doc/更新业务日志/`）：
 
 | 阶段 | 状态 |
 |------|------|
@@ -45,7 +45,7 @@ muduo_im 是一个基于 Reactor 模式的 Linux C++ 网络库及其上层 RPC �
 - `video_platform/conf/transcode_worker_*.conf` — 默认 `executor_mode=ffmpeg`，新增 `ffmpeg_work_dir` / `target_resolution` / `target_bitrate`；删除 `mock_execution_time_ms` / `mock_fail_ratio`
 - `video_platform/conf/scheduler.conf` — `mock_job_duration_sec` → `job_duration_fallback_sec`，`mock_shard_duration_sec` → `shard_duration_sec`
 - `doc/更新业务日志/6. 阶段6接入FFmpeg执行器.md` — 完整修改日志
-- `doc/视频转码平台/快速启动指南.md` — 全面更新到阶段 6
+- `doc/快速启动指南.md` — 两种部署方式（手工逐个启动 / Docker 一键启动）快速上手
 
 ### 关键设计决策
 
