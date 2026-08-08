@@ -806,7 +806,7 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
     std::string service_name = sd->name();
     std::string method_name = method->name();
 
-    // 阶段 11：RPC 延迟观测。RAII 守卫覆盖函数体所有 return 路径
+    // RPC 延迟观测。RAII 守卫覆盖函数体所有 return 路径
     //（服务发现失败/超时/解析失败等 early return 同样计延迟）。
     struct RpcLatencyGuard
     {
