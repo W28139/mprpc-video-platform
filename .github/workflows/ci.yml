@@ -2,8 +2,8 @@
 # 阶段 13：CI/CD — GitHub Actions
 #
 #   build       编译全部二进制（ENABLE_NATIVE_MARCH=OFF，与 Docker 一致）
-#   unit-test   单元测试（test_buffer / test_threadpool / test_rpc_protocol）
-#   integration 容器集成测试（compose 全链路，Dockerfile 的唯一真实验证点）
+#   unit-test   单元测试（框架 3 个 + test_ffmpeg_executor + test_store[MySQL 不可达 SKIP]）
+#   integration 容器集成测试（compose 全链路，Dockerfile 的唯一真实验证点）+ 业务 RPC 压测
 #   benchmark   RPC 压测（bench_rpc_stress --direct --keepalive）
 #
 # 二进制通过 artifact 在 job 间复用，避免重复编译。
@@ -51,14 +51,19 @@ jobs:
     needs: build
     runs-on: ubuntu-24.04
     steps:
+      # v4 平铺下载到指定 path：upload-artifact 上传 bin/ 时只含目录内容（无 bin 前缀），
+      # 不指定 path 会解到工作区根 → ./bin/* 全部找不到（上一版 CI 失败根因）
       - uses: actions/download-artifact@v4
         with:
           name: bin
+          path: bin
 
       # 二进制动态链接全部中间件库（缺一个就加载失败），与 Dockerfile runtime 包列表保持一致
+      # ffmpeg 供 test_ffmpeg_executor 真实转码（testsrc fixture）
       - name: Install runtime deps
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends \
-          libprotobuf32t64 libzookeeper-mt2 libmysqlclient21 libhiredis1.1.0 librabbitmq4
+          libprotobuf32t64 libzookeeper-mt2 libmysqlclient21 libhiredis1.1.0 librabbitmq4 \
+          ffmpeg
 
       - name: Run unit tests
         run: |
@@ -66,6 +71,9 @@ jobs:
           ./bin/test_buffer
           ./bin/test_threadpool
           ./bin/test_rpc_protocol
+          ./bin/test_ffmpeg_executor
+          # test_store 需 MySQL，本 job 无 MySQL → 自动 SKIP 退出 0
+          ./bin/test_store
 
   integration:
     name: Integration (docker compose)
@@ -78,11 +86,24 @@ jobs:
       - name: Install ffmpeg
         run: sudo apt-get update && sudo apt-get install -y --no-install-recommends ffmpeg
 
+      # 必须在 compose up 之前预创建挂载目录：compose 对不存在的目录会以 root 创建，
+      # 之后 ffmpeg（runner 用户）写 data/videos 被拒 → Permission denied（上版 CI 失败根因）
+      - name: Prepare mount dirs for data volumes
+        run: mkdir -p data/videos data/output
+
       - name: Build & start full stack
         run: docker compose up -d --build
 
       - name: Run integration test
         run: ./scripts/integration_test.sh
+
+      # 业务 RPC 压测：容器内直连各服务端口（127.0.0.1 即本服务），纯读/无副作用
+      - name: Run business RPC stress benchmark
+        run: |
+          docker compose exec -T job_service \
+            ./bin/bench_biz_stress --direct --keepalive --method query_job -c 50 -m 200
+          docker compose exec -T worker_manager \
+            ./bin/bench_biz_stress --direct --keepalive --method heartbeat -c 50 -m 200
 
       - name: Dump service logs (on failure)
         if: failure()
@@ -98,9 +119,11 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@v4
+      # 同 unit-test：v4 平铺下载，必须指定 path: bin 才有 ./bin/* 路径
       - uses: actions/download-artifact@v4
         with:
           name: bin
+          path: bin
 
       # 二进制动态链接全部中间件库（缺一个就加载失败），与 Dockerfile runtime 包列表保持一致
       - name: Install runtime deps

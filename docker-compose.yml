@@ -118,6 +118,14 @@ services:
     depends_on:
       zookeeper: { condition: service_healthy }
       mysql:     { condition: service_healthy }
+    # TCP 探测 RPC 端口：service_started 只保证容器运行、不保证 app 已注册 ZK，
+    # worker 早于 WM 就绪会注册失败（代码侧已加无限重试兜底，此处双保险）
+    healthcheck:
+      test: ["CMD-SHELL", "bash -c 'exec 3<>/dev/tcp/localhost/9003 && exec 3>&- && exit 0'"]
+      interval: 3s
+      timeout: 3s
+      retries: 10
+      start_period: 5s
     ports:
       - "19003:9003"    # 替代端口（宿主 9003/9093 被本机部署占用）
       - "19093:9093"
@@ -131,9 +139,10 @@ services:
       dockerfile: docker/Dockerfile
     command: ["/app/bin/transcode_worker", "-i", "/app/conf/transcode_worker.conf"]
     depends_on:
-      # worker 只需 ZK（无 MySQL 配置）；等 WM 先启动（注册重试窗口 15s+ 足够）
+      # worker 只需 ZK（无 MySQL 配置）；等 WM healthy（app 已注册 ZK）再启动，
+      # 避免注册竞态（代码侧已加无限重试兜底，此处双保险）
       zookeeper:      { condition: service_healthy }
-      worker_manager: { condition: service_started }
+      worker_manager: { condition: service_healthy }
     # 不映射端口：--scale 多副本时宿主端口映射会冲突；容器间经 ZK 发现互通
     volumes:
       - ./program_log:/app/program_log

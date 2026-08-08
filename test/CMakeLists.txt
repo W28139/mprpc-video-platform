@@ -4,3 +4,4 @@
 
 add_subdirectory(muduo)
 add_subdirectory(mprpc)
+add_subdirectory(video_platform)

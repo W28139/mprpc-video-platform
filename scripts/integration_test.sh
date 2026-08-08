@@ -35,8 +35,13 @@ $COMPOSE ps
 sleep 8
 
 # ── 2. 生成测试视频（testsrc 30s，挂载卷直达各容器） ───────────────────
+# 注意：compose 对不存在的挂载目录会以 root 创建（宿主侧 ffmpeg 无权写入），
+# 须在 docker compose up 之前预创建（CI 已处理；本机手动跑请先 mkdir 或删掉 data/ 重来）
 info "Generating test video (30s testsrc)..."
 mkdir -p data/videos data/output
+if [ ! -w data/videos ] || [ ! -w data/output ]; then
+    fail "data/videos or data/output not writable by $(id -un) (docker compose creates missing mount dirs as root); remove data/ and re-run after 'mkdir -p data/videos data/output'"
+fi
 ffmpeg -y -loglevel error \
     -f lavfi -i testsrc=duration=30:size=320x240:rate=10 \
     -pix_fmt yuv420p -c:v libx264 -preset ultrafast \

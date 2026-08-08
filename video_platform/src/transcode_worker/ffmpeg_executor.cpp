@@ -548,7 +548,8 @@ FfmpegResult FfmpegExecutor::Transcode(const std::string& input_path,
                                         int64_t start_ms,
                                         int64_t duration_ms,
                                         std::function<void(int)> progress_callback,
-                                        std::function<bool()> should_cancel)
+                                        std::function<bool()> should_cancel,
+                                        int threads)
 {
     MakeDirs(output_path.substr(0, output_path.find_last_of('/')));
 
@@ -593,6 +594,12 @@ FfmpegResult FfmpegExecutor::Transcode(const std::string& input_path,
 
     args.push_back("-c:v");  args.push_back("libx264");
     args.push_back("-preset"); args.push_back("fast");
+    // 限制编码线程数，防止每个 ffmpeg 用满全部核（默认 -threads 0）
+    if (threads > 0)
+    {
+        args.push_back("-threads");
+        args.push_back(std::to_string(threads));
+    }
     args.push_back("-c:a");  args.push_back("aac");
     args.push_back("-progress"); args.push_back("pipe:1");
     args.push_back("-nostats");

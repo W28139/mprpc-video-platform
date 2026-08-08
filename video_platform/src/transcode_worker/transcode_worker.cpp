@@ -288,6 +288,8 @@ private:
         // 读取 FFmpeg 相关配置
         std::string work_dir = MprpcApplication::GetConfig().Load("ffmpeg_work_dir");
         if (work_dir.empty()) work_dir = "/tmp/transcode_worker";
+        // 每个 ffmpeg 进程的编码线程数（默认 2，避免并发 shard × 全核超订）
+        int ffmpeg_threads = MprpcApplication::GetConfig().LoadInt("ffmpeg_threads", 2, 0, 64);
 
         LOG_INFO("FfmpegExecute: shard=%s started, work_dir=%s",
                  shard_id.c_str(), work_dir.c_str());
@@ -349,7 +351,7 @@ private:
             input_path, output_path,
             target_resolution, target_bitrate,
             start_ms, duration_ms,
-            progress_cb, cancel_cb);
+            progress_cb, cancel_cb, ffmpeg_threads);
         auto ts_end = std::chrono::steady_clock::now();
         int64_t transcode_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             ts_end - ts_start).count();
@@ -732,9 +734,13 @@ static void RunHeartbeatLoop(std::string worker_id,
     MprpcChannel channel;
     WorkerManagerService_Stub stub(&channel);
 
-    // RegisterWorker
+    // RegisterWorker：无限重试直到成功（退避 1s→2s→…→上限 30s）。
+    // WM 可能晚于 Worker 就绪：docker compose 的 depends_on service_started 只保证
+    // 容器运行、不保证 app 已注册 ZK，Worker 早启动时必然注册失败（曾实测 3 次失败后
+    // 心跳线程永久退出 → worker 永远离线 → 调度停摆）。注册成功后才进入心跳循环。
     bool registered = false;
-    for (int attempt = 1; attempt <= 3 && !stop_flag; ++attempt)
+    int backoff_s = 1;
+    for (int attempt = 1; !registered && !stop_flag; ++attempt)
     {
         RegisterWorkerRequest reg_req;
         reg_req.set_worker_id(worker_id);
@@ -757,19 +763,16 @@ static void RunHeartbeatLoop(std::string worker_id,
             break;
         }
 
-        LOG_WARN("RunHeartbeatLoop: RegisterWorker failed (attempt %d/%d): %s",
-                 attempt, 3,
+        LOG_WARN("RunHeartbeatLoop: RegisterWorker failed (attempt %d): %s",
+                 attempt,
                  controller.Failed() ? controller.ErrorText().c_str()
                                      : reg_resp.error_msg().c_str());
 
-        if (attempt < 3 && !stop_flag)
-            std::this_thread::sleep_for(std::chrono::seconds(1));
-    }
-
-    if (!registered)
-    {
-        LOG_ERROR("RunHeartbeatLoop: RegisterWorker failed after 3 attempts, heartbeat thread exiting");
-        return;
+        if (!stop_flag)
+        {
+            std::this_thread::sleep_for(std::chrono::seconds(backoff_s));
+            if (backoff_s < 30) backoff_s *= 2;
+        }
     }
 
     // Heartbeat 循环（每 3 秒）
@@ -901,20 +904,26 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    int cpu_cores = config.LoadInt("cpu_cores", -1, 1, 1024);
-    if (cpu_cores == -1)
+    // cpu_cores / memory_mb：配置显式指定优先（>0），未配置时自动探测本机资源，
+    // 避免硬编码与实际机器不符导致调度评分失真。
+    int cpu_cores = config.LoadInt("cpu_cores", 0, 0, 1024);
+    if (cpu_cores == 0)
     {
-        LOG_ERROR("required config key invalid: cpu_cores");
-        wevix_muduo::AsyncLogger::GetInstance().stop();
-        return EXIT_FAILURE;
+        long detected = sysconf(_SC_NPROCESSORS_ONLN);
+        cpu_cores = detected > 0 ? static_cast<int>(detected) : 4;
+        LOG_WARN("cpu_cores not configured, auto-detected=%d", cpu_cores);
     }
 
-    int memory_mb = config.LoadInt("memory_mb", -1, 128, 1048576);
-    if (memory_mb == -1)
+    int memory_mb = config.LoadInt("memory_mb", 0, 0, 1048576);
+    if (memory_mb == 0)
     {
-        LOG_ERROR("required config key invalid: memory_mb");
-        wevix_muduo::AsyncLogger::GetInstance().stop();
-        return EXIT_FAILURE;
+        long pages = sysconf(_SC_PHYS_PAGES);
+        long page_size = sysconf(_SC_PAGE_SIZE);
+        if (pages > 0 && page_size > 0)
+            memory_mb = static_cast<int>((pages * page_size) / (1024 * 1024));
+        else
+            memory_mb = 8192;
+        LOG_WARN("memory_mb not configured, auto-detected=%dMB", memory_mb);
     }
 
     int max_running_shards = config.LoadInt("max_running_shards", -1, 1, 1024);

@@ -151,6 +151,9 @@ static void printUsage(const char* prog) {
     std::cout << std::endl;
     std::cout << "  Poll a job until done (every 2s):" << std::endl;
     std::cout << "    " << prog << " -i <config_file> --query <job_id> --watch" << std::endl;
+    std::cout << std::endl;
+    std::cout << "  Cancel a job:" << std::endl;
+    std::cout << "    " << prog << " -i <config_file> --cancel <job_id>" << std::endl;
 }
 
 // ────────────────────────────────────────────────────────────────────────────
@@ -168,8 +171,9 @@ int main(int argc, char** argv) {
 
     signal(SIGPIPE, SIG_IGN);
 
-    // 解析 --query / --watch / -i 参数
+    // 解析 --query / --watch / --cancel / -i 参数
     std::string query_job_id;
+    std::string cancel_job_id;
     std::string config_path;
     bool watch_mode = false;
 
@@ -182,6 +186,8 @@ int main(int argc, char** argv) {
             real_argv[real_argc++] = argv[i];
         } else if (std::strcmp(argv[i], "--query") == 0 && i + 1 < argc) {
             query_job_id = argv[++i];
+        } else if (std::strcmp(argv[i], "--cancel") == 0 && i + 1 < argc) {
+            cancel_job_id = argv[++i];
         } else if (std::strcmp(argv[i], "--watch") == 0) {
             watch_mode = true;
         } else if (std::strcmp(argv[i], "--help") == 0 || std::strcmp(argv[i], "-h") == 0) {
@@ -232,6 +238,32 @@ int main(int argc, char** argv) {
             }
         } else {
             queryJob(stub, query_job_id);
+        }
+
+        wevix_muduo::AsyncLogger::GetInstance().stop();
+        return 0;
+    }
+
+    // ── Cancel 模式 ─────────────────────────────────────────────────────
+    if (!cancel_job_id.empty()) {
+        video_platform::JobService_Stub stub(new MprpcChannel());
+
+        video_platform::CancelJobRequest req;
+        req.set_job_id(cancel_job_id);
+        req.set_reason("cli cancel");
+
+        video_platform::CancelJobResponse resp;
+        MprpcController ctrl;
+        ctrl.SetTimeoutMs(5000);
+
+        stub.CancelJob(&ctrl, &req, &resp, nullptr);
+
+        if (ctrl.Failed()) {
+            std::cerr << "RPC failed: " << ctrl.ErrorText() << std::endl;
+        } else if (resp.error_code() != 0) {
+            std::cerr << "✗ Cancel failed: " << resp.error_msg() << std::endl;
+        } else {
+            std::cout << "✓ Job canceled: " << cancel_job_id << std::endl;
         }
 
         wevix_muduo::AsyncLogger::GetInstance().stop();

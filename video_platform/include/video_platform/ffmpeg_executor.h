@@ -101,11 +101,17 @@ public:
     /// 执行命令：
     ///   ffmpeg -y [-ss {start}ms] [-t {duration}ms] -i {input_path}
     ///          [-s {W}x{H}] [-b:v {bitrate}k]
-    ///          -c:v libx264 -preset fast -c:a aac
+    ///          -c:v libx264 -preset fast [-threads {threads}]
+    ///          -c:a aac
     ///          -progress pipe:1 -nostats {output_path}
     ///
     /// 当 start_ms 或 duration_ms 不为 0 时，-ss 放在 -i 之前实现快速 input seeking，
     /// 配合重编码做到帧精确定位。不再需要单独的 Slice 步骤。
+    ///
+    /// @param threads  编码线程数（-threads，>0 生效）。ffmpeg 默认 -threads 0 会用满
+    ///                 所有 CPU 核，多 shard 并发转码时导致 CPU 超订（并发 shard × 全核），
+    ///                 必须显式限制，见 transcode_worker 配置 ffmpeg_threads。
+    ///                 传 0 保持 ffmpeg 默认行为。
     static FfmpegResult Transcode(const std::string& input_path,
                                   const std::string& output_path,
                                   const std::string& target_resolution,
@@ -113,7 +119,8 @@ public:
                                   int64_t start_ms,
                                   int64_t duration_ms,
                                   std::function<void(int)> progress_callback,
-                                  std::function<bool()> should_cancel = nullptr);
+                                  std::function<bool()> should_cancel = nullptr,
+                                  int threads = 0);
 
     // ── 视频合并 ───────────────────────────────────────────────────────────
 
