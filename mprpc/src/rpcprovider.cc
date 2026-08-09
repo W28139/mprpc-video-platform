@@ -8,6 +8,7 @@
 #include <cstdint>
 #include <cstdlib>
 #include <cstring>
+#include <unistd.h>
 
 namespace
 {
@@ -209,8 +210,22 @@ bool RpcProvider::Run()
 
     // 多实例注册路径：
     // /mprpc/services/{service}/{method}/instance-0000000001 -> ip:port
-    if (!zkCli.Create("/mprpc", nullptr, 0) ||
-        !zkCli.Create("/mprpc/services", nullptr, 0))
+    // 容器冷启动时 ZK 刚就绪（healthcheck ruok 通过但服务器瞬时过载/会话窗口），
+    // 实测 zoo_create 会返回 ZOPERATIONTIMEOUT(-110)；一次失败直接退出会导致
+    // 容器 restart 循环 + compose 依赖健康检查中止。此处退避重试 3 次兜底，
+    // 恢复后随容器 restart 周期收敛（实测冷启动窗口仅数秒）。
+    bool rootOk = false;
+    for (int attempt = 1; attempt <= 3 && !rootOk; ++attempt)
+    {
+        rootOk = zkCli.Create("/mprpc", nullptr, 0) &&
+                 zkCli.Create("/mprpc/services", nullptr, 0);
+        if (!rootOk)
+        {
+            LOG_WARN("create root registry path failed, retry %d/3 after 1s...", attempt);
+            sleep(1);
+        }
+    }
+    if (!rootOk)
     {
         LOG_ERROR("RpcProvider start failed: create root registry path failed");
         return false;
