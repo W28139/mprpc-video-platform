@@ -152,10 +152,11 @@ jobs:
         run: chmod +x bin/*
 
       # rpc_echo_server 是 RPC Provider，启动需连 ZooKeeper 注册服务；
-      # runner 无 ZK 服务，用 docker 起一个（runner 自带 docker），ruok 探测就绪
+      # runner 无 ZK 服务，用 docker 起一个（runner 自带 docker），ruok 探测就绪。
+      # 注意：ZK 3.8 默认禁用 4lw 命令，必须 ZOO_4LW_COMMANDS_WHITELIST=ruok
       - name: Start ZooKeeper (echo server registration)
         run: |
-          docker run -d --name zk-bench -p 2181:2181 zookeeper:3.8
+          docker run -d --name zk-bench -p 2181:2181 -e ZOO_4LW_COMMANDS_WHITELIST=ruok zookeeper:3.8
           for i in $(seq 1 30); do
             if docker exec zk-bench bash -c 'exec 3<>/dev/tcp/localhost/2181 && echo ruok >&3 && grep -q imok <&3' 2>/dev/null; then
               echo "ZooKeeper ready"

@@ -68,9 +68,11 @@ if [ -z "$job_id" ]; then
 fi
 info "Job submitted: $job_id"
 
-# ── 4. 轮询到终态（--watch 每 2s；超时 240s） ──────────────────────────
-info "Watching job $job_id to terminal state (timeout 240s)..."
-watch_out=$(timeout 240 $COMPOSE exec -T job_service sh -c \
+# ── 4. 轮询到终态（--watch 每 2s；超时 420s） ──────────────────────────
+# 420s 兜底：RC MQ 消费偶发静默延迟（result.pending 最多 ~5 分钟，见日志记录），
+# shard 结果上报可能晚到，240s 偶发不够（CI 实测 shard_1 卡 RUNNING 超时）
+info "Watching job $job_id to terminal state (timeout 420s)..."
+watch_out=$(timeout 420 $COMPOSE exec -T job_service sh -c \
     "./bin/job_client -i /app/conf/job_client.conf --query '$job_id' --watch" 2>&1 || true)
 if ! echo "$watch_out" | grep -q "terminal state: SUCCESS"; then
     echo "$watch_out" >&2
