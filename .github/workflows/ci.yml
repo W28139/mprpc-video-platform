@@ -72,6 +72,10 @@ jobs:
           # 诊断：安装后打印关键包解析结果，失败时便于定位（不阻断）
           apt-cache policy libprotobuf32t64 ffmpeg libzookeeper-mt2 libhiredis1.1.0 || true
 
+      # download-artifact@v4 解压丢失可执行位（实测 Permission denied），须恢复
+      - name: Fix artifact permissions
+        run: chmod +x bin/*
+
       - name: Run unit tests
         run: |
           mkdir -p program_log
@@ -142,6 +146,25 @@ jobs:
             libprotobuf32t64 libzookeeper-mt2 libmysqlclient21 libhiredis1.1.0 librabbitmq4
           # 诊断：安装后打印关键包解析结果，失败时便于定位（不阻断）
           apt-cache policy libprotobuf32t64 libzookeeper-mt2 libhiredis1.1.0 || true
+
+      # download-artifact@v4 解压丢失可执行位（实测 Permission denied），须恢复
+      - name: Fix artifact permissions
+        run: chmod +x bin/*
+
+      # rpc_echo_server 是 RPC Provider，启动需连 ZooKeeper 注册服务；
+      # runner 无 ZK 服务，用 docker 起一个（runner 自带 docker），ruok 探测就绪
+      - name: Start ZooKeeper (echo server registration)
+        run: |
+          docker run -d --name zk-bench -p 2181:2181 zookeeper:3.8
+          for i in $(seq 1 30); do
+            if docker exec zk-bench bash -c 'exec 3<>/dev/tcp/localhost/2181 && echo ruok >&3 && grep -q imok <&3' 2>/dev/null; then
+              echo "ZooKeeper ready"
+              exit 0
+            fi
+            sleep 2
+          done
+          echo "ZooKeeper not ready after 60s" >&2
+          exit 1
 
       - name: Run RPC stress benchmark
         run: |
