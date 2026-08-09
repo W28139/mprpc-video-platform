@@ -60,10 +60,17 @@ jobs:
 
       # 二进制动态链接全部中间件库（缺一个就加载失败），与 Dockerfile runtime 包列表保持一致
       # ffmpeg 供 test_ffmpeg_executor 真实转码（testsrc fixture）
+      # 注意：runner 镜像预装的 apt 索引不完整（实测 noble 主源组件缺失、Hit 缓存不更新，
+      # ffmpeg/libprotobuf32t64 报 "Unable to locate package"），须强制清空重建索引
       - name: Install runtime deps
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends \
-          libprotobuf32t64 libzookeeper-mt2 libmysqlclient21 libhiredis1.1.0 librabbitmq4 \
-          ffmpeg
+        run: |
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libprotobuf32t64 libzookeeper-mt2 libmysqlclient21 libhiredis1.1.0 librabbitmq4 \
+            ffmpeg
+          # 诊断：安装后打印关键包解析结果，失败时便于定位（不阻断）
+          apt-cache policy libprotobuf32t64 ffmpeg libzookeeper-mt2 libhiredis1.1.0 || true
 
       - name: Run unit tests
         run: |
@@ -126,9 +133,15 @@ jobs:
           path: bin
 
       # 二进制动态链接全部中间件库（缺一个就加载失败），与 Dockerfile runtime 包列表保持一致
+      # 同 unit-test：强制清空重建 apt 索引，绕过 runner 预装索引缺失（ffmpeg 无需，本 job 不装）
       - name: Install runtime deps
-        run: sudo apt-get update && sudo apt-get install -y --no-install-recommends \
-          libprotobuf32t64 libzookeeper-mt2 libmysqlclient21 libhiredis1.1.0 librabbitmq4
+        run: |
+          sudo rm -rf /var/lib/apt/lists/*
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            libprotobuf32t64 libzookeeper-mt2 libmysqlclient21 libhiredis1.1.0 librabbitmq4
+          # 诊断：安装后打印关键包解析结果，失败时便于定位（不阻断）
+          apt-cache policy libprotobuf32t64 libzookeeper-mt2 libhiredis1.1.0 || true
 
       - name: Run RPC stress benchmark
         run: |
