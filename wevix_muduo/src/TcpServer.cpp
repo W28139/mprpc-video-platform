@@ -1,6 +1,7 @@
 #include "wevix_muduo/TcpServer.h"
 #include "wevix_muduo/AsyncLogger.h"
 #include <unistd.h>
+#include <csignal>
 #include <cstdio>
 #include <functional>
 
@@ -14,6 +15,9 @@ TcpServer::TcpServer(const std::string& ip, uint16_t port, int threadNum, int ba
     , acceptor_(mainLoop_.get(), ip, port, backlog)
     , backlog_(backlog)
 {
+    // 让程序忽略 SIGPIPE 信号 防止程序因为由于客户端异常断开连接而莫名其妙地“崩溃”
+    ::signal(SIGPIPE, SIG_IGN);
+
     // 1. 设置 Acceptor 发现新连接时的内部回调
     acceptor_.setNewConnectionCallback(
         std::bind(&TcpServer::handleNewConnection, this, std::placeholders::_1)

@@ -18,7 +18,7 @@ xu
 
 ### 网络库框架层：
 
-- **ET 边缘触发 + 循环读满为止**：经典 muduo 用 LT，本库改用 EPOLLET，`handleRead` 循环 readv 直到 EAGAIN，一次 epoll 唤醒榨干内核缓冲，事件更少、唤醒开销更低（压测支撑 17 万 QPS）
+- **ET 边缘触发 + 循环读满为止**：经典 muduo 用 LT，本库改用 EPOLLET，`handleRead` 循环 readv 直到 EAGAIN，一次 epoll 唤醒榨干内核缓冲，事件更少、唤醒开销更低
 - **写事件先于读事件处理（与 muduo 顺序相反）**：ET 模式下同批 IN|OUT 若先读后写，读回调执行后 return 会吞掉 EPOLLOUT，而输出缓冲无状态迁移不会再触发 → 连接永久悬挂。先写后读：OUT 被消费，IN 延迟一轮由 ET 持续触发，数据不丢
 - **回调后立即 return 的 UAF 防线**：压测 64KB 大报文真实踩过 SIGSEGV——读回调内可能同步销毁 Connection 和 Channel。约定"每个回调执行后禁止再访问 this"；muduo 靠 shared_ptr 保活，这里靠结构性纪律，更省心
 - **插件式帧编解码器**：Connection 可挂 `MessageCodec`（Buffer→完整消息），handleRead 循环拆帧，粘包/拆包下沉到网络层，应用层永远收到完整消息；长度非法自动清缓冲。经典 muduo 需要应用层自己拼包

@@ -49,6 +49,8 @@ uint16_t Connection::port() const
 
 void Connection::handleRead()
 {
+    ConnectionPtr self(shared_from_this());
+
     int savedErrno = 0;
     ssize_t totalRead = 0;
     bool peerClosed = false;
@@ -92,9 +94,22 @@ void Connection::handleRead()
             std::string message;
             while (messageCodec_(&inputBuffer_, message))
             {
+                // 上一帧回调可能已关闭连接，disconnected_ 已置位则不再取帧
+                if (disconnected_)
+                {
+                    break;
+                }
                 if (onMessageCallback_)
                 {
-                    onMessageCallback_(shared_from_this(), message);
+                    // 这里用的self,
+                    onMessageCallback_(self, message);
+
+                    // 回调内可能同步关闭本连接（forceClose），即使 self 保活，
+                    // 已关闭的连接也不应继续处理剩余帧
+                    if (disconnected_)
+                    {
+                        break;
+                    }
                 }
             }
         }
@@ -104,7 +119,7 @@ void Connection::handleRead()
             std::string message = inputBuffer_.retrieveAllAsString();
             if (onMessageCallback_)
             {
-                onMessageCallback_(shared_from_this(), message);
+                onMessageCallback_(self, message);
             }
         }
     }
@@ -120,7 +135,8 @@ void Connection::handleWrite()
 {
     if (channel_->isWriting())
     {
-        ssize_t n = ::send(fd(), outputBuffer_.peek(), outputBuffer_.readableBytes(), 0);
+        // MSG_NOSIGNAL：对端已断开时返回 EPIPE 而非触发 SIGPIPE 杀死整个进程
+        ssize_t n = ::send(fd(), outputBuffer_.peek(), outputBuffer_.readableBytes(), MSG_NOSIGNAL);
         if (n > 0)
         {
             outputBuffer_.retrieve(n);
@@ -215,7 +231,7 @@ void Connection::sendInLoop(const std::string& data)
     // 如果之前没有数据在排队，尝试直接发送
     if (!channel_->isWriting() && outputBuffer_.readableBytes() == 0)
     {
-        nwrote = ::send(fd(), data.data(), data.size(), 0);
+        nwrote = ::send(fd(), data.data(), data.size(), MSG_NOSIGNAL);
         if (nwrote >= 0)
         {
             remaining = data.size() - nwrote;
