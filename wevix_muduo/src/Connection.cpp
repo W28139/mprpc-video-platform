@@ -55,28 +55,34 @@ void Connection::handleRead()
     ssize_t totalRead = 0;
     bool peerClosed = false;
 
+    // ET 模式：一次事件必须把内核缓冲区读空，否则不会再触发，所以循环读到 EAGAIN
     while (true)
     {
         ssize_t n = inputBuffer_.readFd(fd(), &savedErrno);
         if (n > 0)
         {
+            // 读到数据（可能一次读不满全部报文），累计字节数后继续读
             totalRead += n;
             continue;
         }
         if (n == 0)
         {
+            // readv 返回 0 = 对端已关闭写端（EOF），数据已读完，稍后关闭本连接
             peerClosed = true;
             break;
         }
+        // n < 0：读取出错，下面按 savedErrno 分类处理
         if (savedErrno == EINTR)
         {
+            // 被信号中断，不是真错误，重新读一次即可
             continue;
         }
         if (savedErrno == EAGAIN || savedErrno == EWOULDBLOCK)
         {
+            // 内核缓冲区已读空，这是 ET 模式下一次读事件的正常结束条件
             break;
         }
-
+        // 其余 errno 均为真错误（ECONNRESET/ETIMEDOUT 等），关闭连接
         errno = savedErrno;
         LOG_WARN("handleRead fd=%d error, errno=%d", fd(), savedErrno);
         handleError();
@@ -101,7 +107,7 @@ void Connection::handleRead()
                 }
                 if (onMessageCallback_)
                 {
-                    // 这里用的self,
+                    // 这里用的self
                     onMessageCallback_(self, message);
 
                     // 回调内可能同步关闭本连接（forceClose），即使 self 保活，
@@ -160,6 +166,7 @@ void Connection::handleWrite()
 
 void Connection::handleClose()
 {
+    // 幂等保护，第一次执行close进入下面，多次执行直接返回
     if(disconnected_)
         return;
 
@@ -221,6 +228,7 @@ void Connection::send(const std::string& data)
         loop_->runInLoop(std::bind(&Connection::sendInLoop, shared_from_this(), data));
     }
 }
+
 // 实际发送逻辑（内部）
 void Connection::sendInLoop(const std::string& data)
 {

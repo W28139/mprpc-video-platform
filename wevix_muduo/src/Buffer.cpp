@@ -4,12 +4,11 @@
 #include <errno.h>
 #include <sys/uio.h>    // readv, struct iovec
 #include <unistd.h>      // read
+#include <algorithm>    // std::copy
 #include <cstring>
 
 namespace wevix_muduo
 {
-
-const char Buffer::kCRLF[] = "\r\n";
 
 // =========================================================================
 // 构造
@@ -132,28 +131,15 @@ const char* Buffer::beginWrite() const
 }
 
 // =========================================================================
-// 协议辅助
+// prepend —— 头部插入
 // =========================================================================
-
-const char* Buffer::findCRLF() const
-{
-    // 在 [peek, beginWrite) 范围内查找子序列 "\r\n"
-    // std::search 是 STL 的子序列查找算法（不是 KMP，性能足够用）
-    const char* crlf = std::search(peek(), beginWrite(), kCRLF, kCRLF + 2);
-    // 返回 nullptr 表示"还没收到完整行"，上层需等待下次数据到达
-    return crlf == beginWrite() ? nullptr : crlf;
-}
 
 void Buffer::prepend(const void* data, size_t len)
 {
-    // 在可读数据**之前**塞入 len 字节。
-    //
+    // 在可读数据之前塞入 len 字节。
     // 例：发送自定义协议消息，先写 body，最后才知道 length：
     //   buf.append(body);
     //   buf.prepend(&lengthHeader, 4);  // 在 body 前面插入 4 字节长度头
-    //
-    // 前提：prependableBytes() >= len，即前面的空位够用。
-    // 如果不够（比如连续 prepend 多次），需要上层先确保空间。
     readerIndex_ -= len;
     const char* d = static_cast<const char*>(data);
     std::copy(d, d + len, begin() + readerIndex_);
@@ -232,29 +218,6 @@ ssize_t Buffer::readFd(int fd, int* savedErrno)
     return n;
 }
 
-// =========================================================================
-// makeSpace —— 碎片整理与扩容
-// =========================================================================
-//
-// 触发时机：append / readFd 发现 writableBytes() < len
-//
-// 策略选择（二选一）：
-//
-//   A. 整理碎片（优先）
-//      条件：prependable + writable ≥ len + kCheapPrepend
-//      含义：总空闲空间够用，只是碎片化了（前面有被消费的空洞）。
-//      做法：把可读数据 memmove 到 kCheapPrepend 位置，后面就空出来了。
-//      代价：一次 memmove（通常是几十~几百字节），比 resize 快得多。
-//
-//   B. 扩容
-//      条件：总空闲空间不够
-//      做法：直接 vector.resize(writerIndex_ + len)，触发内存重分配。
-//      代价：可能需要重新 malloc + 拷贝全部数据。
-//
-// 为什么始终保留 kCheapPrepend 字节？
-//   即使不 prepend，也要留出这 8 字节。这保证了上层随时可以做 prepend 而不需要
-//   额外整理空间。8 字节刚好放一个 int64_t 长度前缀。
-
 void Buffer::makeSpace(size_t len)
 {
     // 总空闲 = 头部空洞 + 尾部剩余
@@ -275,8 +238,6 @@ void Buffer::makeSpace(size_t len)
         //   整理后：
         //   [8B][___200B可读___][__________大量可写__________]
         //
-        // 只搬可读数据，空洞里的旧数据（已被消费）丢弃不管。
-        // 从begin() + kCheapPrepend)开始，把begin() + readerIndex_到begin() + writerIndex_内容拷贝进来
         size_t readable = readableBytes();
         std::copy(begin() + readerIndex_,       // 源：可读区起点
                   begin() + writerIndex_,       // 源：可读区终点
@@ -287,15 +248,6 @@ void Buffer::makeSpace(size_t len)
         writerIndex_ = readerIndex_ + readable;
     }
 }
-
-// =========================================================================
-// begin —— 获取 vector 内部数据起始指针
-// =========================================================================
-//
-// 使用 &*buffer_.begin() 而不是 buffer_.data()，语义相同。
-// 注意：空 vector 时 begin() == end()，对空容器 &*begin() 理论上是 UB，
-// 但 Buffer 构造时就分配了至少 kCheapPrepend + kInitialSize 字节，
-// 整个生命周期都不会变成空 vector，所以安全。
 
 char* Buffer::begin()
 {

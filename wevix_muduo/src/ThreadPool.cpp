@@ -19,11 +19,12 @@ ThreadPool::ThreadPool(int initThreadSize, std::string name)
     , isPoolRunning_(false)
     , poolName_(std::move(name))
 {
-    // 如果构造时指定了线程数，直接开启
-    if (initThreadSize_ > 0)
-    {
-        start();
-    }
+    // 注意：构造函数刻意不自动 start()。
+    // setMode / setTaskQueMaxThreshold / setThreadSizeThreshold 都带有
+    // `if (isPoolRunning_) return;` 守卫（必须先配置后启动），若构造即启动，
+    // 这三个接口会全部静默失效 —— enableWorkPool 的「构造 → setMode → start」
+    // 顺序正是因此拿不到 CACHED 模式。
+    // 统一契约为：构造 → 配置 → start()。
 }
 
 ThreadPool::~ThreadPool()

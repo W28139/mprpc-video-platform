@@ -12,6 +12,9 @@ target_link_libraries(test_buffer wevix_muduo)
 add_executable(test_threadpool test_threadpool.cpp)
 target_link_libraries(test_threadpool wevix_muduo)
 
+add_executable(test_memory_pool test_memory_pool.cpp)
+target_link_libraries(test_memory_pool wevix_muduo)
+
 # --- 集成测试 ---
 
 add_executable(echo_server echo_server.cpp)
@@ -24,3 +27,6 @@ target_link_libraries(echo_client pthread)
 
 add_executable(bench_echo_stress bench_echo_stress.cpp)
 target_link_libraries(bench_echo_stress pthread)
+
+add_executable(bench_memory_pool bench_memory_pool.cpp)
+target_link_libraries(bench_memory_pool wevix_muduo)

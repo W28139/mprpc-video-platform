@@ -2,7 +2,7 @@
 # 阶段 13：CI/CD — GitHub Actions
 #
 #   build       编译全部二进制（ENABLE_NATIVE_MARCH=OFF，与 Docker 一致）
-#   unit-test   单元测试（框架 3 个 + test_ffmpeg_executor + test_store[MySQL 不可达 SKIP]）
+#   unit-test   单元测试（框架 4 个 + test_ffmpeg_executor + test_store[MySQL 不可达 SKIP]）
 #   integration 容器集成测试（compose 全链路，Dockerfile 的唯一真实验证点）+ 业务 RPC 压测
 #   benchmark   RPC 压测（bench_rpc_stress --direct --keepalive）
 #
@@ -81,6 +81,7 @@ jobs:
           mkdir -p program_log
           ./bin/test_buffer
           ./bin/test_threadpool
+          ./bin/test_memory_pool
           ./bin/test_rpc_protocol
           ./bin/test_ffmpeg_executor
           # test_store 需 MySQL，本 job 无 MySQL → 自动 SKIP 退出 0

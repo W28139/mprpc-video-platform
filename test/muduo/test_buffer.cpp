@@ -1,7 +1,7 @@
 // ============================================================================
 // Buffer 单元测试
 // 测试 wevix_muduo::Buffer 的核心功能：读写、扩容、碎片整理、
-// readFd 散射读、prepend 前置写入、findCRLF 行解析、边界条件等
+// readFd 散射读、prepend 前置写入、边界条件等
 // ============================================================================
 
 #include "wevix_muduo/Buffer.h"
@@ -213,31 +213,7 @@ static void test_prepend()
 }
 
 // ============================================================================
-// 测试 8：findCRLF 行解析
-// ============================================================================
-static void test_find_crlf()
-{
-    TEST("findCRLF 行解析");
-
-    Buffer buf;
-
-    // 没有 \r\n 时返回 nullptr
-    buf.append("GET / HTTP");
-    CHECK(buf.findCRLF() == nullptr);
-
-    // 追加 \r\n 后能找到
-    buf.append("\r\n");
-    const char* crlf = buf.findCRLF();
-    CHECK(crlf != nullptr);
-    CHECK(crlf == buf.peek() + 10);  // "GET / HTTP" = 10 字节，\r\n 从第 10 个开始
-    CHECK(crlf[0] == '\r');
-    CHECK(crlf[1] == '\n');
-
-    PASS();
-}
-
-// ============================================================================
-// 测试 9：readFd 管道读写（模拟真实 IO）
+// 测试 8：readFd 管道读写（模拟真实 IO）
 // ============================================================================
 static void test_read_fd()
 {
@@ -280,7 +256,7 @@ static void test_read_fd()
 }
 
 // ============================================================================
-// 测试 10：空 Buffer 操作
+// 测试 9：空 Buffer 操作
 // ============================================================================
 static void test_empty_buffer_ops()
 {
@@ -303,14 +279,11 @@ static void test_empty_buffer_ops()
     // peek 在空 Buffer 上
     CHECK(buf.peek() != nullptr);
 
-    // findCRLF 空 Buffer
-    CHECK(buf.findCRLF() == nullptr);
-
     PASS();
 }
 
 // ============================================================================
-// 测试 11：连续写入-消费循环（模拟消息处理）
+// 测试 10：连续写入-消费循环（模拟消息处理）
 // ============================================================================
 static void test_write_consume_cycle()
 {
@@ -341,7 +314,7 @@ static void test_write_consume_cycle()
 }
 
 // ============================================================================
-// 测试 12：大数据吞吐（5MB）
+// 测试 11：大数据吞吐（5MB）
 // ============================================================================
 static void test_large_data()
 {
@@ -362,7 +335,7 @@ static void test_large_data()
 }
 
 // ============================================================================
-// 测试 13：prepend 后 readFd（组合操作校验）
+// 测试 12：prepend 后 readFd（组合操作校验）
 // ============================================================================
 static void test_prepend_then_read()
 {
@@ -408,7 +381,6 @@ int main()
     test_defragmentation();
     test_retrieve_as_string();
     test_prepend();
-    test_find_crlf();
     test_read_fd();
     test_empty_buffer_ops();
     test_write_consume_cycle();

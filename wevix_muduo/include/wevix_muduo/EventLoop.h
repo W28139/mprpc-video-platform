@@ -80,28 +80,26 @@ private:
 
     std::unique_ptr<Epoll> epoll_;
     
-    // eventfd 唤醒相关
-    int wakeupFd_;
-    std::unique_ptr<Channel> wakeChannel_;
+    // eventfd 唤醒相关(用于唤醒处理其他线程发来的任务)
+    int wakeupFd_;                          // eventfd 文件描述符
+    std::unique_ptr<Channel> wakeChannel_;  // eventfd 对应的 Channel
+    mutable std::mutex mutex_;              // 实现跨线程投递任务 
+    std::queue<Functor> pendingTasks_;      // 任务队列（跨线程投递的任务）
 
-    // timerfd 定时器相关
-    int timerFd_;
-    std::unique_ptr<Channel> timerChannel_;
-    int timerInterval_; // 闹钟间隔
-    int timeout_;       // 连接超时阈值
-
-    // 任务队列相关
-    mutable std::mutex mutex_;
-    std::queue<Functor> pendingTasks_;
+    // timerfd 定时器相关（用于定时检查连接超时）
+    int timerFd_;                           // 定时器文件描述符
+    std::unique_ptr<Channel> timerChannel_; // timerfd 对应的 Channel
+    int timerInterval_;                     // 闹钟间隔
+    int timeout_;                           // 连接超时阈值
 
     // 连接管理相关
-    bool isMainLoop_;
-    std::mutex connsMutex_;
-    std::map<int, ConnectionPtr> conns_;
+    bool isMainLoop_;                       // 是否为主循环
+    std::mutex connsMutex_;                 // 保护 conns_ 的互斥锁
+    std::map<int, ConnectionPtr> conns_;    // 连接管理（fd -> ConnectionPtr）
 
     // 回调函数
-    std::function<void(EventLoop*)> epollTimeoutCallback_;
-    std::function<void(int)> timerCallback_;
+    std::function<void(EventLoop*)> epollTimeoutCallback_;  // epoll 超时回调
+    std::function<void(int)> timerCallback_;    // 定时器回调
 };
 
 } // namespace wevix_muduo

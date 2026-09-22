@@ -10,13 +10,16 @@ namespace wevix_muduo
 
 TcpServer::TcpServer(const std::string& ip, uint16_t port, int threadNum, int backlog)
     : mainLoop_(new EventLoop(true)) // 设置为主循环
-    , threadNum_(threadNum)
     , ioThreadPool_(threadNum, "IO_LOOP")
+    , threadNum_(threadNum)
     , acceptor_(mainLoop_.get(), ip, port, backlog)
     , backlog_(backlog)
 {
     // 让程序忽略 SIGPIPE 信号 防止程序因为由于客户端异常断开连接而莫名其妙地“崩溃”
     ::signal(SIGPIPE, SIG_IGN);
+
+    // IO 线程池固定模式，构造完立即启动（线程先就位，等待 start() 提交 EventLoop::run）
+    ioThreadPool_.start();
 
     // 1. 设置 Acceptor 发现新连接时的内部回调
     acceptor_.setNewConnectionCallback(
@@ -179,7 +182,9 @@ void TcpServer::removeConnection(int fd)
 }
 
 // 让用户调用，设置work
-void TcpServer::enableWorkPool(int threadNum, PoolMode mode)
+// 注意调用顺序：构造 → setMode → setThreadSizeThreshold → start。
+// setThreadSizeThreshold 内部要求 poolMode_ == MODE_CACHED，必须在 setMode 之后。
+void TcpServer::enableWorkPool(int threadNum, PoolMode mode, int maxThreads)
 {
     if(workThreadPool_)
     {
@@ -192,9 +197,15 @@ void TcpServer::enableWorkPool(int threadNum, PoolMode mode)
 
     workThreadPool_->setMode(mode);
 
+    if (maxThreads > 0)
+    {
+        workThreadPool_->setThreadSizeThreshold(maxThreads);  // 仅 CACHED 模式生效
+    }
+
     workThreadPool_->start();
 
-    LOG_INFO("WorkThreadPool start, size=%d", threadNum);
+    LOG_INFO("WorkThreadPool start, size=%d, mode=%s, max_threads=%d",
+             threadNum, mode == PoolMode::MODE_CACHED ? "CACHED" : "FIXED", maxThreads);
 }
 
 } // namespace wevix_muduo

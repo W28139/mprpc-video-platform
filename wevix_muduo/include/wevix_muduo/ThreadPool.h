@@ -53,14 +53,11 @@ public:
     // 设置 Cached 模式下线程数量上限
     void setThreadSizeThreshold(int threshold);
 
-    /**
-     * @brief 适配 TcpServer 的接口：添加任务
-     */
+    // 当前物理线程数：CACHED 模式下可观测扩缩容（测试断言 / 线上诊断用）
+    int currentThreadSize() const { return curThreadSize_.load(); }
+
     void addTask(Task task);
 
-    /**
-     * @brief 高级接口：提交任务并获取 Future 返回值
-     */
     template <typename Func, typename... Args>
     auto submitTask(Func&& func, Args&&... args) -> std::future<decltype(func(args...))>
     {
@@ -83,6 +80,7 @@ public:
             return emptyTask->get_future();
         }
 
+        // 加入任务队列
         taskQue_.emplace([task]() { (*task)(); });
         taskSize_++;
 
@@ -95,7 +93,6 @@ public:
         {
             createThread();
         }
-
         return result;
     }
 

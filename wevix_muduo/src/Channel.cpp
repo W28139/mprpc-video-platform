@@ -90,13 +90,6 @@ void Channel::handleEvent()
         if (errorCallback_) { errorCallback_(); return; }
     }
 
-    // 可写：必须先于读处理（#12 修复）。
-    // ET 模式下同批 EPOLLIN|EPOLLOUT 时，若读回调先执行并 return，
-    // 写回调被跳过；sendInLoop 的 enableWriting 仅在 !isWriting() 时才
-    // EPOLL_CTL_MOD——已有 pending 输出时连 MOD 都不会发生，ET 下
-    // EPOLLOUT 事件已被消费且无状态迁移可再触发 → 输出缓冲永久卡死、
-    // 连接悬挂。先写后读：EPOLLOUT 被消费（数据发出），EPOLLIN 未处理
-    // 只是延迟一轮（数据仍在内核缓冲，ET 下持续触发，不丢失）。
     if (revents_ & EPOLLOUT)
     {
         if (writeCallback_) { writeCallback_(); return; }
@@ -107,9 +100,6 @@ void Channel::handleEvent()
     {
         if (readCallback_) { readCallback_(); return; }
     }
-    // 注意：回调可能同步销毁 Channel 自身（如 handleClose → removeConnection
-    // → 最后一个 shared_ptr 释放 → Connection/channel_ 析构），因此每个回调
-    // 执行后必须立即 return，禁止再访问 this 的任何成员。
 }
 
 } // namespace wevix_muduo

@@ -13,9 +13,6 @@ namespace wevix_muduo
 class EventLoop;
 class InetAddress;
 
-/**
- * @brief 接收器：专门负责监听新连接并进行 accept
- */
 class Acceptor : private Noncopyable
 {
 public:

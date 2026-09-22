@@ -79,6 +79,7 @@ EventLoop::~EventLoop()
     ::close(timerFd_);
 }
 
+// 执行与每个IO线程
 void EventLoop::run()
 {
     threadId_.store(getTid(), std::memory_order_relaxed);
@@ -168,7 +169,7 @@ void EventLoop::doPendingTasks()
 {
     std::queue<Functor> tasks;
     {
-        // 关键：为了减小锁范围，我们将队列交换到局部变量中处理
+        // 可减小锁范围，我们将队列交换到局部变量中处理
         std::lock_guard<std::mutex> lock(mutex_);
         tasks.swap(pendingTasks_);
     }

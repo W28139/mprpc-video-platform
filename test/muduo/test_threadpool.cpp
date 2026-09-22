@@ -200,18 +200,29 @@ static void test_mode_fixed_vs_cached()
     {
         ThreadPool pool(2, "CachedPool");
         pool.setMode(PoolMode::MODE_CACHED);
-        pool.setThreadSizeThreshold(16);
+        pool.setThreadSizeThreshold(8);
         pool.start();
+
+        // 扩容的前提是「配置能在 start() 之前生效」：
+        // 若构造函数自动 start()，setMode/setThreadSizeThreshold 会被
+        // isPoolRunning_ 守卫挡掉，池会静默停留在 FIXED，线程数恒为 2。
+        CHECK(pool.currentThreadSize() == 2);
 
         std::atomic<int> done{0};
 
-        // 提交大量阻塞型任务
+        // 提交阻塞型任务：2 个线程以 20ms/个的速度消费不过来，
+        // 队列积压会触发 submitTask 里的扩容分支，直到上限 8
         for (int i = 0; i < 100; ++i) {
             pool.addTask([&done]() {
-                std::this_thread::sleep_for(std::chrono::milliseconds(1));
+                std::this_thread::sleep_for(std::chrono::milliseconds(20));
                 done.fetch_add(1);
             });
         }
+
+        // 断言扩容真的发生了（而非只是任务跑完了）
+        CHECK(pool.currentThreadSize() > 2);
+        CHECK(pool.currentThreadSize() <= 8);
+
         pool.stop();
         CHECK(done.load() == 100);
     }

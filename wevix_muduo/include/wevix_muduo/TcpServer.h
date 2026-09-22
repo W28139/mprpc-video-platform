@@ -44,7 +44,10 @@ public:
     // 设置帧编解码器：所有新连接自动应用，确保 OnMessage 只收到完整帧
     void setMessageCodec(Connection::MessageCodec cb) { messageCodec_ = std::move(cb); }
 
-    void enableWorkPool(int threadNum, PoolMode mode = PoolMode::MODE_FIXED);
+    // 开启 Work 业务线程池
+    // threadNum: 初始线程数（CACHED 模式下也是缩容回落的下限）
+    // maxThreads: CACHED 模式的线程数上限，<=0 表示用池默认值（100）
+    void enableWorkPool(int threadNum, PoolMode mode = PoolMode::MODE_FIXED, int maxThreads = 0);
 
     template<typename Func>
     void submitInWorkPool(Func&& func)

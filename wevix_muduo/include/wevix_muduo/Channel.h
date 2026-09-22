@@ -12,10 +12,6 @@ namespace wevix_muduo
 // 前向声明，减少头文件包含
 class EventLoop;
 
-/**
- * @brief Channel 类封装了 fd 以及它感兴趣的事件（EPOLLIN, EPOLLOUT...）
- * 同时也绑定了事件发生时的回调函数。
- */
 class Channel : private Noncopyable
 {
 public:

@@ -17,11 +17,7 @@ class EventLoop;
 class Socket;
 class Channel;
 
-/**
- * @brief TCP 连接类
- * 封装了一个已建立的客户端连接、对应的 Socket 和 Channel，
- * 以及该连接特有的输入输出缓冲区。
- */
+
 class Connection : public std::enable_shared_from_this<Connection>
 {
 public:
