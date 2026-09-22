@@ -52,22 +52,32 @@ void TestRpcMessageCodec()
     std::string frame = mprpc::BuildRpcFrame(payload);
     std::string message;
 
-    // 先只写入部分帧，验证 codec 会保留半包等待后续数据。
+    // 半包：保留数据等待后续追加，不消费任何字节。
     buf.append(frame.data(), 2);
-    Check(!RpcMessageCodec(&buf, message), "partial frame is incomplete");
+    Check(RpcMessageCodec(&buf, message) == wevix_muduo::CodecResult::kNeedMoreData,
+          "partial frame is incomplete");
 
     // 补齐剩余数据后，codec 应该一次提取完整 payload。
     buf.append(frame.data() + 2, frame.size() - 2);
-    Check(RpcMessageCodec(&buf, message) && message == payload,
+    Check(RpcMessageCodec(&buf, message) == wevix_muduo::CodecResult::kFrameReady &&
+          message == payload,
           "complete frame decode");
     Check(buf.readableBytes() == 0, "codec consumes complete frame");
 
-    std::string badFrame;
-    mprpc::AppendNetworkUint32(&badFrame, mprpc::kRpcMaxFrameSize + 1);
-    buf.append(badFrame);
-    // 超大帧直接拒绝并清空 Buffer，防止坏连接一直占用内存。
-    Check(!RpcMessageCodec(&buf, message), "oversize frame rejected");
-    Check(buf.readableBytes() == 0, "oversize frame clears buffer");
+    // 长度字段非法 → kFatal，交由 Connection 关闭连接（codec 不再自行清 Buffer）。
+    std::string oversize;
+    mprpc::AppendNetworkUint32(&oversize, mprpc::kRpcMaxFrameSize + 1);
+    buf.append(oversize);
+    Check(RpcMessageCodec(&buf, message) == wevix_muduo::CodecResult::kFatal,
+          "oversize frame rejected");
+    buf.retrieveAll();
+
+    // 下界：帧体至少要装得下 payload 开头的 header_size(4B)。
+    std::string undersize;
+    mprpc::AppendNetworkUint32(&undersize, mprpc::kRpcMinFrameSize - 1);
+    buf.append(undersize);
+    Check(RpcMessageCodec(&buf, message) == wevix_muduo::CodecResult::kFatal,
+          "undersize frame rejected");
 }
 
 void TestRpcFrameHeader()
@@ -77,25 +87,13 @@ void TestRpcFrameHeader()
 
     uint32_t totalLen = 0;
     Check(mprpc::ReadNetworkUint32(frame.data(), frame.size(), &totalLen) &&
-          totalLen == mprpc::kRpcFrameHeaderSize + payload.size(),
-          "frame total length includes magic/version");
+          totalLen == payload.size(),
+          "frame total length equals payload size");
 
-    std::string frameBody = frame.substr(sizeof(uint32_t));
-    std::string decodedPayload;
-    std::string errorMsg;
-    Check(mprpc::DecodeRpcFramePayload(frameBody, &decodedPayload, &errorMsg) &&
-          decodedPayload == payload,
-          "frame payload decode");
-
-    std::string badMagic = frameBody;
-    badMagic[1] ^= 0x01;
-    Check(!mprpc::DecodeRpcFramePayload(badMagic, &decodedPayload, &errorMsg),
-          "invalid magic rejected");
-
-    std::string badVersion = frameBody;
-    badVersion[3] ^= 0x01;
-    Check(!mprpc::DecodeRpcFramePayload(badVersion, &decodedPayload, &errorMsg),
-          "invalid version rejected");
+    // 帧体就是 payload，没有额外的协议头需要剥离。
+    Check(frame.size() == sizeof(uint32_t) + payload.size() &&
+          frame.compare(sizeof(uint32_t), payload.size(), payload) == 0,
+          "frame is total_len followed by raw payload");
 }
 
 void TestController()

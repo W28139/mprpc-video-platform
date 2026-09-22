@@ -234,7 +234,7 @@ public:
 
         uint32_t header_size = static_cast<uint32_t>(header_str.size());
 
-        // 帧：BuildRpcFrame 统一写入 total_len + magic + version
+        // 帧：BuildRpcFrame 统一写入 total_len
         std::string payload;
         payload.reserve(sizeof(uint32_t) + header_str.size() + request_data.size());
         mprpc::AppendNetworkUint32(&payload, header_size);
@@ -268,7 +268,7 @@ public:
 
         uint32_t responseFrameSize = 0;
         if (!mprpc::ReadNetworkUint32(responseLenBuf, sizeof(responseLenBuf), &responseFrameSize) ||
-            responseFrameSize < mprpc::kRpcFrameHeaderSize ||
+            responseFrameSize < mprpc::kRpcMinFrameSize ||
             responseFrameSize > mprpc::kRpcMaxFrameSize) {
             error_msg = "invalid response frame size:" + std::to_string(responseFrameSize);
             if (ownsFd) ::close(sock);
@@ -276,18 +276,10 @@ public:
             return false;
         }
 
-        std::string responseFrameBody(responseFrameSize, '\0');
-        if (!recvAll(sock, &responseFrameBody[0], responseFrameSize)) {
+        // 帧体即响应 payload，直接读进来交给 RPC 响应头解析。
+        std::string responsePayload(responseFrameSize, '\0');
+        if (!recvAll(sock, &responsePayload[0], responseFrameSize)) {
             error_msg = "recv response body failed";
-            if (ownsFd) ::close(sock);
-            else { ::close(fd_); fd_ = -1; }
-            return false;
-        }
-
-        std::string responsePayload;
-        std::string frameError;
-        if (!mprpc::DecodeRpcFramePayload(responseFrameBody, &responsePayload, &frameError)) {
-            error_msg = frameError;
             if (ownsFd) ::close(sock);
             else { ::close(fd_); fd_ = -1; }
             return false;

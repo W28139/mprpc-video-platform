@@ -48,7 +48,7 @@ RpcProvider::Run()
 
 ```text
 MprpcChannel::CallMethod()
-  ├─ 序列化请求 → [total_len][magic][version][header_size][RpcHeader][args]
+  ├─ 序列化请求 → [total_len][header_size][RpcHeader][args]
   ├─ 服务发现：本地缓存 → Redis 集中缓存 → ZooKeeper
   ├─ 轮询选 endpoint → 从连接池取连接
   ├─ SendAll → RecvAll → 校验 request_id → 反序列化响应
@@ -57,7 +57,7 @@ MprpcChannel::CallMethod()
 
 **设计上最核心的两个点**：
 
-1. **协议自带 magic/version + 64MB 帧上限**——坏包在协议层就被拒绝，不会交给 protobuf 去解析然后崩溃；
+1. **64MB 帧上限 + 长度合法性校验**——坏包在协议层就被拒绝，不会交给 protobuf 去解析然后崩溃；
 2. **帧边界下沉到网络层**——`RpcMessageCodec` 挂在 `Connection` 上，应用层的 `OnMessage` 永远只收到**完整的一帧**，不用自己处理粘包。
 
 **面试官想听什么**
@@ -102,7 +102,7 @@ MprpcChannel::CallMethod()
 │  RPC 语义层：RpcProvider / MprpcChannel      │  ← 分发、序列化、发现、重试
 │              MprpcController（错误码/超时）   │
 ├─────────────────────────────────────────────┤
-│  协议层：mprpccodec.h（帧格式 + 拆帧）        │  ← 粘包/半包、magic/version 校验
+│  协议层：mprpccodec.h（帧格式 + 拆帧）        │  ← 粘包/半包、长度合法性校验
 │          rpcheader.proto（15 个错误码）       │
 ├─────────────────────────────────────────────┤
 │  传输层：wevix_muduo（TcpServer/EventLoop/…）│  ← epoll、IO 线程、Buffer
@@ -112,12 +112,12 @@ MprpcChannel::CallMethod()
 **关键设计是「协议层独立于传输层」**（`mprpccodec.h` 是纯 header-only 的）：
 
 ```cpp
-// mprpc/include/mprpccodec.h —— 不依赖任何 muduo 内部类型
+// mprpc/include/mprpccodec.h —— 只依赖 Buffer / CodecResult 两个网络库类型
 inline std::string BuildRpcFrame(const std::string& payload);
-inline bool DecodeRpcFramePayload(const std::string& frame, std::string* payload, std::string* err);
+inline bool ReadNetworkUint32(const char* data, size_t len, uint32_t* value);
 ```
 
-它只做「字节串 ↔ 字节串」的转换，唯一和 muduo 的耦合点是 `RpcMessageCodec(Buffer*, std::string&)` 这个适配函数——而 `Buffer` 也是通过 `Buffer*` 裸指针接触的，不是继承关系。
+它只做「字节串 ↔ 字节串」的转换，和 muduo 的耦合点只有 `RpcMessageCodec(Buffer*, std::string&)` 这个适配函数——`Buffer` 通过裸指针接触、`CodecResult` 是网络库定义的编解码结果枚举，都不是继承关系。
 
 **这样的好处**：如果哪天换掉网络库（比如换成 `boost::asio`），**协议层一行都不用改**，只需要重新写一个 `Buffer` 的适配。
 
@@ -194,17 +194,17 @@ if (!callOk &&
 **答（30 秒口述版）**
 
 ```text
-[total_len(4B, 网络序)] [magic(2B)=0x4d52] [version(2B)=1] [payload]
- ←────────────── total_len 覆盖的范围（不含自身 4 字节）──────────────→
+[total_len(4B, 网络序)] [payload]
+ ←──────── total_len 覆盖的范围（不含自身 4 字节）────────→
 ```
 
-`total_len == 4 + payload.size()`（`mprpccodec.h:67`）：
+`total_len == payload.size()`（`mprpccodec.h:43-50`）：
 
 ```cpp
-AppendNetworkUint32(&frame, static_cast<uint32_t>(kRpcFrameHeaderSize + payload.size()));
+AppendNetworkUint32(&frame, static_cast<uint32_t>(payload.size()));
 ```
 
-其中 `kRpcFrameHeaderSize = sizeof(uint16_t) * 2 = 4`（magic 2B + version 2B，`mprpccodec.h:15`）。
+**外层帧头只有 4 字节**——够用就好：`total_len` 唯一的职责是让接收方知道「这一帧到哪里为止」，再多的字段都是它不需要的。
 
 **payload 内部再分两种**：
 
@@ -216,35 +216,31 @@ AppendNetworkUint32(&frame, static_cast<uint32_t>(kRpcFrameHeaderSize + payload.
 **所以线上真实字节序列是**：
 
 ```text
-total_len | "MR" | 0001 | header_size | RpcHeader | args
+total_len | header_size | RpcHeader | args
 ```
 
 **关键设计点**：
 
-**① magic 用来「快速识别是 mprpc 协议」**（`0x4d52` 就是 ASCII 的 `"MR"`）。如果连到的是一个别的服务（比如误连了 Redis），magic 对不上就立刻拒绝，不会拿一堆乱码去喂 protobuf。
-
-**② version 用来「拒绝旧版本协议的数据」**。协议演进时，旧版本的帧会被直接挡掉，而不是产生难以理解的解析错误。
-
-**③ 单帧上限 64MB**（`mprpccodec.h:11-13`）：
+**① 单帧上限 64MB**（`mprpccodec.h:13`）：
 
 ```cpp
 // 单帧最大 64MB：防止异常长度字段导致 Buffer 无限扩容或内存被打爆。
 constexpr uint32_t kRpcMaxFrameSize = 64 * 1024 * 1024;
 ```
 
-**④ 全部用网络序（大端）**，集中在 4 个 inline 函数里（`mprpccodec.h:19-59`）：
+**② 全部用网络序（大端）**，集中在 2 个 inline 函数里（`mprpccodec.h:20-39`）：
 
 ```cpp
 // RPC 协议里的 total_len/header_size 都走这个函数，避免客户端和服务端各自处理字节序。
 ```
 
-读侧还带长度保护（`mprpccodec.h:34-45`）：`len < sizeof(uint32_t)` 直接返回 false，注释写着 `避免坏包触发越界读取`。
+读侧还带长度保护（`mprpccodec.h:30-33`）：`len < sizeof(uint32_t)` 直接返回 false，注释写着 `避免坏包触发越界读取`。
 
 **面试官想听什么**
 
 - 能**画出完整的字节布局**（而不是只说「有个长度前缀」）
 - 知道 `total_len` **不包含自己那 4 字节**——这是最容易搞错的地方
-- 知道 magic/version 的**实际作用**（不是装饰）
+- 知道长度字段非法时为什么**直接关连接**而不是清缓冲硬撑（见 Q3.1）
 
 **可能追问**
 
@@ -264,17 +260,18 @@ constexpr uint32_t kRpcMaxFrameSize = 64 * 1024 * 1024;
 `RpcMessageCodec` 挂在 `Connection` 上，它**只知道长度、不解析内容**：
 
 ```cpp
-inline bool RpcMessageCodec(wevix_muduo::Buffer* buf, std::string& message)
+inline wevix_muduo::CodecResult RpcMessageCodec(wevix_muduo::Buffer* buf, std::string& message)
 {
-    if (buf->readableBytes() < 4) return false;              // 半包：连长度都没收全
+    if (buf->readableBytes() < 4) return kNeedMoreData;       // 半包：连长度都没收全
     uint32_t total_len = 0;
-    if (!mprpc::ReadNetworkUint32(buf->peek(), buf->readableBytes(), &total_len)) return false;
-    if (total_len < kRpcFrameHeaderSize || total_len > kRpcMaxFrameSize)
-    { buf->retrieveAll(); return false; }                     // 长度非法 → 清缓冲
-    if (buf->readableBytes() - 4 < total_len) return false;   // 半包：帧体未收全
+    if (!mprpc::ReadNetworkUint32(buf->peek(), buf->readableBytes(), &total_len))
+        return kNeedMoreData;
+    if (total_len < kRpcMinFrameSize || total_len > kRpcMaxFrameSize)
+        return kFatal;                                        // 长度非法 → 交给上层关连接
+    if (buf->readableBytes() - 4 < total_len) return kNeedMoreData;  // 半包：帧体未收全
     buf->retrieve(4);
-    std::string frameBody = buf->retrieveAsString(total_len);
-    ...
+    message = buf->retrieveAsString(total_len);
+    return kFrameReady;
 }
 ```
 
@@ -399,41 +396,40 @@ if (timeoutMs > 0)
 
 **用长度前缀法，不用状态机。**
 
-核心函数就 30 行（`mprpccodec.h:149-184`）：
+核心函数就 27 行（`mprpccodec.h:60-86`）：
 
 ```cpp
-inline bool RpcMessageCodec(wevix_muduo::Buffer* buf, std::string& message)
+inline wevix_muduo::CodecResult RpcMessageCodec(wevix_muduo::Buffer* buf, std::string& message)
 {
-    if (buf->readableBytes() < 4) return false;              // ① 半包：连长度都没收全
+    if (buf->readableBytes() < 4) return kNeedMoreData;       // ① 半包：连长度都没收全
 
     uint32_t total_len = 0;
     if (!mprpc::ReadNetworkUint32(buf->peek(), buf->readableBytes(), &total_len))
-        return false;                                         // ② 读长度失败
+        return kNeedMoreData;                                 // ② 读长度失败
 
-    if (total_len < mprpc::kRpcFrameHeaderSize || total_len > mprpc::kRpcMaxFrameSize)
-    {
-        // 遇到非法长度时清空缓冲区，避免这个连接后续一直卡在坏帧上。
-        buf->retrieveAll();
-        return false;                                         // ③ 长度非法 → 清缓冲
-    }
+    if (total_len < mprpc::kRpcMinFrameSize || total_len > mprpc::kRpcMaxFrameSize)
+        return kFatal;                                        // ③ 长度非法 → 关连接
 
-    if (buf->readableBytes() - 4 < total_len) return false;    // ④ 半包：帧体未收全
+    if (buf->readableBytes() - 4 < total_len) return kNeedMoreData;  // ④ 半包：帧体未收全
 
-    buf->retrieve(4);                                          // ⑤ 消费长度头
-    std::string frameBody = buf->retrieveAsString(total_len);  // ⑥ 取出帧体
-    ...
+    buf->retrieve(4);                                         // ⑤ 消费长度头
+    message = buf->retrieveAsString(total_len);               // ⑥ 取出 payload
+    return kFrameReady;
 }
 ```
 
 **三种情况分开处理**：
 
-**① 半包（数据不够）**：**`return false`，一个字节都不消费**。数据留在 `Buffer` 的 readable 区，等下次 `handleRead` 追加数据后再试。这是关键——**不能消费**，否则长度头就丢了。
+**① 半包（数据不够）**：**返回 `kNeedMoreData`，一个字节都不消费**。数据留在 `Buffer` 的 readable 区，等下次 `handleRead` 追加数据后再试。这是关键——**不能消费**，否则长度头就丢了。
 
 **② 粘包（一次读到多帧）**：由**调用方循环**处理（`Connection::handleRead`）：
 
 ```cpp
-while (messageCodec_(&inputBuffer_, message))
+while (true)
 {
+    CodecResult result = messageCodec_(&inputBuffer_, message);
+    if (result == CodecResult::kNeedMoreData) break;
+    if (result == CodecResult::kFatal) { handleClose(); return; }
     if (disconnected_) break;
     if (onMessageCallback_) { onMessageCallback_(self, message); }
     if (disconnected_) break;
@@ -442,7 +438,11 @@ while (messageCodec_(&inputBuffer_, message))
 
 一次 `read` 可能读到 `[帧1][帧2][帧3的一半]`，`while` 循环把前两帧都吐出来，第三帧留在 Buffer 里等下次。
 
-**③ 长度非法**：**清空整个 `inputBuffer`** ——注释写明了原因：`避免这个连接后续一直卡在坏帧上`。
+**③ 长度非法：返回 `kFatal`，由 `Connection` 关闭连接。**
+
+这里我改过一版设计。最初是 `retrieveAll()` 清空缓冲接着读（注释写着「避免这个连接后续一直卡在坏帧上」），**但那个想法是错的**：长度非法意味着字节流已经错位，而长度前缀协议**没有可扫描的同步点**——清缓冲并不能重新对齐，只是在赌发送方恰好走到帧边界，赌赢的代价是中间那些帧被静默丢弃、对应请求各自干等 5s 超时。
+
+关连接则是让错误如实暴露：对端立刻收到 `RPC_RECV_FAILED`（而不是等超时），该错误码在客户端自动重试清单里，会清池重连重发——**恢复从「5 秒超时」变成「一次重连」**。
 
 **零拷贝的细节**：用 `peek()` **只读长度不消费**（`Buffer.h:70`），确认帧完整后才 `retrieve(4)` + `retrieveAsString(total_len)`。**先看后取**，避免读了半个帧就破坏了缓冲状态。
 
@@ -451,6 +451,7 @@ while (messageCodec_(&inputBuffer_, message))
 - 能说出「半包时**一个字节都不能消费**」——这是最容易写错的地方
 - 知道「粘包靠调用方循环、半包靠返回值」，职责划分清楚
 - 认得出「先 `peek` 后 `retrieve`」这个零拷贝模式
+- 知道长度非法为什么要**关连接**而不是清缓冲（错位后不可恢复）
 
 **可能追问**
 
@@ -478,19 +479,6 @@ while (messageCodec_(&inputBuffer_, message))
 
 **我的协议**：定长头部 + 长度前缀，**没有嵌套、没有转义**——所以一个 `if` 就够了，不需要状态机。
 
-**顺便说一个我实际处理的细节**：`RpcMessageCodec` 也承担了 **magic/version 校验**（`mprpccodec.h:176-182`）：
-
-```cpp
-if (!mprpc::DecodeRpcFramePayload(frameBody, &message, &errorMsg))
-{
-    // magic/version 错误时直接拒绝这一帧，上层不会收到伪造或旧版本协议数据。
-    message.clear();
-    return false;
-}
-```
-
-**这一步放在 codec 而不是应用层**，因为它属于「协议格式校验」——和拆帧是同一层的职责。应用层拿到的永远是「magic/version 都对」的数据。
-
 ---
 
 ### Q3.2 codec 是怎么挂到网络层上的？
@@ -512,15 +500,23 @@ server.setMessageCodec(RpcMessageCodec);
 if (messageCodec_) conn->setMessageCodec(messageCodec_);
 ```
 
-**③ 在 `handleRead` 里循环调用**（`Connection.cpp:90-115`）：
+**③ 在 `handleRead` 里循环调用**（`Connection.cpp:96-135`）：
 
 ```cpp
 if (messageCodec_)
 {
     // 有帧编解码器：循环提取完整帧，每帧回调一次 onMessage
     std::string message;
-    while (messageCodec_(&inputBuffer_, message))
+    while (true)
     {
+        CodecResult result = messageCodec_(&inputBuffer_, message);
+        if (result == CodecResult::kNeedMoreData) { break; }
+        if (result == CodecResult::kFatal)
+        {
+            LOG_WARN("handleRead fd=%d: fatal codec error, closing connection", fd());
+            handleClose();
+            return;                                 // handleClose 后禁止再访问 this
+        }
         if (disconnected_) { break; }
         if (onMessageCallback_) { onMessageCallback_(self, message); }
         if (disconnected_) { break; }
@@ -533,6 +529,8 @@ else
     if (onMessageCallback_) { onMessageCallback_(self, message); }
 }
 ```
+
+**`handleClose()` 后面那行 `return` 不是可有可无的**：关闭会经由 `closeCallback_` → `TcpServer::handleClose` → `removeConnection` 把连接从 `connections_` 里摘掉，之后再访问 `this` 就可能踩空。之所以安全，是因为 `handleRead` 开头有个 `ConnectionPtr self(shared_from_this())` 兜住了生命周期——**这是之前一次 UAF 崩溃换来的教训**。
 
 **关键设计：这是可选的**。
 
@@ -550,14 +548,21 @@ void setMessageCodec(MessageCodec cb) { messageCodec_ = std::move(cb); }
 
 1. **向后兼容**——`wevix_muduo` 的其他使用者（`echo_server`、`bench_echo_stress`）不需要 codec，行为不变；
 2. **证明「下沉」没有牺牲通用性**——网络库还是通用的，只是**多提供了一条更省事的路径**；
-3. **`MessageCodec` 的类型是通用的**（`Connection.h:33-35`）：
+3. **`MessageCodec` 的类型是通用的**（`Connection.h:21-37`）：
 
 ```cpp
-// 帧编解码器：从 Buffer 中尝试提取一个完整帧
-// 返回 true 表示成功提取一帧（写入 message），false 表示数据不足需等待
-// 编解码器负责从 Buffer 中消费已提取的数据
-using MessageCodec = std::function<bool(Buffer*, std::string&)>;
+// 帧编解码器的三态结果
+enum class CodecResult
+{
+    kNeedMoreData,  // 数据不足，保留 Buffer 等下次追加
+    kFrameReady,    // 成功提取一帧，message 有效
+    kFatal,         // 数据流已损坏且不可恢复，调用方必须关闭连接
+};
+
+using MessageCodec = std::function<CodecResult(Buffer*, std::string&)>;
 ```
+
+**为什么是三态而不是 `bool`**：`bool` 只能表达「成帧 / 没成帧」，**没法区分「数据不够，等等再来」和「流坏了，别等了」**——而这两者的处理完全相反，前者必须原样保留 Buffer，后者必须关连接。把「要不要关连接」的判断权交给 codec，是因为**只有 codec 懂协议**：网络库不该知道「多长的帧算非法」。
 
 **任何协议都能实现这个签名**——HTTP、Redis、WebSocket 都可以。所以这不是「为 mprpc 硬编码」，而是「提供了一个可插拔的扩展点」。
 
@@ -577,12 +582,12 @@ using MessageCodec = std::function<bool(Buffer*, std::string&)>;
 **完整链路**：
 
 ```text
-TcpServer::setMessageCodec(RpcMessageCodec)              // rpcprovider.cc:277
-  └─ TcpServer::handleNewConnection()                    // TcpServer.cpp:82
-       if (messageCodec_) conn->setMessageCodec(messageCodec_);   // TcpServer.cpp:97
-  └─ Connection::handleRead()                            // Connection.cpp:90-115   ← IO 线程
-       while (messageCodec_(&inputBuffer_, message)) { ... }
-  └─ TcpServer::handleMessage()                          // TcpServer.cpp:145
+TcpServer::setMessageCodec(RpcMessageCodec)              // rpcprovider.cc:284
+  └─ TcpServer::handleNewConnection()                    // TcpServer.cpp:85
+       if (messageCodec_) conn->setMessageCodec(messageCodec_);   // TcpServer.cpp:100
+  └─ Connection::handleRead()                            // Connection.cpp:96-135   ← IO 线程
+       CodecResult result = messageCodec_(&inputBuffer_, message);
+  └─ TcpServer::handleMessage()                          // TcpServer.cpp:148
        if (workThreadPool_) {
            auto msg = std::make_shared<std::string>(std::move(message));   // ← move 到堆上
            workThreadPool_->addTask([this, conn, msg]() { onMessageCallback_(conn, *msg); });

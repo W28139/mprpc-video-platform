@@ -98,9 +98,23 @@ void Connection::handleRead()
             // 有帧编解码器：循环提取完整帧，每帧回调一次 onMessage
             // 不完整的数据留在 inputBuffer_ 中，等待下次 handleRead 追加
             std::string message;
-            while (messageCodec_(&inputBuffer_, message))
+            while (true)
             {
-                // 上一帧回调可能已关闭连接，disconnected_ 已置位则不再取帧
+                CodecResult result = messageCodec_(&inputBuffer_, message);
+                if (result == CodecResult::kNeedMoreData)
+                {
+                    break;
+                }
+                if (result == CodecResult::kFatal)
+                {
+                    // 流已错位：这条连接上在途请求的成败都已不可判断，继续复用只会让
+                    // 更多请求莫名超时。立即关闭，让对端快速失败后重连。
+                    LOG_WARN("handleRead fd=%d: fatal codec error, closing connection", fd());
+                    handleClose();
+                    return; // handleClose 后禁止再访问 this
+                }
+
+                // kFrameReady：上一帧回调可能已关闭连接，disconnected_ 已置位则不再取帧
                 if (disconnected_)
                 {
                     break;

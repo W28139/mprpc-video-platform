@@ -762,7 +762,7 @@ bool SendRequestAndReadResponse(const std::shared_ptr<PooledConnection>& conn,
 
     uint32_t responseFrameSize = 0;
     if (!mprpc::ReadNetworkUint32(responseLenBuf, sizeof(responseLenBuf), &responseFrameSize) ||
-        responseFrameSize < mprpc::kRpcFrameHeaderSize ||
+        responseFrameSize < mprpc::kRpcMinFrameSize ||
         responseFrameSize > mprpc::kRpcMaxFrameSize)
     {
         errorCode = mprpc::RPC_FRAME_TOO_LARGE;
@@ -771,22 +771,14 @@ bool SendRequestAndReadResponse(const std::shared_ptr<PooledConnection>& conn,
         return false;
     }
 
-    std::string responseFrameBody(responseFrameSize, '\0');
-    if (!RecvAll(conn->fd, &responseFrameBody[0], responseFrameSize, savedErrno))
+    // 帧体即响应 payload，直接读进 responsePayload，省掉一次中转拷贝。
+    responsePayload.resize(responseFrameSize);
+    if (!RecvAll(conn->fd, &responsePayload[0], responseFrameSize, savedErrno))
     {
         errorCode = IoErrorCode(savedErrno, mprpc::RPC_RECV_FAILED);
         errorMsg = savedErrno == 0
                  ? "server closed connection before sending full response!"
                  : "recv response body error! errno:" + std::to_string(savedErrno);
-        conn->Close();
-        return false;
-    }
-
-    std::string frameError;
-    if (!mprpc::DecodeRpcFramePayload(responseFrameBody, &responsePayload, &frameError))
-    {
-        errorCode = mprpc::RPC_INVALID_RESPONSE;
-        errorMsg = frameError;
         conn->Close();
         return false;
     }

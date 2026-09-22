@@ -18,6 +18,14 @@ class Socket;
 class Channel;
 
 
+// 帧编解码器的三态结果
+enum class CodecResult
+{
+    kNeedMoreData,  // 数据不足，保留 Buffer 等下次追加
+    kFrameReady,    // 成功提取一帧，message 有效
+    kFatal,         // 数据流已损坏且不可恢复，调用方必须关闭连接
+};
+
 class Connection : public std::enable_shared_from_this<Connection>
 {
 public:
@@ -25,10 +33,8 @@ public:
     using MessageCallback = std::function<void(const ConnectionPtr&, std::string&)>;
     using Callback = std::function<void(const ConnectionPtr&)>;
 
-    // 帧编解码器：从 Buffer 中尝试提取一个完整帧
-    // 返回 true 表示成功提取一帧（写入 message），false 表示数据不足需等待
-    // 编解码器负责从 Buffer 中消费已提取的数据
-    using MessageCodec = std::function<bool(Buffer*, std::string&)>;
+    // 帧编解码器：从 Buffer 中尝试提取一个完整帧，并负责消费已提取的数据
+    using MessageCodec = std::function<CodecResult(Buffer*, std::string&)>;
 
     Connection(EventLoop* loop, std::unique_ptr<Socket> clientSock);
     ~Connection();
