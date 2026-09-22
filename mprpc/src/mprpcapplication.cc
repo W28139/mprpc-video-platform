@@ -79,11 +79,6 @@ bool MprpcApplication::Init(int argc, char **argv)
     LOG_INFO("MprpcApplication init success, config_file=%s", config_file.c_str());
     m_initialized = true;
     return true;
-
-    // std::cout << "rpcserverip:" << m_config.Load("rpcserverip") << std::endl;
-    // std::cout << "rpcserverport:" << m_config.Load("rpcserverport") << std::endl;
-    // std::cout << "zookeeperip:" << m_config.Load("zookeeperip") << std::endl;
-    // std::cout << "zookeeperport:" << m_config.Load("zookeeperport") << std::endl;
 }
 
 MprpcApplication& MprpcApplication::GetInstance()

@@ -7,7 +7,6 @@ enum RpcErrorCode
 {
     RPC_SUCCESS = 0;                    // 成功
     RPC_BAD_REQUEST = 1;                // 错误请求（格式或参数非法）
-    RPC_HEADER_PARSE_FAILED = 2;        // RPC 头部解析失败（通常是 RPC 协议头损坏）
     RPC_SERVICE_NOT_FOUND = 3;          // 找不到服务（Provider 端未注册该 Service）
     RPC_METHOD_NOT_FOUND = 4;           // 找不到方法（Service 中没有该 Method）
     RPC_REQUEST_PARSE_FAILED = 5;       // 请求体解析失败（Protobuf 反序列化业务参数出错）
@@ -35,7 +34,6 @@ message RpcHeader
     
     // 核心高级字段
     uint64 request_id = 4;     // 请求序列号：用于在异步环境下匹配 Response 和 Request
-    bytes trace_id = 5;        // 全局链路追踪 ID：用于全链路日志查询（微服务必备）
     uint64 deadline_ms = 6;    // 截止时间戳/超时时间：告知 Provider 该请求何时失效，避免无效计算
 }
 

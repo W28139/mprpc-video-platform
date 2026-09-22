@@ -376,8 +376,3 @@ std::vector<std::string> ZkClient::GetChildren(const char *path)
     delete ctx;
     return children;
 }
-
-bool ZkClient::IsStarted() const
-{
-    return m_zhandle != nullptr;
-}

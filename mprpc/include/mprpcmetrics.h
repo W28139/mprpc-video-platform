@@ -83,7 +83,6 @@ class MetricGauge
 {
 public:
     void Set(double v);
-    void Add(double v);
     double Value() const;
 
 private:

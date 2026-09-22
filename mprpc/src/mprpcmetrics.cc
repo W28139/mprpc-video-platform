@@ -169,7 +169,6 @@ double MetricCounter::Value() const
 
 // ── MetricGauge ───────────────────────────────────────────────────────────
 void MetricGauge::Set(double v) { value_.store(v); }
-void MetricGauge::Add(double v) { value_.add(v); }
 double MetricGauge::Value() const { return value_.load(); }
 
 // ── MetricHistogram ───────────────────────────────────────────────────────

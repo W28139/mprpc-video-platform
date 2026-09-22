@@ -17,11 +17,8 @@ void Trim(std::string &src_buf)
         return;
     }
 
-    if (idx != std::string::npos)
-    {
-        // 说明字符串前面有空格
-        src_buf = src_buf.substr(idx, src_buf.size() - idx);
-    }
+    // 说明字符串前面有空格
+    src_buf = src_buf.substr(idx, src_buf.size() - idx);
 
     // 去掉字符串后面多余的空格
     idx = src_buf.find_last_not_of(" \t");
@@ -148,9 +145,4 @@ int MprpcConfig::LoadInt(const std::string& key,
     }
 
     return static_cast<int>(value);
-}
-
-bool MprpcConfig::HasKey(const std::string& key) const
-{
-    return m_configMap.find(key) != m_configMap.end();
 }

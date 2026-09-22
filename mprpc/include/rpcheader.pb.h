@@ -62,7 +62,6 @@ namespace mprpc {
 enum RpcErrorCode : int {
   RPC_SUCCESS = 0,
   RPC_BAD_REQUEST = 1,
-  RPC_HEADER_PARSE_FAILED = 2,
   RPC_SERVICE_NOT_FOUND = 3,
   RPC_METHOD_NOT_FOUND = 4,
   RPC_REQUEST_PARSE_FAILED = 5,
@@ -222,7 +221,6 @@ class RpcHeader final :
   enum : int {
     kServiceNameFieldNumber = 1,
     kMethodNameFieldNumber = 2,
-    kTraceIdFieldNumber = 5,
     kRequestIdFieldNumber = 4,
     kDeadlineMsFieldNumber = 6,
     kArgsSizeFieldNumber = 3,
@@ -253,20 +251,6 @@ class RpcHeader final :
   const std::string& _internal_method_name() const;
   inline PROTOBUF_ALWAYS_INLINE void _internal_set_method_name(const std::string& value);
   std::string* _internal_mutable_method_name();
-  public:
-
-  // bytes trace_id = 5;
-  void clear_trace_id();
-  const std::string& trace_id() const;
-  template <typename ArgT0 = const std::string&, typename... ArgT>
-  void set_trace_id(ArgT0&& arg0, ArgT... args);
-  std::string* mutable_trace_id();
-  PROTOBUF_NODISCARD std::string* release_trace_id();
-  void set_allocated_trace_id(std::string* trace_id);
-  private:
-  const std::string& _internal_trace_id() const;
-  inline PROTOBUF_ALWAYS_INLINE void _internal_set_trace_id(const std::string& value);
-  std::string* _internal_mutable_trace_id();
   public:
 
   // uint64 request_id = 4;
@@ -306,7 +290,6 @@ class RpcHeader final :
   struct Impl_ {
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr service_name_;
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr method_name_;
-    ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr trace_id_;
     uint64_t request_id_;
     uint64_t deadline_ms_;
     uint32_t args_size_;
@@ -650,56 +633,6 @@ inline void RpcHeader::_internal_set_request_id(uint64_t value) {
 inline void RpcHeader::set_request_id(uint64_t value) {
   _internal_set_request_id(value);
   // @@protoc_insertion_point(field_set:mprpc.RpcHeader.request_id)
-}
-
-// bytes trace_id = 5;
-inline void RpcHeader::clear_trace_id() {
-  _impl_.trace_id_.ClearToEmpty();
-}
-inline const std::string& RpcHeader::trace_id() const {
-  // @@protoc_insertion_point(field_get:mprpc.RpcHeader.trace_id)
-  return _internal_trace_id();
-}
-template <typename ArgT0, typename... ArgT>
-inline PROTOBUF_ALWAYS_INLINE
-void RpcHeader::set_trace_id(ArgT0&& arg0, ArgT... args) {
- 
- _impl_.trace_id_.SetBytes(static_cast<ArgT0 &&>(arg0), args..., GetArenaForAllocation());
-  // @@protoc_insertion_point(field_set:mprpc.RpcHeader.trace_id)
-}
-inline std::string* RpcHeader::mutable_trace_id() {
-  std::string* _s = _internal_mutable_trace_id();
-  // @@protoc_insertion_point(field_mutable:mprpc.RpcHeader.trace_id)
-  return _s;
-}
-inline const std::string& RpcHeader::_internal_trace_id() const {
-  return _impl_.trace_id_.Get();
-}
-inline void RpcHeader::_internal_set_trace_id(const std::string& value) {
-  
-  _impl_.trace_id_.Set(value, GetArenaForAllocation());
-}
-inline std::string* RpcHeader::_internal_mutable_trace_id() {
-  
-  return _impl_.trace_id_.Mutable(GetArenaForAllocation());
-}
-inline std::string* RpcHeader::release_trace_id() {
-  // @@protoc_insertion_point(field_release:mprpc.RpcHeader.trace_id)
-  return _impl_.trace_id_.Release();
-}
-inline void RpcHeader::set_allocated_trace_id(std::string* trace_id) {
-  if (trace_id != nullptr) {
-    
-  } else {
-    
-  }
-  _impl_.trace_id_.SetAllocated(trace_id, GetArenaForAllocation());
-#ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
-  if (_impl_.trace_id_.IsDefault()) {
-    _impl_.trace_id_.Set("", GetArenaForAllocation());
-  }
-#endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
-  // @@protoc_insertion_point(field_set_allocated:mprpc.RpcHeader.trace_id)
 }
 
 // uint64 deadline_ms = 6;

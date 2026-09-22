@@ -25,7 +25,6 @@ PROTOBUF_CONSTEXPR RpcHeader::RpcHeader(
     ::_pbi::ConstantInitialized): _impl_{
     /*decltype(_impl_.service_name_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.method_name_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
-  , /*decltype(_impl_.trace_id_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.request_id_)*/uint64_t{0u}
   , /*decltype(_impl_.deadline_ms_)*/uint64_t{0u}
   , /*decltype(_impl_.args_size_)*/0u
@@ -71,7 +70,6 @@ const uint32_t TableStruct_rpcheader_2eproto::offsets[] PROTOBUF_SECTION_VARIABL
   PROTOBUF_FIELD_OFFSET(::mprpc::RpcHeader, _impl_.method_name_),
   PROTOBUF_FIELD_OFFSET(::mprpc::RpcHeader, _impl_.args_size_),
   PROTOBUF_FIELD_OFFSET(::mprpc::RpcHeader, _impl_.request_id_),
-  PROTOBUF_FIELD_OFFSET(::mprpc::RpcHeader, _impl_.trace_id_),
   PROTOBUF_FIELD_OFFSET(::mprpc::RpcHeader, _impl_.deadline_ms_),
   ~0u,  // no _has_bits_
   PROTOBUF_FIELD_OFFSET(::mprpc::RpcResponseHeader, _internal_metadata_),
@@ -86,7 +84,7 @@ const uint32_t TableStruct_rpcheader_2eproto::offsets[] PROTOBUF_SECTION_VARIABL
 };
 static const ::_pbi::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) = {
   { 0, -1, -1, sizeof(::mprpc::RpcHeader)},
-  { 12, -1, -1, sizeof(::mprpc::RpcResponseHeader)},
+  { 11, -1, -1, sizeof(::mprpc::RpcResponseHeader)},
 };
 
 static const ::_pb::Message* const file_default_instances[] = {
@@ -95,28 +93,27 @@ static const ::_pb::Message* const file_default_instances[] = {
 };
 
 const char descriptor_table_protodef_rpcheader_2eproto[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) =
-  "\n\017rpcheader.proto\022\005mprpc\"\204\001\n\tRpcHeader\022\024"
-  "\n\014service_name\030\001 \001(\014\022\023\n\013method_name\030\002 \001("
-  "\014\022\021\n\targs_size\030\003 \001(\r\022\022\n\nrequest_id\030\004 \001(\004"
-  "\022\020\n\010trace_id\030\005 \001(\014\022\023\n\013deadline_ms\030\006 \001(\004\""
-  "z\n\021RpcResponseHeader\022\022\n\nrequest_id\030\001 \001(\004"
-  "\022\'\n\nerror_code\030\002 \001(\0162\023.mprpc.RpcErrorCod"
-  "e\022\021\n\terror_msg\030\003 \001(\014\022\025\n\rresponse_size\030\004 "
-  "\001(\r*\216\003\n\014RpcErrorCode\022\017\n\013RPC_SUCCESS\020\000\022\023\n"
-  "\017RPC_BAD_REQUEST\020\001\022\033\n\027RPC_HEADER_PARSE_F"
-  "AILED\020\002\022\031\n\025RPC_SERVICE_NOT_FOUND\020\003\022\030\n\024RP"
-  "C_METHOD_NOT_FOUND\020\004\022\034\n\030RPC_REQUEST_PARS"
-  "E_FAILED\020\005\022!\n\035RPC_RESPONSE_SERIALIZE_FAI"
-  "LED\020\006\022\026\n\022RPC_CONNECT_FAILED\020\007\022\023\n\017RPC_SEN"
-  "D_FAILED\020\010\022\023\n\017RPC_RECV_FAILED\020\t\022\035\n\031RPC_R"
-  "ESPONSE_PARSE_FAILED\020\n\022\017\n\013RPC_TIMEOUT\020\013\022"
-  "\027\n\023RPC_FRAME_TOO_LARGE\020\014\022\030\n\024RPC_INVALID_"
-  "RESPONSE\020\r\022 \n\034RPC_SERVICE_DISCOVERY_FAIL"
-  "ED\020\016b\006proto3"
+  "\n\017rpcheader.proto\022\005mprpc\"r\n\tRpcHeader\022\024\n"
+  "\014service_name\030\001 \001(\014\022\023\n\013method_name\030\002 \001(\014"
+  "\022\021\n\targs_size\030\003 \001(\r\022\022\n\nrequest_id\030\004 \001(\004\022"
+  "\023\n\013deadline_ms\030\006 \001(\004\"z\n\021RpcResponseHeade"
+  "r\022\022\n\nrequest_id\030\001 \001(\004\022\'\n\nerror_code\030\002 \001("
+  "\0162\023.mprpc.RpcErrorCode\022\021\n\terror_msg\030\003 \001("
+  "\014\022\025\n\rresponse_size\030\004 \001(\r*\361\002\n\014RpcErrorCod"
+  "e\022\017\n\013RPC_SUCCESS\020\000\022\023\n\017RPC_BAD_REQUEST\020\001\022"
+  "\031\n\025RPC_SERVICE_NOT_FOUND\020\003\022\030\n\024RPC_METHOD"
+  "_NOT_FOUND\020\004\022\034\n\030RPC_REQUEST_PARSE_FAILED"
+  "\020\005\022!\n\035RPC_RESPONSE_SERIALIZE_FAILED\020\006\022\026\n"
+  "\022RPC_CONNECT_FAILED\020\007\022\023\n\017RPC_SEND_FAILED"
+  "\020\010\022\023\n\017RPC_RECV_FAILED\020\t\022\035\n\031RPC_RESPONSE_"
+  "PARSE_FAILED\020\n\022\017\n\013RPC_TIMEOUT\020\013\022\027\n\023RPC_F"
+  "RAME_TOO_LARGE\020\014\022\030\n\024RPC_INVALID_RESPONSE"
+  "\020\r\022 \n\034RPC_SERVICE_DISCOVERY_FAILED\020\016b\006pr"
+  "oto3"
   ;
 static ::_pbi::once_flag descriptor_table_rpcheader_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_rpcheader_2eproto = {
-    false, false, 692, descriptor_table_protodef_rpcheader_2eproto,
+    false, false, 644, descriptor_table_protodef_rpcheader_2eproto,
     "rpcheader.proto",
     &descriptor_table_rpcheader_2eproto_once, nullptr, 0, 2,
     schemas, file_default_instances, TableStruct_rpcheader_2eproto::offsets,
@@ -138,7 +135,6 @@ bool RpcErrorCode_IsValid(int value) {
   switch (value) {
     case 0:
     case 1:
-    case 2:
     case 3:
     case 4:
     case 5:
@@ -176,7 +172,6 @@ RpcHeader::RpcHeader(const RpcHeader& from)
   new (&_impl_) Impl_{
       decltype(_impl_.service_name_){}
     , decltype(_impl_.method_name_){}
-    , decltype(_impl_.trace_id_){}
     , decltype(_impl_.request_id_){}
     , decltype(_impl_.deadline_ms_){}
     , decltype(_impl_.args_size_){}
@@ -199,14 +194,6 @@ RpcHeader::RpcHeader(const RpcHeader& from)
     _this->_impl_.method_name_.Set(from._internal_method_name(), 
       _this->GetArenaForAllocation());
   }
-  _impl_.trace_id_.InitDefault();
-  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
-    _impl_.trace_id_.Set("", GetArenaForAllocation());
-  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
-  if (!from._internal_trace_id().empty()) {
-    _this->_impl_.trace_id_.Set(from._internal_trace_id(), 
-      _this->GetArenaForAllocation());
-  }
   ::memcpy(&_impl_.request_id_, &from._impl_.request_id_,
     static_cast<size_t>(reinterpret_cast<char*>(&_impl_.args_size_) -
     reinterpret_cast<char*>(&_impl_.request_id_)) + sizeof(_impl_.args_size_));
@@ -220,7 +207,6 @@ inline void RpcHeader::SharedCtor(
   new (&_impl_) Impl_{
       decltype(_impl_.service_name_){}
     , decltype(_impl_.method_name_){}
-    , decltype(_impl_.trace_id_){}
     , decltype(_impl_.request_id_){uint64_t{0u}}
     , decltype(_impl_.deadline_ms_){uint64_t{0u}}
     , decltype(_impl_.args_size_){0u}
@@ -233,10 +219,6 @@ inline void RpcHeader::SharedCtor(
   _impl_.method_name_.InitDefault();
   #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
     _impl_.method_name_.Set("", GetArenaForAllocation());
-  #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
-  _impl_.trace_id_.InitDefault();
-  #ifdef PROTOBUF_FORCE_COPY_DEFAULT_STRING
-    _impl_.trace_id_.Set("", GetArenaForAllocation());
   #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
 }
 
@@ -253,7 +235,6 @@ inline void RpcHeader::SharedDtor() {
   GOOGLE_DCHECK(GetArenaForAllocation() == nullptr);
   _impl_.service_name_.Destroy();
   _impl_.method_name_.Destroy();
-  _impl_.trace_id_.Destroy();
 }
 
 void RpcHeader::SetCachedSize(int size) const {
@@ -268,7 +249,6 @@ void RpcHeader::Clear() {
 
   _impl_.service_name_.ClearToEmpty();
   _impl_.method_name_.ClearToEmpty();
-  _impl_.trace_id_.ClearToEmpty();
   ::memset(&_impl_.request_id_, 0, static_cast<size_t>(
       reinterpret_cast<char*>(&_impl_.args_size_) -
       reinterpret_cast<char*>(&_impl_.request_id_)) + sizeof(_impl_.args_size_));
@@ -311,15 +291,6 @@ const char* RpcHeader::_InternalParse(const char* ptr, ::_pbi::ParseContext* ctx
       case 4:
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 32)) {
           _impl_.request_id_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint64(&ptr);
-          CHK_(ptr);
-        } else
-          goto handle_unusual;
-        continue;
-      // bytes trace_id = 5;
-      case 5:
-        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 42)) {
-          auto str = _internal_mutable_trace_id();
-          ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -385,12 +356,6 @@ uint8_t* RpcHeader::_InternalSerialize(
     target = ::_pbi::WireFormatLite::WriteUInt64ToArray(4, this->_internal_request_id(), target);
   }
 
-  // bytes trace_id = 5;
-  if (!this->_internal_trace_id().empty()) {
-    target = stream->WriteBytesMaybeAliased(
-        5, this->_internal_trace_id(), target);
-  }
-
   // uint64 deadline_ms = 6;
   if (this->_internal_deadline_ms() != 0) {
     target = stream->EnsureSpace(target);
@@ -425,13 +390,6 @@ size_t RpcHeader::ByteSizeLong() const {
     total_size += 1 +
       ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::BytesSize(
         this->_internal_method_name());
-  }
-
-  // bytes trace_id = 5;
-  if (!this->_internal_trace_id().empty()) {
-    total_size += 1 +
-      ::PROTOBUF_NAMESPACE_ID::internal::WireFormatLite::BytesSize(
-        this->_internal_trace_id());
   }
 
   // uint64 request_id = 4;
@@ -473,9 +431,6 @@ void RpcHeader::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROT
   if (!from._internal_method_name().empty()) {
     _this->_internal_set_method_name(from._internal_method_name());
   }
-  if (!from._internal_trace_id().empty()) {
-    _this->_internal_set_trace_id(from._internal_trace_id());
-  }
   if (from._internal_request_id() != 0) {
     _this->_internal_set_request_id(from._internal_request_id());
   }
@@ -511,10 +466,6 @@ void RpcHeader::InternalSwap(RpcHeader* other) {
   ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
       &_impl_.method_name_, lhs_arena,
       &other->_impl_.method_name_, rhs_arena
-  );
-  ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr::InternalSwap(
-      &_impl_.trace_id_, lhs_arena,
-      &other->_impl_.trace_id_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
       PROTOBUF_FIELD_OFFSET(RpcHeader, _impl_.args_size_)

@@ -94,20 +94,13 @@ int64_t GetRpcTimeoutMs(google::protobuf::RpcController* controller)
 }
 
 // 设置 send/recv 超时，避免服务端异常、协议不匹配或半开连接导致客户端永久阻塞。
+// timeoutMs 恒为正：调用方取的都是 GetRpcTimeoutMs() 的返回值，其下限是默认超时常量。
 bool SetSocketTimeout(int fd, int64_t timeoutMs, int& savedErrno)
 {
     struct timeval tv;
-    if (timeoutMs > 0)
-    {
-        tv.tv_sec = static_cast<time_t>(timeoutMs / 1000);
-        tv.tv_usec = static_cast<suseconds_t>((timeoutMs % 1000) * 1000);
-    }
-    else
-    {
-        // 传 0 表示清掉上一轮请求留下的超时设置，让长连接复用时超时语义跟随当前调用。
-        tv.tv_sec = 0;
-        tv.tv_usec = 0;
-    }
+    tv.tv_sec = static_cast<time_t>(timeoutMs / 1000);
+    tv.tv_usec = static_cast<suseconds_t>((timeoutMs % 1000) * 1000);
+
     if (::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv)) == -1)
     {
         savedErrno = errno;
@@ -472,8 +465,8 @@ int MaxConnectionsPerEndpoint()
 
 struct PooledConnection
 {
-    PooledConnection(std::string endpointKey, std::string endpointIp, uint16_t endpointPort)
-        : key(std::move(endpointKey))
+    PooledConnection(std::string endpointIp, uint16_t endpointPort)
+        : key(EndpointKey(endpointIp, endpointPort))
         , ip(std::move(endpointIp))
         , port(endpointPort)
     {
@@ -638,7 +631,7 @@ std::shared_ptr<PooledConnection> GetPooledConnection(const std::string& ip, uin
 
     if (static_cast<int>(connections.size()) < maxConnections)
     {
-        auto conn = std::make_shared<PooledConnection>(key, ip, port);
+        auto conn = std::make_shared<PooledConnection>(ip, port);
         connections.push_back(conn);
         return conn;
     }
@@ -824,13 +817,8 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
     // 进行序列化
     if (request->SerializeToString(&args_str))
     {
-        if (args_str.size() > mprpc::kRpcMaxFrameSize)
-        {
-            SetControllerFailed(controller, mprpc::RPC_FRAME_TOO_LARGE,
-                                "request frame too large:" + std::to_string(args_str.size()));
-            RunDone(done);
-            return;
-        }
+        // 长度上限不在这一层校验：单帧上限由下面 request_payload 的
+        // 总长检查统一把关（header + args 一起算），此处重复检查不可达。
         args_size = args_str.size();
     }
     else
