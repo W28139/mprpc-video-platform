@@ -3,23 +3,6 @@
 #include <cstdlib>
 #include <cstdint>   // uint16_t（优化 #24/#25）
 
-// ============================================================================
-// ThreadCache —— 线程本地缓存（三层架构的第一层）
-// ============================================================================
-//
-// 每个线程一个独立实例（thread_local 单例），完全无锁。
-// 这是内存池高性能的核心 —— 大多数分配/释放只在本层完成。
-//
-// 数据结构：
-//   freeList_[32768]     — 每个大小类别一个单向链表，存空闲块
-//   freeListSize_[32768] — 每个链表当前长度，用于触发回收阈值
-//
-// 设计要点：
-//   1. 分配时先查 freeList_[index]，命中则 O(1) 取链表头
-//   2. 不命中则调用 CentralCache::fetchRange 批量取 BATCH_SIZE(32) 块
-//   3. 释放时插入 freeList_[index] 头部，计数超 256 则归还 3/4 给 CentralCache
-//   4. thread_local 保证无锁 —— 每个线程只操作自己的 freeList_
-
 namespace wevix_muduo
 {
 namespace memory_pool

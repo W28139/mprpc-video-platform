@@ -2,34 +2,6 @@
 #include "wevix_muduo/memory_pool/Common.h"
 #include <map>
 #include <mutex>
-
-// ============================================================================
-// PageCache —— 页缓存层（三层架构的第三层，直接与 OS 交互）
-// ============================================================================
-//
-// 以"页"（PAGE_SIZE = 4096B）为单位管理连续内存。
-// 这是整个内存池中唯一调用 mmap/munmap 的地方。
-//
-// 核心数据结构：
-//   Span — 一段连续页内存的控制块
-//     pageAddr  起始地址（页对齐）
-//     numPages  包含的页数
-//     next      同一页数链表的下一个 Span
-//
-//   freeSpans_  — map<页数, Span*>  按页数索引的空闲 Span 链表
-//   spanMap_    — map<地址, Span*>   地址→Span 反查（用于释放时定位）
-//
-// 核心操作：
-//   allocateSpan(n)    — 分配 n 页（Best-Fit + 切分 + 必要时 mmap）
-//   deallocateSpan(p)  — 释放 Span（后向合并 + 缓存 + 超水位 munmap）
-//
-// 设计要点：
-//   1. 使用 std::mutex 而非自旋锁 —— PageCache 操作包含 mmap（可能毫秒级），
-//      让等待线程在内核态挂起比用户态空转更高效
-//   2. Span 控制块用 new/delete 分配在堆上（不在 mmap 区域内），
-//      数量通常 < 10000，开销可忽略
-//   3. 内存水位线 MAX_CACHED_PAGES = 128MB，超出后从大 Span 开始 munmap 归还 OS
-
 namespace wevix_muduo
 {
 namespace memory_pool

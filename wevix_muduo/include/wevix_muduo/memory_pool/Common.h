@@ -4,22 +4,6 @@
 #include <array>
 #include <algorithm>   // std::max（SizeClass::getIndex）
 
-// ============================================================================
-// Common.h —— 内存池全局基础定义
-// ============================================================================
-//
-// 本文件定义整个内存池项目共享的：
-//   1. 对齐粒度 ALIGNMENT (8 字节，即一个指针的大小)
-//   2. 最大管理范围 MAX_BYTES (256KB)，超出走系统 malloc/free
-//   3. 自由链表槽位数 FREE_LIST_SIZE = 256KB / 8B = 32768 个
-//   4. SizeClass —— 将任意请求大小映射到槽位索引
-//
-// 大小类别映射规则：
-//   index = (bytes + 7) / 8 - 1
-//   例：bytes=8  → index=0 (8B 类)
-//        bytes=24 → index=2 (24B 向上取整到 32B 类)
-//        bytes=256K → index=32767 (最后一个槽位)
-
 namespace wevix_muduo
 {
 namespace memory_pool

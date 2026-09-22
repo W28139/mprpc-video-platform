@@ -4,21 +4,6 @@
 #include <new>
 #include <type_traits>
 
-// ============================================================================
-// PoolAllocator —— 对接 mymuduo 内存池的 STL 兼容分配器
-//
-// 用法：
-//   std::vector<char, PoolAllocator<char>>      buf;
-//   std::basic_string<char, ..., PoolAllocator<char>> str;
-//   std::map<int, std::string, std::less<int>,
-//            PoolAllocator<std::pair<const int, std::string>>> mymap;
-//
-// 注意：
-//   1. >256KB 的分配自动 fallback 到 malloc，对 STL 容器透明
-//   2. 对齐固定为 8 字节，不适用于需要 16/32 字节对齐的 SIMD 类型
-//   3. 所有实例等价（stateless），容器 move 不涉及 allocator 拷贝开销
-// ============================================================================
-
 namespace wevix_muduo {
 namespace memory_pool {
 
