@@ -58,7 +58,8 @@ void SendRpcError(const wevix_muduo::TcpServer::ConnectionPtr& conn,
 
 // 解析请求 payload：
 // [header_size(4B, network order)] + [RpcHeader] + [args]
-// 同时校验 header_size 和 args_size，避免坏包越界或把半包当完整包处理。
+// 校验 header_size 边界，避免坏包越界或把半包当完整包处理。
+// args 长度由外层 total_len 和 header_size 唯一确定，协议不额外携带长度字段。
 bool DecodeRequestHeader(const std::string& message,
                          mprpc::RpcHeader& rpcHeader,
                          std::string& argsStr,
@@ -90,18 +91,8 @@ bool DecodeRequestHeader(const std::string& message,
         return false;
     }
 
-    size_t argsOffset = sizeof(uint32_t) + headerSize;
-    size_t remainSize = message.size() - argsOffset;
-    if (rpcHeader.args_size() != remainSize)
-    {
-        // args_size 必须和实际剩余长度一致，否则说明客户端协议或数据已损坏。
-        errorMsg = "request args size mismatch, header args_size=" +
-                   std::to_string(rpcHeader.args_size()) +
-                   ", actual=" + std::to_string(remainSize);
-        return false;
-    }
-
-    argsStr = message.substr(argsOffset, remainSize);
+    // headerSize 已在上面校验过边界，剩余部分即为 args。
+    argsStr = message.substr(sizeof(uint32_t) + headerSize);
     return true;
 }
 
@@ -324,9 +315,9 @@ void RpcProvider::OnMessage(const wevix_muduo::TcpServer::ConnectionPtr& conn,
     std::string method_name = rpcHeader.method_name();
 
     // 打印调试信息
-    LOG_DEBUG("RPC request: request_id=%llu, service=%s, method=%s, args_size=%u",
+    LOG_DEBUG("RPC request: request_id=%llu, service=%s, method=%s, args_size=%zu",
               static_cast<unsigned long long>(requestId),
-              service_name.c_str(), method_name.c_str(), rpcHeader.args_size());
+              service_name.c_str(), method_name.c_str(), args_str.size());
 
     // 检查请求是否已过期：客户端通过 RpcHeader.deadline_ms 传递绝对截止时间戳（毫秒），
     // 如果请求在 work pool 排队后已经超过 deadline，直接丢弃并返回 RPC_TIMEOUT，

@@ -811,17 +811,11 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
     uint64_t requestId = NextRequestId();
     int64_t timeoutMs = GetRpcTimeoutMs(controller);
 
-    // 1. 获取参数的序列化字符串长度 args_size
-    uint32_t args_size = 0;
+    // 1. 序列化业务参数
+    // 长度上限不在这一层校验：单帧上限由下面 request_payload 的总长检查统一把关
+    // （header + args 一起算），此处重复检查不可达。
     std::string args_str;
-    // 进行序列化
-    if (request->SerializeToString(&args_str))
-    {
-        // 长度上限不在这一层校验：单帧上限由下面 request_payload 的
-        // 总长检查统一把关（header + args 一起算），此处重复检查不可达。
-        args_size = args_str.size();
-    }
-    else
+    if (!request->SerializeToString(&args_str))
     {
         SetControllerFailed(controller, mprpc::RPC_BAD_REQUEST, "serialize request error!");
         RunDone(done);
@@ -832,7 +826,6 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
     mprpc::RpcHeader rpcHeader;
     rpcHeader.set_service_name(service_name);
     rpcHeader.set_method_name(method_name);
-    rpcHeader.set_args_size(args_size);
     rpcHeader.set_request_id(requestId);
     if (timeoutMs > 0)
     {

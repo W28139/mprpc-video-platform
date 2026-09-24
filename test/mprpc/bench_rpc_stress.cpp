@@ -243,7 +243,6 @@ public:
         mprpc::RpcHeader rpcHeader;
         rpcHeader.set_service_name(service_name);
         rpcHeader.set_method_name(method_name);
-        rpcHeader.set_args_size(static_cast<uint32_t>(request_data.size()));
         // Direct 模式绕过 MprpcChannel，但仍然要生成 request_id，保证协议覆盖一致。
         uint64_t requestId = nextRequestId_.fetch_add(1, std::memory_order_relaxed);
         rpcHeader.set_request_id(requestId);

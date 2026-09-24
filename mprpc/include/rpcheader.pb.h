@@ -223,7 +223,6 @@ class RpcHeader final :
     kMethodNameFieldNumber = 2,
     kRequestIdFieldNumber = 4,
     kDeadlineMsFieldNumber = 6,
-    kArgsSizeFieldNumber = 3,
   };
   // bytes service_name = 1;
   void clear_service_name();
@@ -271,15 +270,6 @@ class RpcHeader final :
   void _internal_set_deadline_ms(uint64_t value);
   public:
 
-  // uint32 args_size = 3;
-  void clear_args_size();
-  uint32_t args_size() const;
-  void set_args_size(uint32_t value);
-  private:
-  uint32_t _internal_args_size() const;
-  void _internal_set_args_size(uint32_t value);
-  public:
-
   // @@protoc_insertion_point(class_scope:mprpc.RpcHeader)
  private:
   class _Internal;
@@ -292,7 +282,6 @@ class RpcHeader final :
     ::PROTOBUF_NAMESPACE_ID::internal::ArenaStringPtr method_name_;
     uint64_t request_id_;
     uint64_t deadline_ms_;
-    uint32_t args_size_;
     mutable ::PROTOBUF_NAMESPACE_ID::internal::CachedSize _cached_size_;
   };
   union { Impl_ _impl_; };
@@ -593,26 +582,6 @@ inline void RpcHeader::set_allocated_method_name(std::string* method_name) {
   }
 #endif // PROTOBUF_FORCE_COPY_DEFAULT_STRING
   // @@protoc_insertion_point(field_set_allocated:mprpc.RpcHeader.method_name)
-}
-
-// uint32 args_size = 3;
-inline void RpcHeader::clear_args_size() {
-  _impl_.args_size_ = 0u;
-}
-inline uint32_t RpcHeader::_internal_args_size() const {
-  return _impl_.args_size_;
-}
-inline uint32_t RpcHeader::args_size() const {
-  // @@protoc_insertion_point(field_get:mprpc.RpcHeader.args_size)
-  return _internal_args_size();
-}
-inline void RpcHeader::_internal_set_args_size(uint32_t value) {
-  
-  _impl_.args_size_ = value;
-}
-inline void RpcHeader::set_args_size(uint32_t value) {
-  _internal_set_args_size(value);
-  // @@protoc_insertion_point(field_set:mprpc.RpcHeader.args_size)
 }
 
 // uint64 request_id = 4;

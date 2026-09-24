@@ -220,7 +220,6 @@ public:
         mprpc::RpcHeader rpcHeader;
         rpcHeader.set_service_name(service_name);
         rpcHeader.set_method_name(method_name);
-        rpcHeader.set_args_size(static_cast<uint32_t>(request_data.size()));
         uint64_t requestId = nextRequestId_.fetch_add(1, std::memory_order_relaxed);
         rpcHeader.set_request_id(requestId);
 

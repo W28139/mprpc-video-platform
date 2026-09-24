@@ -53,8 +53,7 @@ inline std::string BuildRpcFrame(const std::string& payload)
 
 // RPC 帧编解码器：帧格式 [total_len(4B, network order)] + [payload]。
 // 数据不足返回 kNeedMoreData，剩余数据留在 Buffer 等下次追加。
-// 长度字段非法说明流已错位，而纯长度前缀协议没有可扫描的同步点、无法重新对齐，
-// 因此返回 kFatal 交由 Connection 关闭连接（继续读只会把错位一路传下去）。
+// 长度字段非法说明流已错位，因此返回 kFatal 交由 Connection 关闭连接。
 // 应用层收到的 message 即 payload：[header_size(4B, network order) + RpcHeader + args]。
 
 inline wevix_muduo::CodecResult RpcMessageCodec(wevix_muduo::Buffer* buf, std::string& message)

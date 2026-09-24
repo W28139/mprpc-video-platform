@@ -27,7 +27,6 @@ PROTOBUF_CONSTEXPR RpcHeader::RpcHeader(
   , /*decltype(_impl_.method_name_)*/{&::_pbi::fixed_address_empty_string, ::_pbi::ConstantInitialized{}}
   , /*decltype(_impl_.request_id_)*/uint64_t{0u}
   , /*decltype(_impl_.deadline_ms_)*/uint64_t{0u}
-  , /*decltype(_impl_.args_size_)*/0u
   , /*decltype(_impl_._cached_size_)*/{}} {}
 struct RpcHeaderDefaultTypeInternal {
   PROTOBUF_CONSTEXPR RpcHeaderDefaultTypeInternal()
@@ -68,7 +67,6 @@ const uint32_t TableStruct_rpcheader_2eproto::offsets[] PROTOBUF_SECTION_VARIABL
   ~0u,  // no _inlined_string_donated_
   PROTOBUF_FIELD_OFFSET(::mprpc::RpcHeader, _impl_.service_name_),
   PROTOBUF_FIELD_OFFSET(::mprpc::RpcHeader, _impl_.method_name_),
-  PROTOBUF_FIELD_OFFSET(::mprpc::RpcHeader, _impl_.args_size_),
   PROTOBUF_FIELD_OFFSET(::mprpc::RpcHeader, _impl_.request_id_),
   PROTOBUF_FIELD_OFFSET(::mprpc::RpcHeader, _impl_.deadline_ms_),
   ~0u,  // no _has_bits_
@@ -84,7 +82,7 @@ const uint32_t TableStruct_rpcheader_2eproto::offsets[] PROTOBUF_SECTION_VARIABL
 };
 static const ::_pbi::MigrationSchema schemas[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) = {
   { 0, -1, -1, sizeof(::mprpc::RpcHeader)},
-  { 11, -1, -1, sizeof(::mprpc::RpcResponseHeader)},
+  { 10, -1, -1, sizeof(::mprpc::RpcResponseHeader)},
 };
 
 static const ::_pb::Message* const file_default_instances[] = {
@@ -93,27 +91,26 @@ static const ::_pb::Message* const file_default_instances[] = {
 };
 
 const char descriptor_table_protodef_rpcheader_2eproto[] PROTOBUF_SECTION_VARIABLE(protodesc_cold) =
-  "\n\017rpcheader.proto\022\005mprpc\"r\n\tRpcHeader\022\024\n"
+  "\n\017rpcheader.proto\022\005mprpc\"_\n\tRpcHeader\022\024\n"
   "\014service_name\030\001 \001(\014\022\023\n\013method_name\030\002 \001(\014"
-  "\022\021\n\targs_size\030\003 \001(\r\022\022\n\nrequest_id\030\004 \001(\004\022"
-  "\023\n\013deadline_ms\030\006 \001(\004\"z\n\021RpcResponseHeade"
-  "r\022\022\n\nrequest_id\030\001 \001(\004\022\'\n\nerror_code\030\002 \001("
-  "\0162\023.mprpc.RpcErrorCode\022\021\n\terror_msg\030\003 \001("
-  "\014\022\025\n\rresponse_size\030\004 \001(\r*\361\002\n\014RpcErrorCod"
-  "e\022\017\n\013RPC_SUCCESS\020\000\022\023\n\017RPC_BAD_REQUEST\020\001\022"
-  "\031\n\025RPC_SERVICE_NOT_FOUND\020\003\022\030\n\024RPC_METHOD"
-  "_NOT_FOUND\020\004\022\034\n\030RPC_REQUEST_PARSE_FAILED"
-  "\020\005\022!\n\035RPC_RESPONSE_SERIALIZE_FAILED\020\006\022\026\n"
-  "\022RPC_CONNECT_FAILED\020\007\022\023\n\017RPC_SEND_FAILED"
-  "\020\010\022\023\n\017RPC_RECV_FAILED\020\t\022\035\n\031RPC_RESPONSE_"
-  "PARSE_FAILED\020\n\022\017\n\013RPC_TIMEOUT\020\013\022\027\n\023RPC_F"
-  "RAME_TOO_LARGE\020\014\022\030\n\024RPC_INVALID_RESPONSE"
-  "\020\r\022 \n\034RPC_SERVICE_DISCOVERY_FAILED\020\016b\006pr"
-  "oto3"
+  "\022\022\n\nrequest_id\030\004 \001(\004\022\023\n\013deadline_ms\030\006 \001("
+  "\004\"z\n\021RpcResponseHeader\022\022\n\nrequest_id\030\001 \001"
+  "(\004\022\'\n\nerror_code\030\002 \001(\0162\023.mprpc.RpcErrorC"
+  "ode\022\021\n\terror_msg\030\003 \001(\014\022\025\n\rresponse_size\030"
+  "\004 \001(\r*\361\002\n\014RpcErrorCode\022\017\n\013RPC_SUCCESS\020\000\022"
+  "\023\n\017RPC_BAD_REQUEST\020\001\022\031\n\025RPC_SERVICE_NOT_"
+  "FOUND\020\003\022\030\n\024RPC_METHOD_NOT_FOUND\020\004\022\034\n\030RPC"
+  "_REQUEST_PARSE_FAILED\020\005\022!\n\035RPC_RESPONSE_"
+  "SERIALIZE_FAILED\020\006\022\026\n\022RPC_CONNECT_FAILED"
+  "\020\007\022\023\n\017RPC_SEND_FAILED\020\010\022\023\n\017RPC_RECV_FAIL"
+  "ED\020\t\022\035\n\031RPC_RESPONSE_PARSE_FAILED\020\n\022\017\n\013R"
+  "PC_TIMEOUT\020\013\022\027\n\023RPC_FRAME_TOO_LARGE\020\014\022\030\n"
+  "\024RPC_INVALID_RESPONSE\020\r\022 \n\034RPC_SERVICE_D"
+  "ISCOVERY_FAILED\020\016b\006proto3"
   ;
 static ::_pbi::once_flag descriptor_table_rpcheader_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_rpcheader_2eproto = {
-    false, false, 644, descriptor_table_protodef_rpcheader_2eproto,
+    false, false, 625, descriptor_table_protodef_rpcheader_2eproto,
     "rpcheader.proto",
     &descriptor_table_rpcheader_2eproto_once, nullptr, 0, 2,
     schemas, file_default_instances, TableStruct_rpcheader_2eproto::offsets,
@@ -174,7 +171,6 @@ RpcHeader::RpcHeader(const RpcHeader& from)
     , decltype(_impl_.method_name_){}
     , decltype(_impl_.request_id_){}
     , decltype(_impl_.deadline_ms_){}
-    , decltype(_impl_.args_size_){}
     , /*decltype(_impl_._cached_size_)*/{}};
 
   _internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
@@ -195,8 +191,8 @@ RpcHeader::RpcHeader(const RpcHeader& from)
       _this->GetArenaForAllocation());
   }
   ::memcpy(&_impl_.request_id_, &from._impl_.request_id_,
-    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.args_size_) -
-    reinterpret_cast<char*>(&_impl_.request_id_)) + sizeof(_impl_.args_size_));
+    static_cast<size_t>(reinterpret_cast<char*>(&_impl_.deadline_ms_) -
+    reinterpret_cast<char*>(&_impl_.request_id_)) + sizeof(_impl_.deadline_ms_));
   // @@protoc_insertion_point(copy_constructor:mprpc.RpcHeader)
 }
 
@@ -209,7 +205,6 @@ inline void RpcHeader::SharedCtor(
     , decltype(_impl_.method_name_){}
     , decltype(_impl_.request_id_){uint64_t{0u}}
     , decltype(_impl_.deadline_ms_){uint64_t{0u}}
-    , decltype(_impl_.args_size_){0u}
     , /*decltype(_impl_._cached_size_)*/{}
   };
   _impl_.service_name_.InitDefault();
@@ -250,8 +245,8 @@ void RpcHeader::Clear() {
   _impl_.service_name_.ClearToEmpty();
   _impl_.method_name_.ClearToEmpty();
   ::memset(&_impl_.request_id_, 0, static_cast<size_t>(
-      reinterpret_cast<char*>(&_impl_.args_size_) -
-      reinterpret_cast<char*>(&_impl_.request_id_)) + sizeof(_impl_.args_size_));
+      reinterpret_cast<char*>(&_impl_.deadline_ms_) -
+      reinterpret_cast<char*>(&_impl_.request_id_)) + sizeof(_impl_.deadline_ms_));
   _internal_metadata_.Clear<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>();
 }
 
@@ -275,14 +270,6 @@ const char* RpcHeader::_InternalParse(const char* ptr, ::_pbi::ParseContext* ctx
         if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 18)) {
           auto str = _internal_mutable_method_name();
           ptr = ::_pbi::InlineGreedyStringParser(str, ptr, ctx);
-          CHK_(ptr);
-        } else
-          goto handle_unusual;
-        continue;
-      // uint32 args_size = 3;
-      case 3:
-        if (PROTOBUF_PREDICT_TRUE(static_cast<uint8_t>(tag) == 24)) {
-          _impl_.args_size_ = ::PROTOBUF_NAMESPACE_ID::internal::ReadVarint32(&ptr);
           CHK_(ptr);
         } else
           goto handle_unusual;
@@ -344,12 +331,6 @@ uint8_t* RpcHeader::_InternalSerialize(
         2, this->_internal_method_name(), target);
   }
 
-  // uint32 args_size = 3;
-  if (this->_internal_args_size() != 0) {
-    target = stream->EnsureSpace(target);
-    target = ::_pbi::WireFormatLite::WriteUInt32ToArray(3, this->_internal_args_size(), target);
-  }
-
   // uint64 request_id = 4;
   if (this->_internal_request_id() != 0) {
     target = stream->EnsureSpace(target);
@@ -402,11 +383,6 @@ size_t RpcHeader::ByteSizeLong() const {
     total_size += ::_pbi::WireFormatLite::UInt64SizePlusOne(this->_internal_deadline_ms());
   }
 
-  // uint32 args_size = 3;
-  if (this->_internal_args_size() != 0) {
-    total_size += ::_pbi::WireFormatLite::UInt32SizePlusOne(this->_internal_args_size());
-  }
-
   return MaybeComputeUnknownFieldsSize(total_size, &_impl_._cached_size_);
 }
 
@@ -437,9 +413,6 @@ void RpcHeader::MergeImpl(::PROTOBUF_NAMESPACE_ID::Message& to_msg, const ::PROT
   if (from._internal_deadline_ms() != 0) {
     _this->_internal_set_deadline_ms(from._internal_deadline_ms());
   }
-  if (from._internal_args_size() != 0) {
-    _this->_internal_set_args_size(from._internal_args_size());
-  }
   _this->_internal_metadata_.MergeFrom<::PROTOBUF_NAMESPACE_ID::UnknownFieldSet>(from._internal_metadata_);
 }
 
@@ -468,8 +441,8 @@ void RpcHeader::InternalSwap(RpcHeader* other) {
       &other->_impl_.method_name_, rhs_arena
   );
   ::PROTOBUF_NAMESPACE_ID::internal::memswap<
-      PROTOBUF_FIELD_OFFSET(RpcHeader, _impl_.args_size_)
-      + sizeof(RpcHeader::_impl_.args_size_)
+      PROTOBUF_FIELD_OFFSET(RpcHeader, _impl_.deadline_ms_)
+      + sizeof(RpcHeader::_impl_.deadline_ms_)
       - PROTOBUF_FIELD_OFFSET(RpcHeader, _impl_.request_id_)>(
           reinterpret_cast<char*>(&_impl_.request_id_),
           reinterpret_cast<char*>(&other->_impl_.request_id_));

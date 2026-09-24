@@ -6,8 +6,6 @@
 
 ### Q1.1 介绍一下 mprpc 框架
 
-**答（30 秒口述版）**
-
 `mprpc` 是构建在 `wevix_muduo` 之上的 RPC 框架，用 **protobuf 做接口定义和序列化**，用 **ZooKeeper 做服务注册发现**。
 
 **服务端**（Provider）：
@@ -77,12 +75,6 @@ MprpcChannel::CallMethod()
 
 **关键设计是「协议层独立于传输层」**（`mprpccodec.h` 是纯 header-only 的）：
 
-```cpp
-// mprpc/include/mprpccodec.h —— 只依赖 Buffer / CodecResult 两个网络库类型
-inline std::string BuildRpcFrame(const std::string& payload);
-inline bool ReadNetworkUint32(const char* data, size_t len, uint32_t* value);
-```
-
 它只做「字节串 ↔ 字节串」的转换，和 muduo 的耦合点只有 `RpcMessageCodec(Buffer*, std::string&)` 这个适配函数——`Buffer` 通过裸指针接触、`CodecResult` 是网络库定义的编解码结果枚举，都不是继承关系。
 
 **这样的好处**：如果哪天换掉网络库（比如换成 `boost::asio`），**协议层一行都不用改**，只需要重新写一个 `Buffer` 的适配。
@@ -93,30 +85,9 @@ inline bool ReadNetworkUint32(const char* data, size_t len, uint32_t* value);
 
 **第一组：网络/传输层（4 个）**——「连接没打通」
 
-```proto
-RPC_CONNECT_FAILED  = 1;   // TCP 连接建立失败
-RPC_SEND_FAILED     = 2;   // 发送失败
-RPC_RECV_FAILED     = 3;   // 接收失败
-RPC_TIMEOUT         = 4;   // 超时（连接、发送、接收、或服务端 deadline 拒绝）
-```
-
 **第二组：协议层（5 个）**——「连接通了但数据不对」
 
-```proto
-RPC_BAD_REQUEST         = 5;   // 请求格式非法（header_size 不合法、args_size 不匹配）
-RPC_FRAME_TOO_LARGE     = 6;   // 帧超过 64MB
-RPC_RESPONSE_PARSE_FAILED = 7; // 响应解析失败
-RPC_INVALID_RESPONSE    = 8;   // request_id 不匹配（长连接串包）
-RPC_REQUEST_PARSE_FAILED = 9;  // 请求体 protobuf 解析失败
-```
-
 **第三组：服务治理层（5 个）**——「协议没问题，但服务找不到」
-
-```proto
-RPC_SERVICE_NOT_FOUND       = 10;  // ZK 里没有这个 service
-RPC_METHOD_NOT_FOUND        = 11;  // service 里没有这个方法
-RPC_SERVICE_DISCOVERY_FAILED = 14; // 服务发现流程失败（ZK 不可用等）
-```
 
 （完整枚举见 `rpcheader.proto:6-27`，`RPC_SUCCESS = 0`。）
 
@@ -128,35 +99,15 @@ RPC_SERVICE_DISCOVERY_FAILED = 14; // 服务发现流程失败（ZK 不可用等
 | 协议层 | **不重试**（重试还是同样的坏包，说明是代码 bug） |
 | 治理层 | **失效缓存 + 重新发现**（服务可能扩容/下线了） |
 
-我的重试逻辑就依赖这个分类（`mprpcchannel.cc:953-957`）：
-
-```cpp
-if (!callOk &&
-    (callErrorCode == mprpc::RPC_CONNECT_FAILED ||
-     callErrorCode == mprpc::RPC_TIMEOUT ||
-     callErrorCode == mprpc::RPC_SEND_FAILED ||
-     callErrorCode == mprpc::RPC_RECV_FAILED))
-```
-
-**只有第一组的 4 个错误码会触发重试**——协议错误（第二组）和服务治理错误（第三组）都不会傻乎乎地重试。
-
 ---
 
 ## 二、协议设计
 
-### Q2.1 你的 RPC 协议帧格式是什么样的？
-
-**答（30 秒口述版）**
+### Q2.1  RPC 协议帧格式是什么样的？
 
 ```text
 [total_len(4B, 网络序)] [payload]
  ←──────── total_len 覆盖的范围（不含自身 4 字节）────────→
-```
-
-`total_len == payload.size()`（`mprpccodec.h:43-50`）：
-
-```cpp
-AppendNetworkUint32(&frame, static_cast<uint32_t>(payload.size()));
 ```
 
 **外层帧头只有 4 字节**——够用就好：`total_len` 唯一的职责是让接收方知道「这一帧到哪里为止」，再多的字段都是它不需要的。
@@ -178,28 +129,9 @@ total_len | header_size | RpcHeader | args
 
 **① 单帧上限 64MB**（`mprpccodec.h:13`）：
 
-```cpp
-// 单帧最大 64MB：防止异常长度字段导致 Buffer 无限扩容或内存被打爆。
-constexpr uint32_t kRpcMaxFrameSize = 64 * 1024 * 1024;
-```
-
 **② 全部用网络序（大端）**，集中在 2 个 inline 函数里（`mprpccodec.h:20-39`）：
 
-```cpp
-// RPC 协议里的 total_len/header_size 都走这个函数，避免客户端和服务端各自处理字节序。
-```
-
 读侧还带长度保护（`mprpccodec.h:30-33`）：`len < sizeof(uint32_t)` 直接返回 false，注释写着 `避免坏包触发越界读取`。
-
-**面试官想听什么**
-
-- 能**画出完整的字节布局**（而不是只说「有个长度前缀」）
-- 知道 `total_len` **不包含自己那 4 字节**——这是最容易搞错的地方
-- 知道长度字段非法时为什么**直接关连接**而不是清缓冲硬撑（见 Q3.1）
-
-**可能追问**
-
-- Q2.1.1 为什么是「两层帧头」（外层 total_len + 内层 header_size）？
 
 #### Q2.1.1 为什么是「两层帧头」？一层不够吗？
 
@@ -212,35 +144,11 @@ constexpr uint32_t kRpcMaxFrameSize = 64 * 1024 * 1024;
 
 **外层 `total_len` 归网络层**：
 
-`RpcMessageCodec` 挂在 `Connection` 上，它**只知道长度、不解析内容**：
-
-```cpp
-inline wevix_muduo::CodecResult RpcMessageCodec(wevix_muduo::Buffer* buf, std::string& message)
-{
-    if (buf->readableBytes() < 4) return kNeedMoreData;       // 半包：连长度都没收全
-    uint32_t total_len = 0;
-    if (!mprpc::ReadNetworkUint32(buf->peek(), buf->readableBytes(), &total_len))
-        return kNeedMoreData;
-    if (total_len < kRpcMinFrameSize || total_len > kRpcMaxFrameSize)
-        return kFatal;                                        // 长度非法 → 交给上层关连接
-    if (buf->readableBytes() - 4 < total_len) return kNeedMoreData;  // 半包：帧体未收全
-    buf->retrieve(4);
-    message = buf->retrieveAsString(total_len);
-    return kFrameReady;
-}
-```
-
-它的职责边界是「**把字节流切成帧**」——**帧里面是什么它不关心**。
+`RpcMessageCodec` 挂在 `Connection` 上，它**只知道长度、不解析内容**，它的职责边界是「**把字节流切成帧**」——**帧里面是什么它不关心**。
 
 **内层 `header_size` 归应用层**：
 
 服务端拿到完整的一帧后，才知道「前 4 字节是 header 长度、接下来是 RpcHeader、剩下的是 args」：
-
-```cpp
-// rpcprovider.cc:62-106 DecodeRequestHeader
-// 校验 header_size == 0 || message.size()-4 < headerSize
-// 校验 args_size == 实际剩余长度
-```
 
 **为什么要这么分**——**因为协议演进的需求不同**：
 
@@ -249,55 +157,34 @@ inline wevix_muduo::CodecResult RpcMessageCodec(wevix_muduo::Buffer* buf, std::s
 
 **如果只有一层会怎样**：假设只有 `total_len`，那网络层就得知道「payload 前 4 字节是 header 长度」——**网络层就绑定了应用层协议**。将来 payload 结构一变，网络层也得跟着改，而网络层是被所有连接共用的。
 
-**这实际上是「关注点分离」在协议设计上的体现**：
-
-| 层 | 只关心 | 变更频率 |
-|---|---|---|
-| 外层 `total_len` | 帧边界 | **极低**（协议大版本升级才动） |
-| 内层 `header_size` + RpcHeader | 请求语义 | 中（加字段、加错误码） |
-| `args` | 业务数据 | 高（业务变化） |
-
-**分层之后，每层的变更影响范围被限制住了。**
-
 ---
 
 ### Q2.2 `RpcHeader` 里都有什么？为什么要这些字段？
 
-**答**：6 个字段（`rpcheader.proto:30-49`）：
+**答**：4 个字段（`rpcheader.proto:29-38`）：
 
 ```proto
 message RpcHeader {
     bytes  service_name = 1;   // 要调哪个服务
     bytes  method_name  = 2;   // 要调哪个方法
-    uint32 args_size    = 3;   // 参数序列化后的字节数（用于校验）
     uint64 request_id   = 4;   // 请求 ID，用于匹配响应
-    bytes  trace_id     = 5;   // 全局链路追踪 ID（预留）
     uint64 deadline_ms  = 6;   // 请求的失效时刻（绝对时间戳）
 }
 ```
+
+> 字段号 3、5 是空的：`args_size`（冗余的长度字段）和 `trace_id`（链路追踪，一直未实现）在后续迭代中被移除，字段号不再复用。
 
 **逐个说用途**：
 
 | 字段 | 用途 | 不用它会怎样 |
 |---|---|---|
 | `service_name` + `method_name` | 服务端据此**查找 method descriptor** | 没法分发 |
-| `args_size` | **内容自校验**——和实际剩余长度比对 | 坏包会在 `ParseFromString` 时才失败，错误信息模糊 |
 | `request_id` | 客户端**校验响应归属** | 长连接上无法区分「这是哪个请求的响应」（串包） |
 | `deadline_ms` | 服务端**快速拒绝过期请求** | 客户端已超时，服务端还在傻算 |
-| `trace_id` | 链路追踪 | **目前是预留字段**，框架层没有生成和传播 |
 
-**重点说三个**：
+**重点说两个**：
 
-**① `args_size` 是「内容自校验」**——服务端会比对（`rpcprovider.cc`）：
-
-```cpp
-// args_size 必须等于实际剩余的字节数
-if (rpcHeader.args_size() != remainder)  → 回 RPC_BAD_REQUEST
-```
-
-这能挡住「header 解析对了但 body 长度不对」的坏包。**光靠外层 `total_len` 是不够的**——`total_len` 只保证「帧的字节数对」，不保证「帧内部结构自洽」。
-
-**② `request_id` 是长连接的必需品**：
+**① `request_id` 是长连接的必需品**：
 
 ```cpp
 // mprpcchannel.cc:71-75
@@ -321,7 +208,7 @@ if (responseHeader.request_id() != requestId)
 
 **注意 `request_id` 的作用域**：它是**进程内**递增的（`static` 变量），不是全局唯一。但因为校验只发生在「同一个连接、同一个进程」内，**够用**。
 
-**③ `deadline_ms` 是「绝对时刻」而不是「超时时长」**：
+**② `deadline_ms` 是「绝对时刻」而不是「超时时长」**：
 
 ```cpp
 // mprpcchannel.cc:857-861
@@ -332,14 +219,6 @@ if (timeoutMs > 0)
 ```
 
 传绝对时刻（`now + timeoutMs`）而不是时长，是因为服务端**需要判断「这个请求现在还有没有意义」**——而这个判断必须在同一时间基准上做。如果传时长，服务端还得知道「客户端是什么时候发的」才行。
-
-（⚠️ 但用绝对时刻有个前提：**客户端和服务端的时钟得基本同步**。用 `system_clock` 意味着时钟漂移会直接影响判定。这是个已知的取舍。）
-
-**面试官想听什么**
-
-- 能说清 `args_size` 是**内容自校验**，和外层 `total_len` 的职责不同
-- 能说清 `request_id` 解决的是**长连接串包**问题
-- 知道 `deadline_ms` 传的是**绝对时刻**，以及为什么
 
 ---
 
@@ -598,7 +477,7 @@ if (workThreads > 0)
 | 0.5 | 起一个 **RAII 计时守卫**（覆盖所有 return 路径） |
 | 0.6 | 生成 `requestId`；读取超时配置 |
 | 1 | `request->SerializeToString(&args_str)` + 两次 64MB 校验 |
-| 2 | 组 `RpcHeader`（service/method/args_size/request_id/deadline_ms），序列化 |
+| 2 | 组 `RpcHeader`（service/method/request_id/deadline_ms），序列化 |
 | 3 | 拼 payload：`[header_size] + RpcHeader + args`，再套外层帧 |
 | 4 | **服务发现**（direct 直连分支 / ZK 三级缓存分支） |
 | 5 | 从连接池取连接 → `SendRequestAndReadResponse` |
@@ -1030,13 +909,11 @@ bool RegisterToZk(const std::string& service_name, const std::string& method_nam
 
 （`rpcprovider.cc:297-413`）。
 
-**第 1 项内部还包含两个内容校验**（`DecodeRequestHeader`，`rpcprovider.cc:62-106`）：
+**第 1 项内部包含一个内容校验**（`DecodeRequestHeader`，`rpcprovider.cc:63-97`）：
 
 ```cpp
-// 校验 header_size 合法性
+// 校验 header_size 合法性；args 长度由 total_len 和 header_size 唯一推出，无需再校验
 if (headerSize == 0 || message.size() - 4 < headerSize)  → 失败
-// 校验 args_size 和实际剩余长度一致
-if (rpcHeader.args_size() != remainder)                   → 失败
 ```
 
 **「坏包也回包」这个原则**（`rpcprovider.cc:46-57` 的注释）：
@@ -1077,7 +954,7 @@ SendRpcError(conn, 0 /* 未知 request_id */, RPC_BAD_REQUEST, errorMsg);
 **面试官想听什么**
 
 - 能说出「**坏包也回包**」这个原则，以及**不做的话会导致错误归因**（超时掩盖真实原因）
-- 知道 `args_size` 是**内容自校验**，和外层 `total_len` 层次不同
+- 知道 `header_size` 的边界校验是**帧内部自洽**的防线，和外层 `total_len` 是两个层次
 - 能主动指出 `request_id = 0` 带来的错误码绕路问题
 
 **可能追问**

@@ -30,8 +30,7 @@ message RpcHeader
 {
     bytes service_name = 1;    // 调用的服务名 (例如: VideoTranscoderService)
     bytes method_name = 2;     // 调用的方法名 (例如: StartTranscode)
-    uint32 args_size = 3;      // 紧跟在 Header 后的业务参数（Payload）的长度
-    
+
     // 核心高级字段
     uint64 request_id = 4;     // 请求序列号：用于在异步环境下匹配 Response 和 Request
     uint64 deadline_ms = 6;    // 截止时间戳/超时时间：告知 Provider 该请求何时失效，避免无效计算
