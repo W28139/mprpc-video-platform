@@ -161,7 +161,7 @@ total_len | header_size | RpcHeader | args
 
 ### Q2.2 `RpcHeader` 里都有什么？为什么要这些字段？
 
-**答**：4 个字段（`rpcheader.proto:29-38`）：
+4 个字段（`rpcheader.proto:29-38`）：
 
 ```proto
 message RpcHeader {
@@ -172,8 +172,6 @@ message RpcHeader {
 }
 ```
 
-> 字段号 3、5 是空的：`args_size`（冗余的长度字段）和 `trace_id`（链路追踪，一直未实现）在后续迭代中被移除，字段号不再复用。
-
 **逐个说用途**：
 
 | 字段 | 用途 | 不用它会怎样 |
@@ -182,7 +180,7 @@ message RpcHeader {
 | `request_id` | 客户端**校验响应归属** | 长连接上无法区分「这是哪个请求的响应」（串包） |
 | `deadline_ms` | 服务端**快速拒绝过期请求** | 客户端已超时，服务端还在傻算 |
 
-**重点说两个**：
+**重点说两个**：（后面回头看）
 
 **① `request_id` 是长连接的必需品**：
 
@@ -195,7 +193,7 @@ uint64_t NextRequestId()
 }
 ```
 
-客户端发请求前生成，收到响应后**必须校验**（`mprpcchannel.cc:1012-1022`）：
+客户端发请求前生成，收到响应后**必须校验**（`mprpcchannel.cc:985-995`）：
 
 ```cpp
 if (responseHeader.request_id() != requestId)
@@ -211,7 +209,7 @@ if (responseHeader.request_id() != requestId)
 **② `deadline_ms` 是「绝对时刻」而不是「超时时长」**：
 
 ```cpp
-// mprpcchannel.cc:857-861
+// mprpcchannel.cc:830
 if (timeoutMs > 0)
 {
     rpcHeader.set_deadline_ms(NowMs() + static_cast<uint64_t>(timeoutMs));
@@ -226,70 +224,17 @@ if (timeoutMs > 0)
 
 ### Q3.1 粘包和半包是怎么处理的？
 
-**答（30 秒口述版）**
-
-**用长度前缀法，不用状态机。**
-
-核心函数就 27 行（`mprpccodec.h:60-86`）：
-
-```cpp
-inline wevix_muduo::CodecResult RpcMessageCodec(wevix_muduo::Buffer* buf, std::string& message)
-{
-    if (buf->readableBytes() < 4) return kNeedMoreData;       // ① 半包：连长度都没收全
-
-    uint32_t total_len = 0;
-    if (!mprpc::ReadNetworkUint32(buf->peek(), buf->readableBytes(), &total_len))
-        return kNeedMoreData;                                 // ② 读长度失败
-
-    if (total_len < mprpc::kRpcMinFrameSize || total_len > mprpc::kRpcMaxFrameSize)
-        return kFatal;                                        // ③ 长度非法 → 关连接
-
-    if (buf->readableBytes() - 4 < total_len) return kNeedMoreData;  // ④ 半包：帧体未收全
-
-    buf->retrieve(4);                                         // ⑤ 消费长度头
-    message = buf->retrieveAsString(total_len);               // ⑥ 取出 payload
-    return kFrameReady;
-}
-```
+**用长度前缀法。**核心函数就 27 行（`mprpccodec.h:60-86`）：
 
 **三种情况分开处理**：
 
-**① 半包（数据不够）**：**返回 `kNeedMoreData`，一个字节都不消费**。数据留在 `Buffer` 的 readable 区，等下次 `handleRead` 追加数据后再试。这是关键——**不能消费**，否则长度头就丢了。
+**① 半包（数据不够）**：**返回 `kNeedMoreData`，一个字节都不消费**。数据留在 `Buffer` 的 readable 区，等下次 `handleRead` 追加数据后再试。
 
-**② 粘包（一次读到多帧）**：由**调用方循环**处理（`Connection::handleRead`）：
-
-```cpp
-while (true)
-{
-    CodecResult result = messageCodec_(&inputBuffer_, message);
-    if (result == CodecResult::kNeedMoreData) break;
-    if (result == CodecResult::kFatal) { handleClose(); return; }
-    if (disconnected_) break;
-    if (onMessageCallback_) { onMessageCallback_(self, message); }
-    if (disconnected_) break;
-}
-```
-
-一次 `read` 可能读到 `[帧1][帧2][帧3的一半]`，`while` 循环把前两帧都吐出来，第三帧留在 Buffer 里等下次。
+**② 粘包（一次读到多帧）**：由**调用方循环**处理（`Connection::handleRead`）
 
 **③ 长度非法：返回 `kFatal`，由 `Connection` 关闭连接。**
 
-这里我改过一版设计。最初是 `retrieveAll()` 清空缓冲接着读（注释写着「避免这个连接后续一直卡在坏帧上」），**但那个想法是错的**：长度非法意味着字节流已经错位，而长度前缀协议**没有可扫描的同步点**——清缓冲并不能重新对齐，只是在赌发送方恰好走到帧边界，赌赢的代价是中间那些帧被静默丢弃、对应请求各自干等 5s 超时。
-
-关连接则是让错误如实暴露：对端立刻收到 `RPC_RECV_FAILED`（而不是等超时），该错误码在客户端自动重试清单里，会清池重连重发——**恢复从「5 秒超时」变成「一次重连」**。
-
 **零拷贝的细节**：用 `peek()` **只读长度不消费**（`Buffer.h:70`），确认帧完整后才 `retrieve(4)` + `retrieveAsString(total_len)`。**先看后取**，避免读了半个帧就破坏了缓冲状态。
-
-**面试官想听什么**
-
-- 能说出「半包时**一个字节都不能消费**」——这是最容易写错的地方
-- 知道「粘包靠调用方循环、半包靠返回值」，职责划分清楚
-- 认得出「先 `peek` 后 `retrieve`」这个零拷贝模式
-- 知道长度非法为什么要**关连接**而不是清缓冲（错位后不可恢复）
-
-**可能追问**
-
-- Q3.1.1 为什么用长度前缀而不是状态机（比如 `\r\n` 分隔）？
 
 #### Q3.1.1 为什么用长度前缀，不用状态机或分隔符？
 
@@ -1184,473 +1129,6 @@ void MyServiceImpl::AsyncMethod(RpcController* ctrl, const Request* req,
 - 能指出**异步场景下 `request` 生命周期不兼容**这个更深的问题
 
 ---
-
-## 六、服务注册发现：ZooKeeper
-
-### Q6.1 ZK 的节点结构是怎么设计的？
-
-**答（30 秒口述版）**
-
-**四层路径，永久节点做容器、临时顺序节点做实例。**
-
-```text
-/mprpc                                       ← 永久（根）
-  /services                                  ← 永久（服务集合）
-    /SchedulerService                        ← 永久（服务名）
-      /ScheduleJob                           ← 永久（方法名）
-        /instance-0000000001                 ← 临时顺序节点（实例，value = "ip:port"）
-        /instance-0000000002
-```
-
-路径规则（`mprpcchannel.cc:222-232`）：
-
-```cpp
-std::string MethodRegistryPath(const std::string& svc, const std::string& m)
-{
-    return "/mprpc/services/" + svc + "/" + m;
-}
-// 兼容旧版注册路径 /Svc/Method（读取时兜底）
-std::string LegacyMethodPath(const std::string& svc, const std::string& m)
-{
-    return "/" + svc + "/" + m;
-}
-```
-
-注册代码（`rpcprovider.cc:234-269`）：
-
-```cpp
-// service_name 和 method_name 为永久节点，instance-* 为临时顺序节点。
-std::string service_path = "/mprpc/services/" + sp.first;
-zkCli.Create(service_path.c_str(), nullptr, 0);              // state=0 → 永久
-
-std::string method_path = MethodRegistryPath(sp.first, mp.first);
-zkCli.Create(method_path.c_str(), nullptr, 0);               // 永久
-
-char method_path_data[128] = {0};
-sprintf(method_path_data, "%s:%d", advertise_ip.c_str(), port);
-std::string instance_path = method_path + "/instance-";
-std::string actualPath;
-zkCli.Create(instance_path.c_str(), method_path_data, strlen(method_path_data),
-             ZOO_EPHEMERAL | ZOO_SEQUENCE, &actualPath);      // ← 临时 + 顺序
-LOG_INFO("Register rpc instance: %s -> %s", actualPath.c_str(), method_path_data);
-```
-
-**四个设计决定，逐个说理由**：
-
-**① 为什么「永久节点做容器、临时节点做实例」**：
-
-| 节点类型 | 用在哪 | 理由 |
-|---|---|---|
-| **永久** | `/mprpc`、`/services`、`/服务名`、`/方法名` | 这些是**结构**，不该因为某个 Provider 下线就消失 |
-| **临时** | `instance-*` | Provider **进程退出或会话超时**时自动删除——**天然的故障检测** |
-
-**临时节点是这里最妙的设计**：Provider 崩溃（`kill -9`、OOM）时**没机会做任何清理**，但 ZK 会因为会话超时（30 秒）自动删掉它的临时节点。**客户端不需要任何额外的健康检查机制**，只要查 ZK 就能拿到存活实例。
-
-**② 为什么是「顺序」节点**：
-
-`ZOO_SEQUENCE` 让 ZK **服务端**自动在节点名后追加一个单调递增的序号（`instance-0000000001`）。好处是：
-- **多个实例不会冲突**——两个 Provider 同时用 `instance-` 前缀创建，ZK 保证它们拿到不同的名字；
-- **客户端拉取时可以排序**（`mprpcchannel.cc:286-349`）：
-
-```cpp
-std::vector<std::string> children = zk.GetChildren(method_path.c_str());
-std::sort(children.begin(), children.end());   // instance-0000000001 有序 → 轮询稳定
-```
-
-排序让「轮询选实例」的行为在多个客户端之间**一致**（都从序号小的开始），避免了「每个客户端随机顺序导致负载不均」。
-
-**③ `value` 存 `ip:port`**：
-
-实例节点的数据就是 `"172.18.0.12:9002"` 这样的字符串。客户端拿到 children 名字后，还要 `GetData` 取每个节点的 value 才知道实际地址。
-
-**④ 注册地址用的是 `advertise_ip` 而不是配置的 `rpcserverip`**（`rpcprovider.cc:167-176`）：
-
-```cpp
-// 阶段 13：服务发现地址（注册到 ZK）——rpcserverip 为 0.0.0.0/空
-// （Docker 全接口监听）时，探测本机实际 IP，否则消费者连 0.0.0.0 必失败
-std::string advertise_ip = ip;
-if (advertise_ip.empty() || advertise_ip == "0.0.0.0")
-{
-    advertise_ip = mprpc::GetLocalIp();
-    if (!advertise_ip.empty())
-        LOG_INFO("rpcserverip=%s (container mode), advertise ip=%s for service discovery", ...);
-}
-```
-
-**这是 Docker 部署时实测踩到的坑**：`rpcserverip=0.0.0.0` 是合法的**监听地址**（表示监听所有网卡），但**不是可路由的地址**——消费者拿到 `0.0.0.0:9002` 去连接会失败（实测 `errno 111`）。
-
-修复是：**监听用配置的地址，注册用探测出来的真实 IP**。`GetLocalIp()` 用 `getifaddrs()` 取第一个非 loopback 的 IPv4（`mprpcutil.h:28-47`）：
-
-```cpp
-inline std::string GetLocalIp()
-{
-    struct ifaddrs* ifa = nullptr;
-    if (getifaddrs(&ifa) != 0) return "";
-    std::string result;
-    for (struct ifaddrs* p = ifa; p; p = p->ifa_next)
-    {
-        if (!p->ifa_addr || p->ifa_addr->sa_family != AF_INET) continue;
-        const auto* sa = reinterpret_cast<const struct sockaddr_in*>(p->ifa_addr);
-        char buf[INET_ADDRSTRLEN] = {0};
-        if (!inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof(buf))) continue;
-        std::string ip(buf);
-        if (ip == "127.0.0.1" || ip == "0.0.0.0") continue;
-        result = ip;   // 取第一个非 loopback 网卡地址
-        break;
-    }
-    freeifaddrs(ifa);
-    return result;
-}
-```
-
-用 `getifaddrs()` 而不是 `ioctl(SIOCGIFCONF)`：**无状态、无 fd、可重入**，也不用管 `struct ifreq` 的大小限制。
-
-**⚠️ 一个已知的脆弱点**：`GetLocalIp` 取的是「**第一个**非 loopback IPv4」，**不排序、不优选**。多网卡机器上（比如同时有 `eth0`、`docker0`、`eth1`）可能选到错误的网卡。**更严谨的做法**是优先选默认路由对应的网卡（可以读 `/proc/net/route` 找 `default` 那一行的接口）。
-
-**面试官想听什么**
-
-- 能画出**四层结构**，并说清「永久节点做容器、临时节点做实例」的理由（**临时节点 = 天然的故障检测**）
-- 知道 `ZOO_SEQUENCE` 解决的是**多实例命名冲突**，以及排序带来的**轮询一致性**
-- 知道 `0.0.0.0` 不能注册（Docker 实测踩的坑）以及 `GetLocalIp` 的作用
-
----
-
-### Q6.2 服务发现的三级缓存是怎么设计的？
-
-**答（30 秒口述版）**
-
-**本地缓存（30s TTL）→ Redis 集中缓存（多进程共享）→ ZooKeeper。**
-
-```
-MprpcChannel::CallMethod
-  └─ GetHostData(method_path, legacy_path)
-       ├─ ① 本地 ServiceCache（unordered_map，30s TTL）  ← 命中率最高，零网络
-       ├─ ② Redis HGET mprpc:endpoints {method_path}    ← 多进程共享
-       └─ ③ ZooKeeper GetChildren + GetData             ← 兜底，并双写回前两级
-```
-
-**数据结构**（`mprpcchannel.cc:208-245`）：
-
-```cpp
-constexpr char kEndpointsHashKey[] = "mprpc:endpoints";
-constexpr int64_t kEndpointCacheTtlSec = 30;
-
-struct EndpointCacheEntry
-{
-    std::vector<std::string> endpoints;
-    size_t nextIndex = 0;
-    int64_t fetchedAtMs = 0;    ///< 本地缓存写入时间，超 TTL 视为过期
-};
-```
-
-**三级查找**（`mprpcchannel.cc:364-414`）：
-
-```cpp
-// ① 本地缓存：持 ServiceCacheMutex，判 TTL
-if (NowMs() - entry.fetchedAtMs <= kEndpointCacheTtlMs)
-{
-    host_data = entry.endpoints[entry.nextIndex++ % entry.endpoints.size()];
-    fromCache = true;
-}
-// ② 本地 miss/过期 → Redis
-else if (redis.enabled())
-{
-    redis.HGet(kEndpointsHashKey, methodPath, csv, found);   // ← 不持本地缓存锁（HGET 是网络操作）
-    if (found) { ParseCsvEndpoints(csv, ...); /* 写回本地缓存 */ }
-}
-// ③ 兜底 → ZK
-else { host_data = PickEndpoint(QueryEndpointList(methodPath, legacyMethodPath)); }
-```
-
-**三个设计要点**：
-
-**① 本地缓存「命中即零网络」**——这是最重要的性能点。热路径上（每次 RPC）只做一次哈希查找 + 一次时间比较。
-
-`mprpcchannel.cc:208-213` 的注释写明了 TTL 的统一性：
-
-```cpp
-// 本地缓存与 Redis 统一 30s TTL：实例变更（新 Provider 注册/下线）最多 30s 生效
-```
-
-**② Redis 是「多进程共享的发现结果」**。为什么需要它——因为每个消费者进程**各自有一份本地缓存**：
-
-```text
-进程 A 的本地缓存：{"Scheduler.ScheduleJob" → ["10.0.0.1:9002", "10.0.0.2:9002"]}
-进程 B 的本地缓存：{"Scheduler.ScheduleJob" → ["10.0.0.1:9002"]}    ← 30s 前拉的旧数据
-进程 C 的本地缓存：...
-```
-
-如果没有 Redis，**每个进程都要自己去 ZK 拉一次**——N 个进程就是 N 倍的 ZK 压力。有了 Redis，**同一份数据只拉一次、写进 Redis、所有进程共享**。
-
-**③ 缓存的失效是「主动 + 被动」双轨**。
-
-**主动失效**（`mprpcchannel.cc:418-430`）——连接失败时：
-
-```cpp
-void InvalidateHostData(const std::string& methodPath)
-{
-    { /* 清本地 map */ }
-    redis.HDel("mprpc:endpoints", methodPath);
-    // 其他进程的缓存同时失效，下次发现重新拉 ZK，
-    // 避免集体轮询到已下线的 endpoint
-}
-```
-
-**这里有个精妙点**：`HDEL` 清的是 **Redis 里的共享字段**，所以**所有进程的缓存会同时失效**——不需要 watch 机制，也不会产生「一个进程失效了、其他进程还在用旧地址」的时间差。
-
-**被动失效**：30s TTL 自然过期。这是**兜底**——**即使 Redis 完全不可用**（`HDEL` 失败只是 `LOG_DEBUG`），各进程的本地缓存在 30 秒后也会自己过期，然后重新拉 ZK。**TTL 是自愈机制**。
-
-**失效的触发条件有两个**（都在 `CallMethod` 里）：
-1. `ParseHostData` 失败（`host_data` 格式非法）——说明缓存里存了坏数据；
-2. **连接级调用失败**——说明这个 endpoint 可能已经挂了。
-
-**面试官想听什么**
-
-- 能画出**三级结构**，并说清每级存在的理由（本地=快、Redis=跨进程共享、ZK=权威）
-- 知道 `HDEL` 清的是共享字段，**让所有进程同时失效**（避免失效风暴时间差）
-- 知道 TTL 是**自愈兜底**——即使 Redis 挂了也能恢复
-
-**可能追问**
-
-- Q6.2.1 为什么不用 ZK 的 Watcher 做实时推送？
-
-#### Q6.2.1 为什么不用 ZK 的 Watcher 做实时推送？
-
-**答**：**因为 Watcher 是「一次性」的，维护成本远高于 TTL 拉模型。**
-
-**我的代码里确实没注册 watcher**——发现路径的 watcher 参数全是 0（`ZookeeperUtil.cc:324`、`360`）：
-
-```cpp
-// 异步获取节点数据（watcher=0：不设置 Watcher 监听）
-zoo_aget(m_zhandle, path, 0, GetDataCb, ctx);
-```
-
-**如果要用 Watcher，必须处理这些问题**：
-
-**① Watcher 是一次性的**。ZK 的 watcher 触发一次后就失效，**必须重新注册**。所以每次收到通知，都要再调一遍 `zoo_awget_children(..., watcher, ...)`。漏了这次重注册，就**永久失去通知**。
-
-**② 触发风暴**。如果 1000 个客户端都 watch 同一个节点，某个 Provider 下线时会**同时触发 1000 个回调**。ZK 会承受瞬时压力，而且这 1000 个客户端会同时去拉取最新列表——**又在 ZK 上制造一次洪峰**。
-
-**③ 回调在 ZK 的 watcher 线程里执行**。要访问框架的缓存（`ServiceCache()`），需要**跨线程投递到自己的线程**（`runInLoop` 那一套）。这引入了线程安全问题（缓存的锁、生命周期）。
-
-**④ 会话过期需要重新注册所有 watcher**。ZK 会话过期（30 秒）后，所有 watcher 都失效了，必须重新建立。
-
-**对比 TTL 拉模型**：
-
-| 维度 | Watcher 推送 | TTL 拉模型 |
-|---|---|---|
-| 实时性 | **秒级**（变更立即可见） | 最多 30s 延迟 |
-| 实现复杂度 | 高（重注册、线程跳转、风暴处理） | **低**（就一个时间比较） |
-| ZK 压力 | 变更时爆发 | **平稳**（每 30s 一次，且被 Redis 进一步摊薄） |
-| 故障恢复 | 会话恢复后要重注册 | **自动**（TTL 到期自然重拉） |
-
-**我选 TTL 的理由**：**「实例变更最多 30 秒生效」这个延迟，对我的业务是可以接受的。**
-
-想一下实际场景：一个新的 `transcode_worker` 上线，**最多 30 秒后**才会被 Scheduler 调度。这个延迟相对「一次视频转码要几十秒」来说完全可以忽略。而 Provider 下线的情况更宽松——因为**即使客户端拿到了已下线的地址，连接会失败，然后触发「失效缓存 + 重新发现 + 重试一次」**（`mprpcchannel.cc:959-985`），**实际感知时间远小于 30 秒**。
-
-**这就是「最终一致性」的取舍**：用「30 秒内可能拿到旧地址」换「实现简单 + ZK 压力平稳 + 自动恢复」。
-
-**如果将来真的需要秒级感知**（比如有严格的容量调度需求），我会用 **Redis 的 pub/sub 或者专门的配置中心**来做推送，而不是 ZK Watcher——因为 Redis 已经在架构里了，而且 pub/sub 没有 ZK watcher 那些一次性/会话绑定的麻烦。
-
-**面试官想听什么**
-
-- 知道 ZK Watcher 是**一次性**的，以及重注册的负担
-- 能说出 Watcher 的**三个具体麻烦**（重注册、触发风暴、线程跳转）
-- 能论证「30s 延迟可接受」——而且指出**实际感知时间远小于 TTL**（因为连接失败会立刻触发重试链路）
-
----
-
-### Q6.3 ZK 客户端封装有什么特别之处？
-
-**答（30 秒口述版）**
-
-**核心是「用异步 API + 信号量超时，替换掉会无限阻塞的同步 API」。**
-
-`ZookeeperUtil.cc:11-28` 的文件头注释就是完整背景：
-
-```cpp
-// 背景：zoo_get / zoo_get_children 是同步 API，内部阻塞等待 watcher 线程
-// 收到响应。若 ZK 连接处于「会话未建立/断线重连」状态（zookeeper_init 后
-// 连接握手未完成，或重连中），同步调用**无限阻塞**——实测 SchedulingLoop
-// 卡死 7+ 分钟（线程 wchan=futex_wait_queue）。
-// 修复：改用 zoo_aget / zoo_aget_children（异步）+ 信号量 3s 超时等待；
-// 超时后调用方按失败返回，ctx 交由回调线程延迟释放（caller_gone 标记），
-// 杜绝悬垂指针。入口先查 zoo_state：非 CONNECTED 直接失败（快速路径）。
-```
-
-**三层防护**：
-
-**① 入口快速失败**（`ZookeeperUtil.cc:79-89`）：
-
-```cpp
-static bool ZooConnected(zhandle_t* zh, const char* what)
-{
-    if (zh == nullptr) return false;
-    int state = zoo_state(zh);
-    if (state != ZOO_CONNECTED_STATE)
-    {
-        LOG_WARN("zookeeper not connected (state=%d), skip %s", state, what);
-        return false;
-    }
-    return true;
-}
-```
-
-**`zoo_state()` 是唯一不会阻塞的查询入口**——先查一下连接状态，不正常就立刻返回失败，**连 3 秒都不用等**。
-
-**② 异步 API + 信号量超时**（`ZookeeperUtil.cc:62-76`）：
-
-```cpp
-static bool WaitZooAsync(ZooAsyncCtx* ctx, int64_t wait_ms)
-{
-    struct timespec ts;
-    clock_gettime(CLOCK_REALTIME, &ts);
-    ts.tv_sec += wait_ms / 1000;
-    ts.tv_nsec += (wait_ms % 1000) * 1000000;
-    if (ts.tv_nsec >= 1000000000) { ts.tv_sec += 1; ts.tv_nsec -= 1000000000; }
-    int r = 0;
-    while ((r = sem_timedwait(&ctx->sem, &ts)) == -1 && errno == EINTR) {}
-    return r == 0;
-}
-```
-
-调用方（`ZookeeperUtil.cc:333-340`）：
-
-```cpp
-if (!WaitZooAsync(ctx, 3000))
-{
-    // 3s 无响应：按发现失败返回（调用方已有重试/失效缓存回退）；
-    // ctx 由回调线程最终回收（caller_gone 标记），不泄漏不悬垂
-    ctx->caller_gone.store(true, std::memory_order_release);
-    LOG_WARN("zookeeper get data timeout (3s), path:%s", path);
-    return "";
-}
-```
-
-**③ `caller_gone` 延迟回收防 UAF**（`ZookeeperUtil.cc:31-42`）：
-
-```cpp
-static void GetDataCb(int rc, const char* value, int value_len,
-                      const struct Stat* /*stat*/, const void* data)
-{
-    auto* ctx = const_cast<ZooAsyncCtx*>(static_cast<const ZooAsyncCtx*>(data));
-    ctx->rc = rc;
-    if (rc == ZOK && value != nullptr && value_len > 0)
-        ctx->data.assign(value, value_len);
-    sem_post(&ctx->sem);
-    // 调用方已超时离开：回调负责回收（调用方不再碰 ctx，无竞态）
-    if (ctx->caller_gone.load(std::memory_order_acquire))
-        delete ctx;
-}
-```
-
-**`ZooAsyncCtx` 的定义**（`ZookeeperUtil.cc:21-28`）：
-
-```cpp
-struct ZooAsyncCtx
-{
-    int rc = -1;
-    std::string data;
-    std::vector<std::string> children;
-    sem_t sem;
-    std::atomic<bool> caller_gone{false};
-};
-```
-
-**`caller_gone` 的核心是「单向所有权」**：
-
-| 路径 | 谁销毁 ctx |
-|---|---|
-| **成功**（`sem_timedwait` 返回 0） | **调用方**：`sem_destroy` + `delete` |
-| **超时**（3 秒没等到） | **回调线程**：`sem_post` 后检查 `caller_gone` → `delete` |
-
-**注意超时路径上调用方「什么都不做」**——它**不 `delete`**（因为回调可能还在用），**也不 `sem_destroy`**（因为回调可能正在 `sem_post` 一个即将销毁的信号量，那是 UB）。
-
-**这就把「失败模式」设计成了「泄漏」而不是「UAF」**——两个失败方向里，**泄漏是可接受的，UAF 是崩溃**。
-
-**内存序**：调用方 `store(release)`，回调 `load(acquire)`——保证「回调看到 `caller_gone == true`」时，调用方之前的所有写都可见。
-
-**面试官想听什么**
-
-- 知道**同步 API 在会话未建立时会无限阻塞**，以及这是实测踩出来的（`wchan=futex_wait_queue`，卡 7+ 分钟）
-- 能说清 `caller_gone` 的**单向所有权**设计，以及为什么超时路径不能 `sem_destroy`
-- 知道 `zoo_state()` 是**唯一不会阻塞**的查询
-
-**可能追问**
-
-- Q6.3.1 `caller_gone` 这个方案真的没问题吗？
-
-#### Q6.3.1 `caller_gone` 这个方案真的没问题吗？
-
-**答**：**有两个残余窗口，我诚实说明——而且我为此专门检查过。**
-
-**窗口一：成功路径的理论 UAF。**
-
-时序是这样：
-
-```text
-调用方：sem_timedwait 返回 0（成功）
-调用方：sem_destroy(&ctx->sem); delete ctx;        ← 销毁
-回调线程（此时还没跑完）：sem_post 已返回，接着执行 ctx->caller_gone.load()
-                          ↑ 访问已释放的内存 → UAF
-```
-
-**为什么存在**：回调在 `sem_post` 之后还要读一次 `caller_gone`。如果调用方在 `sem_post` 之后、`caller_gone.load()` 之前就 `delete ctx` 了，回调就访问了已释放内存。
-
-**这个窗口有多窄**：需要 `sem_timedwait` 返回、调用方执行 `sem_destroy + delete`、**全部发生在回调线程从 `sem_post` 返回后再执行一条 `load` 指令的时间里**。在真实调度下这几乎不可能发生，但**理论上存在**。
-
-**窗口二：超时路径的理论泄漏。**
-
-```text
-回调线程：sem_post 返回
-回调线程：ctx->caller_gone.load()  → 读到 false（因为调用方还没 store）
-调用方：ctx->caller_gone.store(true)
-调用方：return ""                              ← 不 delete（等回调删）
-回调线程：因为没有 caller_gone 为 true，不 delete，直接返回
-```
-
-**两边都不删 → 泄漏**。
-
-**怎么修才能彻底解决**：需要一个**原子的「谁负责销毁」的仲裁**。标准做法是用引用计数 + `fetch_sub`：
-
-```cpp
-struct ZooAsyncCtx {
-    std::atomic<int> refs{2};      // 调用方 1 个，回调 1 个
-    void Release() { if (refs.fetch_sub(1, std::memory_order_acq_rel) == 1) delete this; }
-};
-
-// 调用方
-if (!WaitZooAsync(ctx, 3000)) {
-    LOG_WARN(...);
-    ctx->Release();      // ← 放弃自己的引用，由回调负责最后一个
-    return "";
-}
-// 成功：也调 ctx->Release()，但此时回调可能已经释放过了 → 由引用计数保证只删一次
-ctx->Release();
-sem_destroy 需要延后……
-
-// 回调
-sem_post(&ctx->sem);
-ctx->Release();
-```
-
-**但 `sem_destroy` 的时机还是麻烦**——因为它不能在回调还在用 `sem` 的时候销毁。把它们打包进一个对象、由最后一个 `Release` 统一销毁才行。
-
-**我为什么没这么做**：
-
-1. **两个窗口都极窄**。窗口一是几条指令的竞态；窗口二是「回调恰好抢在 `store` 之前读」。
-2. **失败模式是「泄漏几十字节」和「理论上可能 UAF」**——我判断在当前调用频率下（每次 RPC 发现失败才触发）风险可接受。
-3. **修复的复杂度不低**（引用计数 + `sem` 生命周期捆绑），而且要仔细验证所有路径。
-
-**但这是个真实的技术债，我不会说它「没问题」。** 如果要做到生产级，我会用引用计数方案，或者更彻底地——**用 `std::future`/`std::promise` 替代裸信号量**，让标准库管理同步原语的生命周期。
-
-**另外还有个更简单的替代方案**：**ctx 不用堆分配，而是用「调用方栈上的对象 + 回调里只 `memcpy` 数据、不 delete」**——但这样回调仍然可能访问已销毁的栈对象。**所以根本问题还是「谁活得更久」**，没有捷径。
-
-**面试官想听什么**
-
-- 能**自己指出**两个残余窗口，并**构造出具体的时序**
-- 能给出**正确的修法**（引用计数仲裁销毁责任）
-- 能说清**为什么没做**（窗口极窄 + 修复复杂度），但**不说「所以没问题」**
 
 ---
 

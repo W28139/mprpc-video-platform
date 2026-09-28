@@ -60,7 +60,7 @@ xu
 
 ### RPC框架层：
 
-- **协议帧 magic/version 演进与防护**：`[total_len(4B)] + [magic "MR"(2B)] + [version(2B)] + [payload]`，单帧上限 64MB；长度非法直接清缓冲、magic/version 错误拒绝该帧——坏包在协议层被拒，而不是交给 protobuf 解析崩溃；双端再做 args_size/response_size 内容自校验
+- **协议帧长度前缀防护**：`[total_len(4B, network order)] + [payload]`，单帧上限 64MB；长度非法直接清缓冲、拒绝该帧——坏包在协议层被拒，而不是交给 protobuf 解析崩溃；双端再做 response_size 内容自校验
 - **ZK 节点结构**：`/mprpc/services/{service}/{method}/instance-*` 临时顺序节点，同方法多实例天然支持，Provider 崩溃节点自动消失；永久节点只创建一次
 - **三级服务发现缓存**：本地 30s TTL → Redis 集中缓存（多进程共享发现结果、省 ZK 往返）→ ZK 兜底并双写回前两级；连接失败时 HDEL 让所有进程同时失效，不依赖 watch 也无失效风暴，Redis 不可用时 TTL 自愈
 - **连接池按 endpoint 分片 + 每连接互斥**：同步模型下"每连接一把锁、一连接一请求在途"，天然无响应错配；连接级失败整片清池重建——专治服务端回收空闲连接导致客户端积压死连接的问题
@@ -78,11 +78,11 @@ xu
 - **失败失效链路 + 只重试一次**：连接失败 → ① 清该 endpoint 连接池（避免取到已断连接）② 删服务发现缓存 ③ 重新查 ZK ④ 用新 endpoint 重试一次。重试只做一次而非无限循环（ZK 故障或全集群宕机时不进入死循环）；"取连接"与"发请求"分离，TCP 连接延迟建立只在真正发送数据时
 - **非阻塞 connect 可超时握手**：connect() 返回 EINPROGRESS → poll(POLLOUT, timeoutMs) → getsockopt(SO_ERROR) 确认真实错误 → 恢复非阻塞标志 + 设置 SO_SNDTIMEO/SO_RCVTIMEO——不依赖内核默认 75s 连接超时
 - **SendAll/RecvAll 循环收发**：send() 不保证一次写完（大请求/发送缓冲紧张时只写部分），统一循环发送直到写完；接收统一 RecvAll，kMaxRpcFrameSize 64MB 上限防恶意/损坏帧
-- **服务端七项边界检查 + 坏包也回包**：header_size 合法 → RpcHeader 可反序列化 → args_size 与实际长度一致 → service 存在 → method 存在 → 参数可解析，任何一步失败都返回带 error_code 的响应；连 header 都解不出也回 request_id=0 的错误帧——客户端绝不干等超时
+- **服务端链式边界检查 + 坏包也回包**：header_size 合法 → RpcHeader 可反序列化 → service/method 非空且存在 → 参数可解析，任何一步失败都返回带 error_code 的响应；连 header 都解不出也回 request_id=0 的错误帧——客户端绝不干等超时
 - **服务端消费 deadline**：OnMessage 解码 header 后、进 work pool 前检查 nowMs > deadline_ms 直接回 RPC_TIMEOUT——请求在队列里排队过期就丢弃，不做无效计算；对视频转码这类长耗时场景尤其重要（转码排队 30s、客户端超时 10s 时服务端不该白算）
 - **框架初始化不替业务做决策**：MprpcApplication::Init()/RpcProvider::Run() 返回 bool，由业务自己决定退出/降级/重试；配置读取防御化（LoadRequired 必填、LoadInt 范围校验、修复空白行与重复初始化残留）——避免空 IP、空端口这类隐式错误
 - **所有权与 done 闭包契约**：Provider 只存裸指针用于方法分发、不接管所有权（栈或全局对象，杜绝 new 完不管的泄漏写法）；done 绑定 SendRpcResponse 统一回包——同步方法由 protobuf 默认实现自动调 done->Run()、异步方法必须手动调，漏调导致请求永久悬挂
-- **两层帧头各司其职**：外层 total_len 由网络层 codec 消费（只认长度不解析内容，管帧边界、半帧留在 Buffer）；内层 header_size 由应用层消费（提取 service/method/args_size）——协议演进只需换 codec 实现
+- **两层帧头各司其职**：外层 total_len 由网络层 codec 消费（只认长度不解析内容，管帧边界、半帧留在 Buffer）；内层 header_size 由应用层消费（定位 RpcHeader 起点，args 取其后的剩余字节）——协议演进只需换 codec 实现
 
 ### 业务层：
 
@@ -174,7 +174,7 @@ mprpc 基于 wevix_muduo 构建，protobuf 定义接口，ZooKeeper 做服务注
 自定义二进制帧协议，客户端按长度前缀自动拆帧：
 
 ```
-[total_len(4B)] + [magic(2B, "MR")] + [version(2B)] + [payload]
+[total_len(4B, network order)] + [payload]
   payload 请求:   [header_size(4B)] + [RpcHeader(protobuf)] + [args(protobuf)]
   payload 响应:   [response_header_size(4B)] + [RpcResponseHeader(protobuf)] + [response_body]
 ```

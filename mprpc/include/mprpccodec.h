@@ -64,6 +64,7 @@ inline wevix_muduo::CodecResult RpcMessageCodec(wevix_muduo::Buffer* buf, std::s
     }
 
     uint32_t total_len = 0;
+    // 读取头部4字节，转化为int，代表总长度
     if (!mprpc::ReadNetworkUint32(buf->peek(), buf->readableBytes(), &total_len))
     {
         return wevix_muduo::CodecResult::kNeedMoreData;
