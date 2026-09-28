@@ -11,7 +11,6 @@
 #include "mprpcapplication.h"
 #include "mprpcchannel.h"
 #include "mprpccontroller.h"
-#include "mprpcmetrics.h"
 #include "rpcprovider.h"
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
@@ -411,9 +410,6 @@ public:
         // 未超次：增加重试计数，重置为 WAITING
         int from_status = shard.status;   // 快照前置状态（条件更新防覆盖）
         shard.retry_count++;
-        // shard 重试观测（重试计数每次 +1 都记录）
-        mprpc::MetricsRegistry::GetInstance()
-            .Counter("shard_retry_total", "shard 重试总次数").Inc();
         shard.status = static_cast<int32_t>(ShardStatus::SHARD_RETRYING);
         shard.assigned_worker_id.clear();
         shard.attempt_id.clear();
@@ -493,8 +489,6 @@ public:
             {
                 // 增加重试计数，重置为 WAITING
                 shard.retry_count++;
-                mprpc::MetricsRegistry::GetInstance()
-                    .Counter("shard_retry_total", "shard 重试总次数").Inc();
                 shard.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
                 shard.assigned_worker_id.clear();
                 shard.attempt_id.clear();
@@ -1144,25 +1138,6 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
 
         ++metrics_round;
 
-        // 一个"守卫"结构体
-        struct ScheduleLoopIterGuard
-        {
-            // 构造时：记开始时间
-            std::chrono::steady_clock::time_point t0 = std::chrono::steady_clock::now();
-            // 析构时：算耗时上报
-            ~ScheduleLoopIterGuard()
-            {
-                // 耗时 = 现在 - 开始
-                double ms = std::chrono::duration<double, std::milli>(
-                    std::chrono::steady_clock::now() - t0).count();
-                mprpc::MetricsRegistry::GetInstance()
-                    .Histogram("schedule_loop_duration_ms", "调度循环单次迭代耗时（毫秒）",
-                               std::vector<double>{10, 25, 50, 100, 250, 500, 1000,
-                                                   2000, 5000, 10000})
-                    .Observe(ms);
-            }
-        } iter_guard;
-
         // RUNNING/ASSIGNED 超时重扫
         // Worker 接受 shard 后卡死（ffmpeg 挂死但心跳存活），导致 shard 永久停留在 ASSIGNED/RUNNING。
         // 超时后重置为 WAITING 让其他 Worker 接管。
@@ -1404,9 +1379,6 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                         // 递增 retry_count → 新 attempt_id 与旧执行不同
                         // RC 的 attempt 校验可正确拒绝旧 Worker 的迟到结果
                         fresh.retry_count++;
-                        // 阶段 11：shard 重试观测（ASSIGNED 卡死超时重试）
-                        mprpc::MetricsRegistry::GetInstance()
-                            .Counter("shard_retry_total", "shard 重试总次数").Inc();
                         fresh.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
                         fresh.assigned_worker_id.clear();
                         fresh.attempt_id.clear();
@@ -1491,9 +1463,6 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                 }
 
                 fresh.retry_count++;
-                // shard 重试观测
-                mprpc::MetricsRegistry::GetInstance()
-                    .Counter("shard_retry_total", "shard 重试总次数").Inc();
                 fresh.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
                 fresh.assigned_worker_id.clear();
                 fresh.attempt_id.clear();
@@ -1712,58 +1681,6 @@ int main(int argc, char** argv)
     RedisClient::GetInstance().Init();
     MqClient::GetInstance().Init();
 
-    // ── 阶段 11：可观测性（metrics_port<=0 时不启用，可降级组件） ──
-    int metrics_port = MprpcApplication::GetConfig().LoadInt("metrics_port", 0, 0, 65535);
-    mprpc::MetricsHttpServer metrics_server;
-    metrics_server.Init(metrics_port);
-    auto& metrics_reg = mprpc::MetricsRegistry::GetInstance();
-    // 内置日志告警兜底：
-    // 1. 本进程出站 RPC P99 延迟 > 1000ms
-    // 2. 调度队列积压（WAITING+ASSIGNED shard）> 100
-    metrics_reg.RegisterAlertRule(
-        {"rpc_latency_p99_high", "WARN",
-         []() {
-             return mprpc::MetricsRegistry::GetInstance()
-                 .HistogramQuantile("rpc_latency_ms", 0.99);
-         },
-         1000, true, 0, "本进程 RPC P99 延迟超过 1000ms"});
-    metrics_reg.RegisterAlertRule(
-        {"scheduler_backlog", "WARN",
-         []() {
-             return mprpc::MetricsRegistry::GetInstance()
-                 .Gauge("scheduler_queue_size", "调度队列长度").Value();
-         },
-         100, true, 0, "调度队列积压超过 100（WAITING+ASSIGNED shard）"});
-    // Gauge 采样器：每 5s 用一次 GROUP BY 查询刷新 shard 状态分布
-    metrics_reg.RegisterSampler([](mprpc::MetricsRegistry& r) {
-        auto counts = ShardStore::GetInstance().CountByStatus();
-        if (counts.empty())
-        {
-            // 查询失败/无数据：跳过本轮，保持旧值（避免 0 值尖刺误告警）
-            return;
-        }
-        // shard_count{status=...} 全状态系列：未出现的状态显式置 0，
-        // 防止 Prometheus/Grafana 残留旧值（状态归零后曲线应为 0）
-        for (int32_t s = static_cast<int32_t>(ShardStatus::SHARD_STATUS_UNKNOWN);
-             s <= static_cast<int32_t>(ShardStatus::SHARD_CANCELED); ++s)
-        {
-            auto it = counts.find(s);
-            double n = (it == counts.end()) ? 0.0 : static_cast<double>(it->second);
-            r.Gauge("shard_count", "各状态 shard 数量",
-                    {{"status", std::to_string(s)}}).Set(n);
-        }
-        r.Gauge("shard_running", "执行中的 shard 数")
-            .Set(static_cast<double>(counts[static_cast<int32_t>(ShardStatus::SHARD_RUNNING)]));
-        r.Gauge("shard_waiting", "等待调度的 shard 数")
-            .Set(static_cast<double>(counts[static_cast<int32_t>(ShardStatus::SHARD_WAITING)]));
-        // 调度队列 = WAITING（等分配）+ ASSIGNED（已分配未确认运行）
-        double queue = static_cast<double>(
-            counts[static_cast<int32_t>(ShardStatus::SHARD_WAITING)] +
-            counts[static_cast<int32_t>(ShardStatus::SHARD_ASSIGNED)]);
-        r.Gauge("scheduler_queue_size", "调度队列长度（WAITING+ASSIGNED）").Set(queue);
-    }, 5000);
-    metrics_server.Start();
-
     // 启动后台调度循环线程 + MQ 消费线程（阶段 10：Push 调度）
     std::atomic<bool> scheduling_stopped{false};
     std::thread scheduling_thread(SchedulingLoop, std::ref(scheduling_stopped));
@@ -1778,7 +1695,6 @@ int main(int argc, char** argv)
         scheduling_stopped = true;
         if (scheduling_thread.joinable()) scheduling_thread.join();
         if (mq_thread.joinable()) mq_thread.join();
-        metrics_server.Stop();
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }
@@ -1787,7 +1703,6 @@ int main(int argc, char** argv)
     scheduling_stopped = true;
     if (scheduling_thread.joinable()) scheduling_thread.join();
     if (mq_thread.joinable()) mq_thread.join();
-    metrics_server.Stop();
 
     wevix_muduo::AsyncLogger::GetInstance().stop();
     return 0;

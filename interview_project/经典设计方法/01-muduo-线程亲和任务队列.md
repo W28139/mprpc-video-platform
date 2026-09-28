@@ -613,7 +613,6 @@ loop_->runInLoop(std::bind(&Connection::sendInLoop, shared_from_this(), data));
 | 回调注册（`setOnMessageCallback` 等） | **Observer** | GoF | 网络层与业务解耦 |
 | `PoolAllocator<T>` | STL **Allocator** 概念 | — | 让 STL 容器走内存池，3.8× |
 | `FfmpegExecutor` 全静态方法 | **Utility / Facade** | — | 屏蔽 ffmpeg 命令行细节 |
-| `MetricsHttpServer` port≤0 时 Start/Stop 为 no-op | **Null Object** | GoF | 可降级组件，不影响主流程 |
 
 **⚠️ 关于 Singleton 要主动说代价**：三个 Store 是进程内单例，导致**多进程部署时数据完全隔离**，跨进程一致性只能靠 RPC 同步或（阶段 9 之后）MySQL 兜底。这是被现实教育过的点，主动说出来比被追问出来好。
 
@@ -706,7 +705,7 @@ loop_->runInLoop(std::bind(&Connection::sendInLoop, shared_from_this(), data));
 **答**：四点，按优先级：
 
 1. **补 `callingPendingFunctors_` 条件唤醒** —— 最直接的开销优化
-2. **队列加背压/上限** —— 目前无界，loop 持续繁忙 + 生产者疯狂投递会内存膨胀。muduo 也是无界的，但至少应该能观测（队列长度作为 metric 导出）
+2. **队列加背压/上限** —— 目前无界，loop 持续繁忙 + 生产者疯狂投递会内存膨胀。muduo 也是无界的，但至少应该能观测（把队列长度暴露出来）
 3. **闭环延迟可观测** —— 目前没有「任务从入队到执行」的耗时指标。这个数字直接反映 loop 是否被拖住，是排查「连接卡顿」的关键信号
 4. **一个更根本的**：`runInLoop` 的语义是「尽快执行」而非「立即执行」，但接口名容易让人误以为立即。应该补文档或在调试日志里标注排队延迟 —— 目前**队积压是完全静默的**
 

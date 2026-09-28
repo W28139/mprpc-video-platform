@@ -17,7 +17,6 @@
 #include "mprpcapplication.h"
 #include "mprpcchannel.h"
 #include "mprpccontroller.h"
-#include "mprpcmetrics.h"
 #include "rpcprovider.h"
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
@@ -355,13 +354,6 @@ private:
         auto ts_end = std::chrono::steady_clock::now();
         int64_t transcode_elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
             ts_end - ts_start).count();
-
-        // 转码耗时观测
-        mprpc::MetricsRegistry::GetInstance()
-            .Histogram("transcode_duration_ms", "单 shard 转码耗时（毫秒）",
-                       std::vector<double>{100, 500, 1000, 2000, 5000, 10000,
-                                           30000, 60000, 120000, 300000})
-            .Observe(static_cast<double>(transcode_elapsed));
 
         // 处理 cancel 情况
         if (running_shard->cancelled)
@@ -946,22 +938,6 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    // ── 阶段 11：可观测性（metrics_port<=0 时不启用，可降级组件） ──
-    // 放在 Worker 配置校验 + FFmpeg 检查之后：前面的失败路径不涉及
-    // metrics 线程的启动/清理，保持每个失败分支只做日志清理
-    int metrics_port = config.LoadInt("metrics_port", 0, 0, 65535);
-    mprpc::MetricsHttpServer metrics_server;
-    metrics_server.Init(metrics_port);
-    // 内置日志告警兜底：本进程出站 RPC P99 延迟 > 1000ms
-    mprpc::MetricsRegistry::GetInstance().RegisterAlertRule(
-        {"rpc_latency_p99_high", "WARN",
-         []() {
-             return mprpc::MetricsRegistry::GetInstance()
-                 .HistogramQuantile("rpc_latency_ms", 0.99);
-         },
-         1000, true, 0, "本进程 RPC P99 延迟超过 1000ms"});
-    metrics_server.Start();
-
     // ── 创建 WorkerServiceImpl ──────────────────────────────────────
     auto* worker_service = new WorkerServiceImpl();
 
@@ -981,7 +957,6 @@ int main(int argc, char** argv)
         LOG_ERROR("WorkerService start failed");
         heartbeat_stopped = true;
         if (heartbeat_thread.joinable()) heartbeat_thread.join();
-        metrics_server.Stop();
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }
@@ -989,7 +964,6 @@ int main(int argc, char** argv)
     // Provider 退出后清理
     heartbeat_stopped = true;
     if (heartbeat_thread.joinable()) heartbeat_thread.join();
-    metrics_server.Stop();
 
     wevix_muduo::AsyncLogger::GetInstance().stop();
     return 0;

@@ -26,7 +26,7 @@ mprpc-video-platform（即原 muduo_im）是一个基于 Reactor 模式的 Linux
 | 8. 压测、故障测试和文档整理 | ✅ 代码审查与Bug修复（2026-08-01），压测待进行 |
 | 9. 数据持久化（MySQL） | ✅ 完成（2026-08-03） |
 | 10. 中间件集成（Redis+MQ） | ✅ 完成（2026-08-03，三批全部完成；2026-08-04 复验修复 MqClient 消费锁缺陷；真实 Broker 重启实测待用户 sudo） |
-| 11. 可观测性升级（Prometheus+Grafana） | ✅ 完成（2026-08-03，配置产物交付 + curl/日志告警实测；Prometheus/Grafana 部署待用户按 README 安装） |
+| 11. 可观测性升级（Prometheus+Grafana） | ~~完成~~ 已删除（2026-09-28 移出项目，详见下文说明） |
 | 12. 客户端 GUI（Qt6 桌面应用） | ~~完成~~ 已删除（2026-08-08 移出项目，详见下文说明） |
 | 13. 容器化与 CI/CD | ✅ 完成（2026-08-04，`docker/` + `docker-compose.yml` + `.github/workflows/ci.yml`；compose 一键启动/集成测试/--scale 全部本机实测通过，CI 绿勾待 push） |
 
@@ -312,7 +312,6 @@ AsyncLogger::init() → MprpcApplication::Init(argc, argv) → RpcProvider.Notif
 | `mysqluser` / `mysqlpassword` | 必填 | MySQL 账号/密码 |
 | `mysqldbname` | video_platform | MySQL 数据库名 |
 | `mysql_pool_size` | 4 | MySQL 连接池大小（1-64，预创建+线程安全借用） |
-| `metrics_port` | 0（关闭） | Prometheus metrics HTTP 端口（阶段 11，<=0 不启用；单机各服务 9091-9097） |
 
 ## 下一步工作
 
@@ -341,20 +340,15 @@ Qt6 桌面客户端（2026-08-04 完成，`video_platform/gui/` + `bin/video_gui
 
 **MqClient 消费锁占用 → mq=push 误判 + WARN 刷屏**：`ConsumeBlocking` 锁内 poll(2s) + 消费线程紧循环 → consume_mutex_ 几乎 100% 被占 → `connected()` try_lock_for(1s) 永远失败 → `consume lock busy` 每日刷 1000+ 条 + SchedulingLoop 永远 `(mq=pull)`。修复：① poll 移出锁（fd 独立于连接内部状态，消费连接只由消费线程销毁，poll 期间无并发写者）② `connected()` 改用 `std::atomic<bool> consume_alive_` 无锁读取 ③ 销毁分支持锁且先置标志。验证：`interval=5000ms (mq=push)` 首次正确识别、刷屏消失、Push 分配 24ms。
 
-### 阶段 11（✅ 2026-08-03）
+### 阶段 11 已删除（2026-09-28）
 
-可观测性升级，详见 `doc/更新业务日志/12. 阶段11可观测性升级.md`。
+自研可观测性栈（`mprpc/include/mprpcmetrics.h` + `src/mprpcmetrics.cc`，957 行：Counter/Gauge/Histogram + Prometheus text format 0.0.4 导出 + `MetricsHttpServer` + 采样器 + 日志告警循环）、5 个服务埋点、`metrics_port` 配置项（12 个 .conf）、配置产物 `video_platform/observability/`（prometheus.yml / alerts.yml / grafana-dashboard.json / README.md）、`doc/更新业务日志/12. 阶段11可观测性升级.md`、`doc/设计问题/业务/15. Grafana面板可观测性设计.md` — **全部移出项目**。Grafana 面板需 Prometheus + Grafana 外部组件才能查看，保留成本高于收益。
 
-核心改动：
-- 新增 `mprpc/include/mprpcmetrics.h` + `src/mprpcmetrics.cc`（框架层指标库：Counter/Gauge/Histogram（固定桶+前缀和导出+线性插值分位）、标签分片、`ExportText()` text format 0.0.4、Gauge 采样器线程、AlertLoop 日志告警兜底（30s 一轮，触发/恢复打日志）、`MetricsHttpServer`（独立线程 + 自研 TcpServer 起 HTTP，GET /metrics 200 / 其余 404，可降级组件）
-- 插桩：mprpcchannel CallMethod RAII 计时 → `rpc_latency_ms{method}`；job_service `job_submitted_total`；RC `MarkJobTerminal` 单入口 → `job_success/failed_total`；scheduler 4 处 `retry_count++` → `shard_retry_total` + SchedulingLoop 迭代 RAII → `schedule_loop_duration_ms` + 5s 采样器（新增 `ShardStore::CountByStatus()` 单条 GROUP BY）→ `shard_running/waiting/scheduler_queue_size(WAITING+ASSIGNED)/shard_count{status}`；worker `transcode_duration_ms`；worker_manager 5s 采样器 → `worker_online` + 每 Worker 负载
-- 内置日志告警 4 条：worker_offline(WM)、scheduler_backlog(Scheduler)、job_failed_rate_high(RC, RateEstimator 5min 窗口)、rpc_latency_p99_high(全部服务)
-- 配置产物 `video_platform/observability/`：prometheus.yml（9091-9097）、alerts.yml（4 条 PromQL）、grafana-dashboard.json（4 行：Job 吞吐/Shard 分布/Worker 热力图/RPC 延迟）、README.md
-- 验收：5 端口 curl 200 + 404；全链路任务 SUCCESS 后各 counter/gauge/histogram 增长；故障注入实测 `ALERT [worker_offline] firing/recovered` 与 `ALERT [job_failed_rate_high] firing`；**Prometheus 2.45（apt）+ Grafana 12.0.0（/home/wevix/grafana）实测部署**：5 targets UP、4 规则加载、dashboard 导入成功、面板数据可查（datasource proxy 需 `X-Grafana-Org-Id: 1` 头）
+删除后：框架核心 `MprpcChannel::CallMethod` 不再无条件依赖观测层（原每次 RPC 付一次 string 拼接 + `RpcLatencyHistogram` 全局锁，且 `metrics_port<=0` 关不掉）；`docker-compose.yml` 移除 4 个 metrics 端口映射。
 
-**实测暴露并修复两个框架级缺陷**（详见日志 12 Bug 5/6）：
-- **ZK 同步调用无限阻塞**（`ZookeeperUtil.cc`）：`zoo_get/zoo_get_children` 在连接会话未建立时无限等待 → 改异步 API + 3s 信号量超时 + `zoo_state()` 快速失败 + 回调 `caller_gone` 延迟回收防 UAF
-- **RabbitMQ 消费锁死**（`mq_client.h/.cpp`）：`amqp_consume_message` 内部 poll 超时不可靠，消费线程持锁无限阻塞 → SchedulingLoop 的 `connected()` 永久等锁停摆 → ①消费改自控 `poll(fd)` + `amqp_consume_message({0,0})` 立即读 ②`consume_mutex_` 改 `std::timed_mutex`，`connected()/Ack()/Reconnect()` 用 `try_lock_for(1s)` 降级（打 `consume lock busy, degrade to Pull polling`）③`OpenChannel` 后 `SO_RCVTIMEO/SO_SNDTIMEO` 2s 兜底。MQ 故障 → Pull 轮询接管（实测 5/5 SUCCESS），恢复后 Push 自动切回
+**该阶段实测暴露的两个框架级缺陷修复予以保留**（与可观测性无关，属框架健壮性资产）：
+- **ZK 同步调用无限阻塞**（`ZookeeperUtil.cc`）：`zoo_get/zoo_get_children` 在连接会话未建立时无限等待 → 改异步 API + 3s 信号量超时 + `zoo_state()` 快速失败 + 回调 `caller_gone` 延迟回收防 UAF。细节另见 `doc/审查报告/2. mprpc层bug排查.md`
+- **RabbitMQ 消费锁死**（`mq_client.h/.cpp`）：`amqp_consume_message` 内部 poll 超时不可靠，消费线程持锁无限阻塞 → SchedulingLoop 的 `connected()` 永久等锁停摆 → ①消费改自控 `poll(fd)` + `amqp_consume_message({0,0})` 立即读 ②`consume_mutex_` 改 `std::timed_mutex`，`connected()/Ack()/Reconnect()` 用 `try_lock_for(1s)` 降级（打 `consume lock busy, degrade to Pull polling`）③`OpenChannel` 后 `SO_RCVTIMEO/SO_SNDTIMEO` 2s 兜底。MQ 故障 → Pull 轮询接管（实测 5/5 SUCCESS），恢复后 Push 自动切回。细节另见 `doc/设计问题/业务/14. 消息队列（RabbitMQ）中间件设计.md`
 
 ### 阶段 9（已完成 ✅ 2026-08-03）
 

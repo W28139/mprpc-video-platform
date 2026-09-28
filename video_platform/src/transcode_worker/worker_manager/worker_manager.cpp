@@ -10,7 +10,6 @@
 #include "mprpcapplication.h"
 #include "mprpcchannel.h"
 #include "mprpccontroller.h"
-#include "mprpcmetrics.h"
 #include "rpcprovider.h"
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
@@ -323,53 +322,6 @@ int main(int argc, char** argv)
 
     // 阶段 10：Redis 是可降级组件，Init 失败只 WARN 不拒绝启动
     RedisClient::GetInstance().Init();
-
-    // ── 阶段 11：可观测性（metrics_port<=0 时不启用，可降级组件） ──
-    int metrics_port = MprpcApplication::GetConfig().LoadInt("metrics_port", 0, 0, 65535);
-    mprpc::MetricsHttpServer metrics_server;
-    metrics_server.Init(metrics_port);
-    auto& metrics_reg = mprpc::MetricsRegistry::GetInstance();
-    // 内置日志告警兜底：
-    // 1. 本进程出站 RPC P99 延迟 > 1000ms
-    // 2. 在线 Worker 数为 0（平台无法执行任何转码）
-    metrics_reg.RegisterAlertRule(
-        {"rpc_latency_p99_high", "WARN",
-         []() {
-             return mprpc::MetricsRegistry::GetInstance()
-                 .HistogramQuantile("rpc_latency_ms", 0.99);
-         },
-         1000, true, 0, "本进程 RPC P99 延迟超过 1000ms"});
-    metrics_reg.RegisterAlertRule(
-        {"worker_offline", "ERROR",
-         []() {
-             return mprpc::MetricsRegistry::GetInstance()
-                 .Gauge("worker_online", "在线 Worker 数").Value();
-         },
-         1, false, 0, "没有在线转码 Worker"});
-    // Gauge 采样器：每 5s 扫描 WorkerStore 刷新在线数与各 Worker 负载
-    metrics_reg.RegisterSampler([](mprpc::MetricsRegistry& r) {
-        auto workers = WorkerStore::GetInstance().ListAll();
-        if (workers.empty() && WorkerStore::GetInstance().Count() == 0)
-        {
-            // 查询失败：跳过本轮，保持旧值（避免 0 值尖刺误告警）
-            return;
-        }
-        int online = 0;
-        for (const auto& w : workers)
-        {
-            std::vector<mprpc::MetricLabel> lbl{{"worker_id", w.worker_id}};
-            r.Gauge("worker_cpu_usage", "Worker CPU 使用率（%）", lbl)
-                .Set(static_cast<double>(w.cpu_usage));
-            r.Gauge("worker_memory_usage", "Worker 内存使用率（%）", lbl)
-                .Set(static_cast<double>(w.memory_usage));
-            r.Gauge("worker_running_shards", "Worker 正在执行的 shard 数", lbl)
-                .Set(static_cast<double>(w.current_running_shards));
-            if (w.status == static_cast<int32_t>(WorkerStatus::WORKER_ONLINE))
-                ++online;
-        }
-        r.Gauge("worker_online", "在线 Worker 数").Set(static_cast<double>(online));
-    }, 5000);
-    metrics_server.Start();
 
     // 启动心跳超时检测后台线程
     std::atomic<bool> timeout_stopped{false};

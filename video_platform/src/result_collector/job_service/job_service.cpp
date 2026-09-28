@@ -8,7 +8,6 @@
 #include "mprpcapplication.h"
 #include "mprpcchannel.h"
 #include "mprpccontroller.h"
-#include "mprpcmetrics.h"
 #include "rpcprovider.h"
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
@@ -64,10 +63,6 @@ public:
         job.shard_duration_sec = request->shard_duration_sec();
         job.created_at         = NowMs();
         job.updated_at         = NowMs();
-
-        // 任务提交观测（参数校验通过、平台实际受理后才计数，保证 job_failed_rate 的分母 = 平台受理数）
-        mprpc::MetricsRegistry::GetInstance()
-            .Counter("job_submitted_total", "提交的任务总数").Inc();
 
         // 写入MySQL内存存储
         JobStore::GetInstance().Insert(job);
@@ -470,21 +465,6 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    // ── 阶段 11：可观测性（metrics_port<=0 时不启用，可降级组件） ──
-    int metrics_port = MprpcApplication::GetConfig().LoadInt("metrics_port", 0, 0, 65535);
-    mprpc::MetricsHttpServer metrics_server;
-    metrics_server.Init(metrics_port);
-    // 内置日志告警兜底（Prometheus 未部署时仍能发现异常）：
-    // 本进程出站 RPC P99 延迟 > 1000ms
-    mprpc::MetricsRegistry::GetInstance().RegisterAlertRule(
-        {"rpc_latency_p99_high", "WARN",
-         []() {
-             return mprpc::MetricsRegistry::GetInstance()
-                 .HistogramQuantile("rpc_latency_ms", 0.99);
-         },
-         1000, true, 0, "本进程 RPC P99 延迟超过 1000ms"});
-    metrics_server.Start();
-
     RpcProvider provider;
     provider.NotifyService(new JobServiceImpl());
 
@@ -497,14 +477,12 @@ int main(int argc, char** argv)
         LOG_ERROR("JobService start failed");
         stop_flag = true;
         pending_thread.join();
-        metrics_server.Stop();
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }
 
     stop_flag = true;
     pending_thread.join();
-    metrics_server.Stop();
     wevix_muduo::AsyncLogger::GetInstance().stop();
     return 0;
 }

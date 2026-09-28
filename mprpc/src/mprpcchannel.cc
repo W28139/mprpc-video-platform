@@ -28,7 +28,6 @@
 #include"mprpccontroller.h"
 #include"mprpccodec.h"
 #include"mprpcredis.h"
-#include"mprpcmetrics.h"
 #include"ZookeeperUtil.h"
 #include"wevix_muduo/AsyncLogger.h"
 // 客户端间接调用，借助protubuf，序列化需求，找到对应服务器ip/port，发起连接，获取结果并反序列化
@@ -790,22 +789,6 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
     const google::protobuf::ServiceDescriptor* sd = method->service();
     std::string service_name = sd->name();
     std::string method_name = method->name();
-
-    // RPC 延迟观测。RAII 守卫覆盖函数体所有 return 路径
-    //（服务发现失败/超时/解析失败等 early return 同样计延迟）。
-    struct RpcLatencyGuard
-    {
-        std::string method;
-        std::chrono::steady_clock::time_point t0;
-        explicit RpcLatencyGuard(std::string m)
-            : method(std::move(m)), t0(std::chrono::steady_clock::now()) {}
-        ~RpcLatencyGuard()
-        {
-            double ms = std::chrono::duration<double, std::milli>(
-                std::chrono::steady_clock::now() - t0).count();
-            mprpc::RpcLatencyHistogram(method).Observe(ms);
-        }
-    } rpc_latency_guard(service_name + "." + method_name);
 
     // request_id 会写进请求头，响应回来后必须一致，防止长连接下串包或协议错配。
     uint64_t requestId = NextRequestId();

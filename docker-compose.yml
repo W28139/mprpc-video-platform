@@ -88,7 +88,6 @@ services:
       mysql:     { condition: service_healthy }
     ports:
       - "19001:9001"    # RPC（宿主 9001 被本机部署占用 → 19001）
-      - "19091:9091"    # Prometheus metrics
     volumes:
       - ./program_log:/app/program_log
     restart: unless-stopped
@@ -102,8 +101,7 @@ services:
       zookeeper: { condition: service_healthy }
       mysql:     { condition: service_healthy }
     ports:
-      - "19002:9002"    # 替代端口（宿主 9002/9092 被本机部署占用）
-      - "19092:9092"
+      - "19002:9002"    # RPC（宿主 9002 被本机部署占用 → 19002）
     volumes:
       - ./program_log:/app/program_log
       - ./data/videos:/data/videos
@@ -127,8 +125,7 @@ services:
       retries: 10
       start_period: 5s
     ports:
-      - "19003:9003"    # 替代端口（宿主 9003/9093 被本机部署占用）
-      - "19093:9093"
+      - "19003:9003"    # RPC（宿主 9003 被本机部署占用 → 19003）
     volumes:
       - ./program_log:/app/program_log
     restart: unless-stopped
@@ -159,8 +156,7 @@ services:
       zookeeper: { condition: service_healthy }
       mysql:     { condition: service_healthy }
     ports:
-      - "19005:9005"    # 替代端口（宿主 9005/9094 被本机部署占用）
-      - "19094:9094"
+      - "19005:9005"    # RPC（宿主 9005 被本机部署占用 → 19005）
     volumes:
       - ./program_log:/app/program_log
       - ./data/videos:/data/videos

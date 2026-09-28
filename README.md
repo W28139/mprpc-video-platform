@@ -8,7 +8,7 @@
 wevix_muduo（网络库）→ mprpc（RPC 框架）→ video_platform（分布式视频平台）
 ```
 
-这个项目不是为了演示某个单一技术点。它覆盖的是一条完整的纵深链路：epoll 事件循环、Reactor 网络编程、内存池、异步日志、protobuf 序列化、ZooKeeper 服务发现、分布式任务调度、MySQL 持久化、Redis 缓存、RabbitMQ 事件驱动、Prometheus 可观测性，以及 FFmpeg 真实转码。网络库和 RPC 框架是自研的，平台层集成的中间件全部是真实可用的，不是 mock。整个项目在本地和 Docker 环境都跑通了全链路验证：提交一段视频，经过任务切分、多 Worker 并行转码、结果合并，最终产出完整视频。
+这个项目不是为了演示某个单一技术点。它覆盖的是一条完整的纵深链路：epoll 事件循环、Reactor 网络编程、内存池、异步日志、protobuf 序列化、ZooKeeper 服务发现、分布式任务调度、MySQL 持久化、Redis 缓存、RabbitMQ 事件驱动，以及 FFmpeg 真实转码。网络库和 RPC 框架是自研的，平台层集成的中间件全部是真实可用的，不是 mock。整个项目在本地和 Docker 环境都跑通了全链路验证：提交一段视频，经过任务切分、多 Worker 并行转码、结果合并，最终产出完整视频。
 xu
 
 ## 项目自述
@@ -67,7 +67,6 @@ xu
 - **同步阻塞 + 内核级超时 + deadline 透传**：等响应交给 SO_RCVTIMEO 内核超时；request_id 原子自增、响应必校验防长连接串包；deadline 随请求传到服务端，已过期请求直接拒绝，不浪费 work 线程
 - **失败分级 + 一次重试**：连接级失败清池重建重试、发现级失败失效缓存重新发现，两轮重试互不干扰；15 个错误码分网络/协议/服务治理三层；服务端任何解析失败都回错误帧，客户端不会干等超时
 - **protobuf 反射分发 + IO/Work 线程分离**：GetRequestPrototype().New() 动态创建 request/response，框架零代码生成支持任意 service；IO 线程只拆包投递，业务隔离在固定 work 池，慢方法不饿死连接
-- **自研可观测性栈**：Counter/Gauge/Histogram（固定桶 + 导出时前缀和 + 线性插值算分位）+ 手写 HTTP /metrics 抓取端点 + 30s 日志告警循环——Prometheus 没部署也能从日志发现异常；metrics_port<=0 整体可降级
 - **容器注册地址修复**：rpcserverip=0.0.0.0（Docker 全接口监听）时用 GetLocalIp() 自动探测容器真实 IP 注册 ZK，否则消费者拿到不可路由地址（实测 connect 0.0.0.0 必失败）
 - **ZK 防阻塞封装**：C SDK 同步 API 实测会无限阻塞（7+ 分钟），改异步 API + sem_timedwait 3s 超时 + caller_gone 延迟回收防 UAF + zoo_state 快速失败；stale ephemeral 节点先删后建保证会话绑定
 - **直连模式 + 内嵌 Redis 缓存**：MprpcChannel(ip, port) 跳过服务发现直连，支持定向调用；150 行 mprpcredis 只做 HGET/HSET/EXPIRE/HDEL 集中管理 ZK 缓存，失败自动降级回退
@@ -95,7 +94,7 @@ xu
 - **Redis 双层用途 + 降级语义**：worker 负载快照（调度读路径免 RPC 往返，20s 过期过滤）+ shard 分布式锁（SETNX EX 10 + GET 校验再 DEL）；Redis 是读路径加速器不是数据源，故障降级放行由 MySQL CAS 兜底
 - **MySQL 连接池 + CLIENT_FOUND_ROWS**：固定池预创建 + ping 保活 + RAII 归还；FOUND_ROWS 保证全量覆盖更新能正确判命中；INSERT 1062 幂等；启动自动建表部署零步骤；字符串全转义防注入
 - **FfmpegExecutor：fork+execvp 替代 popen**：不走 shell 无命令注入；poll 非阻塞读管道 + should_cancel 回调 → SIGTERM → 5s 未退 SIGKILL，取消即时生效；-threads 限核防"并发 shard × 全核"CPU 超订；进度解析双向回退
-- **可降级组件 vs fail-fast 分层**：MySQL/ffmpeg 启动必检、失败拒绝服务；Redis/MQ/metrics 连不上只 WARN 自动走替代路径；结果上报三级降级链（MQ 发布 → 直连 RPC 重试 3 次 → 心跳线程兜底重试）
+- **可降级组件 vs fail-fast 分层**：MySQL/ffmpeg 启动必检、失败拒绝服务；Redis/MQ 连不上只 WARN 自动走替代路径；结果上报三级降级链（MQ 发布 → 直连 RPC 重试 3 次 → 心跳线程兜底重试）
 - **全链路幂等 attempt_id**：每次重试 attempt 递增，结果上报/重调度/取消三条路径共享同一语义——MQ 重投、RPC 重试、进程重启都不会双份执行，at-least-once 投递 + 恰好一次生效
 - **后台扫描三件套互相兜底**：JobService.PendingScanLoop（10s）/ Scheduler.SchedulingLoop（启动恢复+超时重扫+轮询分配）/ RC.TerminalSweepLoop（15s 兜底终态判定+补 merge），任一 RPC 链路断裂都有周期任务收尾
 - **Worker 弹性扩容**：worker_id 环境变量 > 配置 > hostname 三级解析，`--scale transcode_worker=3` 副本天然唯一；免分布式 ID 方案 prefix_时间戳_计数器_随机数，避开 /dev/urandom 在容器里可能阻塞的问题
@@ -122,12 +121,10 @@ xu
 - **CPU 采集的三次演进**：/proc/stat 是主机级指标（单机多 Worker 下繁忙邻居让空闲 Worker 报 CPU>90 拒收全部任务）→ /proc/self/stat 进程级（但 cutime/cstime 只统计已收割的已终止子进程，运行中的 ffmpeg 不计入，心跳 CPU 恒 0）→ /proc/self/task/*/children 聚合整个进程树
 - **mock_fail_ratio 故障注入**：配置驱动（0-100）不重编译即可切换故障场景，保留压测/演示能力；thread_local mt19937 每线程独立生成器不共享竞争；失败时 error_msg 携带 ratio 和 roll 值便于复现
 
-**可观测性专题（指标口径即需求）：**
+**框架健壮性专题：**
 
-- **直方图只加命中桶、导出时前缀和**：朴素实现每次 Observe 要自增 N 个桶原子量；改为命中桶 +1（+count+sum），导出/分位计算时前缀和——热路径只写 1 个原子量
-- **RAII 守卫插桩覆盖所有 early return**：CallMethod 有 ~10 个提前返回路径（序列化失败/帧过大/发现失败/超时/解析失败…），手动计时必然漏掉异常路径——而告警关心的正是异常延迟；RAII 守卫声明在函数体顶部、析构覆盖全部 return。"插桩正确性靠作用域，不靠调用点纪律"
-- **指标口径设计**：scheduler_queue_size = WAITING + ASSIGNED（已分配未开始也是调度积压，与 shard_waiting 严格区分）；shard_count 全枚举显式 Set 含 0（状态归零后 Prometheus 保留旧值 → 饼图出现永不消失的残留扇区）；失败率两套口径（Prometheus 用失败/提交、进程内兜底用失败/终态——单进程拿不到对方 counter）是刻意设计不是 bug
-- **告警双轨**：进程内 AlertLoop（30s 一轮，触发/恢复直接打日志）+ Prometheus 集群级规则并存——不装监控也能从日志发现异常；4 条规则阈值（worker_online<1 持续 1min / queue>100 持续 2min / 失败率>30% 持续 5min / RPC P99>1s 持续 5min）；监控上线实测暴露了 2 个框架级缺陷（ZK 同步调用无限阻塞、MQ 消费锁死）
+- **ZK 防阻塞封装**：C SDK 同步 API 实测会无限阻塞（SchedulingLoop 卡死 9 分钟），改异步 API + sem_timedwait 3s 超时 + `caller_gone` 延迟回收防 UAF + `zoo_state()` 快速失败
+- **MQ 消费锁不阻塞调度**：`amqp_consume_message` 内部 poll 超时不可靠 → 消费改自控 `poll(fd)` + `amqp_consume_message({0,0})` 立即读；`consume_mutex_` 改 `timed_mutex` + `try_lock_for(1s)` 降级——宁可退化成 WARN 也不能让调度线程等锁停摆
 
 
 # 下面是我借助claude工具，写的一个README介绍，我认为比我写的好多了，至少能让看的人读的很清晰
@@ -196,8 +193,7 @@ MprpcChannel::CallMethod()
 
 - **ZK 地址缓存**：不是每次调用都读 ZooKeeper，缓存命中直接走；连接失败时主动失效缓存并重刷，兼顾性能和一致性；
 - **连接池按 endpoint 分片**：每个服务地址独立维护连接池，单 endpoint 最大连接数可配置，避免某对端异常时连接互相挤占；
-- **同步调用 + 超时 + deadline 透传**：调用方超时后，deadline 会随请求传到 Provider 端，Provider 对已超时的请求快速拒绝，不浪费处理资源；
-- **框架级 metrics 插桩**：`CallMethod` 用 RAII 计时器自动记录 `rpc_latency_ms{method}` 直方图，Prometheus 格式导出，不用改业务代码就能拿到每个 RPC 方法的延迟分布。
+- **同步调用 + 超时 + deadline 透传**：调用方超时后，deadline 会随请求传到 Provider 端，Provider 对已超时的请求快速拒绝，不浪费处理资源。
 
 ## 三、video_platform：分布式视频转码平台
 
@@ -259,16 +255,6 @@ Client/CLI ──SubmitJob──► JobService ──ScheduleJob──► Schedu
 - **MySQL（持久化）**：三个 Store 以 MySQL 为唯一数据源，服务重启数据不丢、多进程天然共享。连接池固定大小预创建、`mysql_ping` 保活。关键设计是 `UpdateIfStatus` 条件更新——状态推进必须带旧状态条件，防止旧快照覆盖其他进程的推进；
 - **Redis（缓存 + 锁）**：WorkerManager 心跳双写 Redis 快照，Scheduler 优先读快照（20s 过期过滤），失败回退 ListWorkers RPC；分配 shard 前用 `SETNX shard:lock:{id} EX 10` 加分布式锁。Redis 被设计成**可降级组件**——连不上只 WARN 不拒启，MySQL 才是 fail-fast，职责划分明确；
 - **RabbitMQ（事件驱动调度）**：事件拓扑 `job.events → shard.waiting`（分配通知）+ `shard.events → result.pending`（结果数据），durable exchange/queue + 消息持久化 + 手动 ACK，消息不丢。Scheduler 的分配逻辑抽成 `TryAssignShard` 供轮询和 MQ 消费线程共用；MQ 在线时调度延迟实测 33ms，故障时自动回退 2s Pull 轮询，恢复后自动切回。
-
-### 可观测性
-
-框架层提供了自研的 metrics 库（Counter/Gauge/Histogram，固定桶 + 前缀和导出 + 线性插值算分位），5 个服务各起一个 HTTP 端口暴露 Prometheus 文本格式指标：
-
-- 任务计数（提交/成功/失败）、shard 分布、调度循环耗时；
-- Worker 在线数、负载采样（Gauge 采样器线程 5s 一轮）；
-- RPC 延迟直方图、转码耗时。
-
-配套交付了 `prometheus.yml` + 4 条 PromQL 告警规则（worker 离线、调度积压、任务失败率、RPC P99 长尾）+ Grafana 面板（任务吞吐、shard 分布、Worker 负载热力图、RPC 延迟四行）。即使不部署 Prometheus，每个服务进程内还有告警兜底循环，触发和恢复都会直接打日志 `ALERT [xxx] firing/recovered`——可观测性是平台自身的一部分，不依赖外部组件就位。
 
 ## 四、测试与验证
 
