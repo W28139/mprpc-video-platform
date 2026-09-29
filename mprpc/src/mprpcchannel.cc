@@ -17,7 +17,6 @@
 #include <cstdlib>
 #include <cstring>
 #include <fcntl.h>
-#include <climits>
 #include <memory>
 #include <mutex>
 #include <poll.h>
@@ -113,28 +112,6 @@ bool SetSocketTimeout(int fd, int64_t timeoutMs, int& savedErrno)
     return true;
 }
 
-// 简单 fd RAII，保证 CallMethod 任意 return 路径都会关闭短连接 socket。
-class ScopedFd
-{
-public:
-    explicit ScopedFd(int fd = -1) : fd_(fd) {}
-    ~ScopedFd() { reset(); }
-
-    int get() const { return fd_; }
-
-    void reset(int fd = -1)
-    {
-        if (fd_ >= 0)
-        {
-            ::close(fd_);
-        }
-        fd_ = fd;
-    }
-
-private:
-    int fd_;
-};
-
 // TCP send 可能只发送部分数据；RPC 请求必须循环发送到完整帧全部写出。
 bool SendAll(int fd, const char* data, size_t len, int& savedErrno)
 {
@@ -217,12 +194,6 @@ std::string MethodRegistryPath(const std::string& serviceName,
     return "/mprpc/services/" + serviceName + "/" + methodName;
 }
 
-std::string LegacyMethodPath(const std::string& serviceName,
-                             const std::string& methodName)
-{
-    return "/" + serviceName + "/" + methodName;
-}
-
 // method_path -> endpoint 列表，本地轮询选择实例，减少 RPC 热路径上的 ZK 读请求。
 std::unordered_map<std::string, EndpointCacheEntry>& ServiceCache()
 {
@@ -275,8 +246,7 @@ std::vector<std::string> ParseCsvEndpoints(const std::string& csv)
 // ZK 拉取 endpoint 列表，并双写缓存：本进程本地缓存 + Redis 集中缓存
 // （多进程共享，其他进程下次发现直接命中，省一次 ZK 往返）。
 // Redis 写回失败不影响本进程——本地缓存已生效，故障降级由调用方按次判断。
-std::vector<std::string> QueryEndpointList(const std::string& methodPath,
-                                           const std::string& legacyPath)
+std::vector<std::string> QueryEndpointList(const std::string& methodPath)
 {
     std::vector<std::string> endpoints;
     if (!EnsureSharedZkClientStarted())
@@ -294,17 +264,6 @@ std::vector<std::string> QueryEndpointList(const std::string& methodPath,
         if (!hostData.empty())
         {
             endpoints.push_back(hostData);
-        }
-    }
-
-    if (endpoints.empty())
-    {
-        // 兼容旧注册路径：/Service/Method -> ip:port。
-        // 新 Provider 会注册到 /mprpc/services/...，这里只作为过渡兜底。
-        std::string legacyHostData = zk.GetData(legacyPath.c_str());
-        if (!legacyHostData.empty())
-        {
-            endpoints.push_back(legacyHostData);
         }
     }
 
@@ -352,10 +311,8 @@ std::string PickEndpoint(const std::vector<std::string>& endpoints)
 
 // 优先读本地缓存（带 30s TTL），miss 时查 Redis 集中缓存，仍 miss 再访问 ZK；
 // 缓存命中时按轮询选择 endpoint。Redis 故障/不可用自动直落 ZK 路径，
-// 与改造前的"进程内缓存 + ZK 直读"行为一致（可降级哲学，见阶段 10 第 1 批）。
-std::string GetHostData(const std::string& methodPath,
-                        const std::string& legacyPath,
-                        bool& fromCache)
+// 与改造前的"进程内缓存 + ZK 直读"行为一致
+std::string GetHostData(const std::string& methodPath, bool& fromCache)
 {
     // 1. 本地缓存：热路径零 Redis/ZK 交互，30s TTL 内直接命中
     {
@@ -402,7 +359,7 @@ std::string GetHostData(const std::string& methodPath,
     }
 
     // 3. 兜底：ZK 拉取（QueryEndpointList 内部写回本地 + Redis 缓存）
-    return PickEndpoint(QueryEndpointList(methodPath, legacyPath));
+    return PickEndpoint(QueryEndpointList(methodPath));
 }
 
 // 连接失败时主动失效缓存：清本地缓存，并 HDEL Redis 集中缓存——其他进程
@@ -858,7 +815,6 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
     std::string ip;
     uint16_t port = 0;
     std::string method_path;
-    std::string legacy_method_path;
 
     if (use_direct_)
     {
@@ -870,9 +826,9 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
     else
     {
         method_path = MethodRegistryPath(service_name, method_name);
-        legacy_method_path = LegacyMethodPath(service_name, method_name);
         bool fromCache = false;
-        std::string host_data = GetHostData(method_path, legacy_method_path, fromCache);
+        // 把一个逻辑上的"服务名+方法名"解析成一个具体的 "ip:port" 地址字符串
+        std::string host_data = GetHostData(method_path, fromCache);
         LOG_DEBUG("rpc call %s::%s discovered endpoint from %s",
                   service_name.c_str(), method_name.c_str(),
                   fromCache ? "cache" : "zookeeper");
@@ -887,6 +843,7 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
         }
 
         std::string parseError;
+        // 把host_data点十 转为 ip / port
         if (!ParseHostData(host_data, ip, port, parseError))
         {
             LOG_ERROR("rpc call %s::%s: invalid host_data [%s]", service_name.c_str(), method_name.c_str(), host_data.c_str());
@@ -930,7 +887,7 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
         {
             // 缓存 endpoint 连接失败时，认为实例可能已经下线，失效缓存后重新发现并重试一次。
             InvalidateHostData(method_path);
-            std::string retry_host = PickEndpoint(QueryEndpointList(method_path, legacy_method_path));
+            std::string retry_host = PickEndpoint(QueryEndpointList(method_path));
             std::string retryParseError;
             if (!retry_host.empty() && ParseHostData(retry_host, ip, port, retryParseError))
             {

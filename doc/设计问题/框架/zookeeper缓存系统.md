@@ -102,7 +102,7 @@ static std::mutex cacheMutex;
 ### 3.2 读取流程：GetHostData()
 
 ```
-GetHostData(methodPath, legacyPath)
+GetHostData(methodPath, fromCache)
   │
   ├─ Lock(cacheMutex)
   │   ├─ 查到 EndpointCacheEntry && endpoints 非空
@@ -114,7 +114,7 @@ GetHostData(methodPath, legacyPath)
   │       → 释放锁
   │
   └─ 缓存未命中路径（不加锁）
-      ├─ QueryEndpointList(methodPath, legacyPath)
+      ├─ QueryEndpointList(methodPath)
       │   → 查 ZK，拿到 endpoints 列表
       │   → Lock(cacheMutex)，写入或清空缓存
       │   → 返回 endpoints
@@ -132,7 +132,7 @@ GetHostData(methodPath, legacyPath)
 ### 3.3 写入流程：QueryEndpointList()
 
 ```
-QueryEndpointList(methodPath, legacyPath)
+QueryEndpointList(methodPath)
   │
   ├─ EnsureSharedZkClientStarted()
   │   → call_once 保证 ZK 客户端只启动一次
@@ -147,31 +147,24 @@ QueryEndpointList(methodPath, legacyPath)
   │   → 取每个子节点的值："10.0.0.1:8000", "10.0.0.2:8000"
   │   → 汇总到 endpoints 列表
   │
-  ├─ 如果 endpoints 为空（新路径没数据）
-  │   → 兜底：zk.GetData(legacyPath)
-  │       → 查 /UserServiceRpc/Login → "10.0.0.1:8000"
-  │       → 旧路径只支持单实例，但保证不过渡期不可用
-  │
   └─ Lock(cacheMutex)
       ├─ endpoints 非空 → 写入 ServiceCache[methodPath] = {endpoints, nextIndex=0}
       └─ endpoints 为空 → ServiceCache.erase(methodPath)
 ```
 
-### 3.4 ZK 路径兼容策略
+### 3.4 ZK 路径格式
 
-Provider 端注册时使用新格式。客户端查询时兼容两种：
+Provider 端注册与客户端查询统一使用单一格式：
 
 ```
-新路径（多实例）:
-  /mprpc/services/FriendServiceRpc/GetFriendsList/
-    ├── 0000000001  →  "10.0.0.1:8000"
-    └── 0000000002  →  "10.0.0.2:8000"
-
-旧路径（单实例兜底）:
-  /FriendServiceRpc/GetFriendsList  →  "10.0.0.1:8000"
+/mprpc/services/FriendServiceRpc/GetFriendsList/
+  ├── 0000000001  →  "10.0.0.1:8000"
+  └── 0000000002  →  "10.0.0.2:8000"
 ```
 
-新路径的优势：每个实例是一个独立子节点（Ephemeral Sequential），天然支持多实例。某个实例下线 → 子节点自动删除 → 客户端下次查 ZK 时自然只看到活着的实例。
+每个实例是一个独立子节点（Ephemeral Sequential），天然支持多实例。某个实例下线 → 子节点自动删除 → 客户端下次查 ZK 时自然只看到活着的实例。
+
+> 早期版本同时兼容 `/{Service}/{Method} → ip:port` 的旧单实例路径作为兜底，实际从未有 Provider 写入该格式（Provider 自始只注册新路径），已删除。
 
 ### 3.5 失效机制：InvalidateHostData()
 
@@ -199,7 +192,7 @@ SendRequestAndReadResponse() 失败
   │     → 删除该 method 的缓存
   │     → 避免下次拿到已下线的实例地址
   │
-  ├─ ③ QueryEndpointList(methodPath, legacyPath)
+  ├─ ③ QueryEndpointList(methodPath)
   │     → 从 ZK 重新拉最新实例列表
   │
   └─ ④ 用新 endpoint 重试一次 RPC
@@ -405,9 +398,9 @@ RpcProvider::Run()
   └─ 5. 进入 TcpServer 事件循环
 ```
 
-### 6.3 新旧路径对比
+### 6.3 路径方案选型
 
-| | 旧方案 | 新方案（当前） |
+| | 单节点方案 | 多实例方案（当前） |
 |------|--------|---------------|
 | 路径 | `/{Service}/{Method}` → `ip:port` | `/mprpc/services/{Service}/{Method}/instance-*` → `ip:port` |
 | 多实例 | 不支持（一个方法只能有一个节点） | 天然支持（一个方法下有多个 instance-* 子节点） |
@@ -415,7 +408,7 @@ RpcProvider::Run()
 | 实例下线 | 节点残留，客户端读到死地址 | ZK 自动删除，客户端 `GetChildren` 自然看不到 |
 | 客户端查询 | `GetData(path)` 读单个值 | `GetChildren(path)` 拉全量 + 逐个 `GetData` |
 
-客户端在 `QueryEndpointList()` 中优先查新路径，如果新路径无数据则回退到旧路径（`LegacyMethodPath`），保证过渡期兼容。
+客户端 `QueryEndpointList()` 只查多实例路径，不再做单节点路径兜底。
 
 ### 6.4 与客户端缓存的对应
 
@@ -456,9 +449,8 @@ CallMethod("FriendServiceRpc", "GetFriendsList")
   │  ┌── 阶段 1：服务发现 ──┐
   │  │
   │  │ methodPath  = "/mprpc/services/FriendServiceRpc/GetFriendsList"
-  │  │ legacyPath  = "/FriendServiceRpc/GetFriendsList"
   │  │
-  │  │ GetHostData(methodPath, legacyPath, fromCache)
+  │  │ GetHostData(methodPath, fromCache)
   │  │   │
   │  │   ├─ [首次调用] ServiceCache 为空
   │  │   │   → QueryEndpointList()

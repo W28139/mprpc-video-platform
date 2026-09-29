@@ -161,7 +161,7 @@ total_len | header_size | RpcHeader | args
 
 ### Q2.2 `RpcHeader` 里都有什么？为什么要这些字段？
 
-4 个字段（`rpcheader.proto:29-38`）：
+4 个字段（`rpcheader.proto:29-37`）：
 
 ```proto
 message RpcHeader {
@@ -185,7 +185,7 @@ message RpcHeader {
 **① `request_id` 是长连接的必需品**：
 
 ```cpp
-// mprpcchannel.cc:71-75
+// mprpcchannel.cc:69-73
 uint64_t NextRequestId()
 {
     static std::atomic<uint64_t> nextRequestId{1};
@@ -193,7 +193,7 @@ uint64_t NextRequestId()
 }
 ```
 
-客户端发请求前生成，收到响应后**必须校验**（`mprpcchannel.cc:985-995`）：
+客户端发请求前生成，收到响应后**必须校验**（`mprpcchannel.cc:945-955`）：
 
 ```cpp
 if (responseHeader.request_id() != requestId)
@@ -209,7 +209,7 @@ if (responseHeader.request_id() != requestId)
 **② `deadline_ms` 是「绝对时刻」而不是「超时时长」**：
 
 ```cpp
-// mprpcchannel.cc:830
+// mprpcchannel.cc:807
 if (timeoutMs > 0)
 {
     rpcHeader.set_deadline_ms(NowMs() + static_cast<uint64_t>(timeoutMs));
@@ -234,7 +234,7 @@ if (timeoutMs > 0)
 
 **③ 长度非法：返回 `kFatal`，由 `Connection` 关闭连接。**
 
-**零拷贝的细节**：用 `peek()` **只读长度不消费**（`Buffer.h:70`），确认帧完整后才 `retrieve(4)` + `retrieveAsString(total_len)`。**先看后取**，避免读了半个帧就破坏了缓冲状态。
+**零拷贝的细节**：用 `peek()` **只读长度不消费**（`Buffer.h:28`），确认帧完整后才 `retrieve(4)` + `retrieveAsString(total_len)`。**先看后取**，避免读了半个帧就破坏了缓冲状态。
 
 #### Q3.1.1 为什么用长度前缀，不用状态机或分隔符？
 
@@ -251,8 +251,8 @@ if (timeoutMs > 0)
 **为什么长度前缀适合 RPC**：
 
 1. **RPC 的 payload 是 protobuf**——protobuf **本来就是长度前缀的**（每个字段有 tag + length）。所以外层再加一个长度是**自然的**，而且长度**在序列化时就知道了**（`payload.size()`），不需要扫描。
-2. **二进制数据里可能有任意字节**。如果用 `\r\n` 做分隔，而 protobuf 序列化后的字节里**恰好出现了 `\r\n`**（完全可能），就会**提前切断帧**。必须引入转义机制——那就更复杂了。
-3. **O(1) 判断 vs O(N) 扫描**。长度前缀只需要读 4 个字节就能判断「够不够一帧」；分隔符方案必须扫描到分隔符才能判断。在高 QPS 下，这个差别是实打实的。
+2. **二进制数据里可能有任意字节**。如果用 `\r\n` 做分隔，而 protobuf 序列化后的字节里**恰好出现了 `\r\n`**（完全可能），就会**提前切断帧**。
+3. **O(1) 判断 vs O(N) 扫描**。长度前缀只需要读 4 个字节就能判断「够不够一帧」；分隔符方案必须扫描到分隔符才能判断。
 
 **什么时候该用状态机**：协议里有**嵌套结构**（比如 JSON 的 `{}` 配对）、或者**转义序列**（比如某些协议用 `0x7E` 做帧边界，数据里的 `0x7E` 要转义成 `0x7D 0x5E`）。这时候需要状态机记住「我是不是在转义态」。
 
@@ -262,14 +262,11 @@ if (timeoutMs > 0)
 
 ### Q3.2 codec 是怎么挂到网络层上的？
 
-**答（30 秒口述版）**
-
 **三层传递：`TcpServer` 保存 → `TcpServer` 分配给每个新 `Connection` → `Connection::handleRead` 循环调用。**
 
 **① 注册**（`rpcprovider.cc`）：
 
 ```cpp
-// 设置帧编解码器：让 muduo 在 Connection 层自动处理粘包/拆包
 server.setMessageCodec(RpcMessageCodec);
 ```
 
@@ -281,45 +278,11 @@ if (messageCodec_) conn->setMessageCodec(messageCodec_);
 
 **③ 在 `handleRead` 里循环调用**（`Connection.cpp:96-135`）：
 
-```cpp
-if (messageCodec_)
-{
-    // 有帧编解码器：循环提取完整帧，每帧回调一次 onMessage
-    std::string message;
-    while (true)
-    {
-        CodecResult result = messageCodec_(&inputBuffer_, message);
-        if (result == CodecResult::kNeedMoreData) { break; }
-        if (result == CodecResult::kFatal)
-        {
-            LOG_WARN("handleRead fd=%d: fatal codec error, closing connection", fd());
-            handleClose();
-            return;                                 // handleClose 后禁止再访问 this
-        }
-        if (disconnected_) { break; }
-        if (onMessageCallback_) { onMessageCallback_(self, message); }
-        if (disconnected_) { break; }
-    }
-}
-else
-{
-    // 无编解码器：保留旧行为，一次性提取所有数据透传给上层
-    std::string message = inputBuffer_.retrieveAllAsString();
-    if (onMessageCallback_) { onMessageCallback_(self, message); }
-}
-```
-
-**`handleClose()` 后面那行 `return` 不是可有可无的**：关闭会经由 `closeCallback_` → `TcpServer::handleClose` → `removeConnection` 把连接从 `connections_` 里摘掉，之后再访问 `this` 就可能踩空。之所以安全，是因为 `handleRead` 开头有个 `ConnectionPtr self(shared_from_this())` 兜住了生命周期——**这是之前一次 UAF 崩溃换来的教训**。
+**`handleClose()` 后面那行 `return` 不是可有可无的**：关闭会经由 `closeCallback_` → `TcpServer::handleClose` → `removeConnection` 把连接从 `connections_` 里摘掉，之后再访问 `this` 就可能踩空。之所以安全，是因为 `handleRead` 开头有个 `ConnectionPtr self(shared_from_this())` 兜住了生命周期——**不然会发生 UAF 崩溃**。
 
 **关键设计：这是可选的**。
 
 `messageCodec_` 是个 `std::function`，默认是空的（`Connection.h:56`）：
-
-```cpp
-// 设置帧编解码器：若设置，handleRead 中循环提取完整帧再回调 onMessage
-// 若未设置，行为不变（每次读到多少就回调多少）
-void setMessageCodec(MessageCodec cb) { messageCodec_ = std::move(cb); }
-```
 
 **不设置时，行为完全退化回 muduo 式**——`retrieveAllAsString` 把读到的全部数据交给上层。
 
@@ -337,44 +300,13 @@ enum class CodecResult
     kFrameReady,    // 成功提取一帧，message 有效
     kFatal,         // 数据流已损坏且不可恢复，调用方必须关闭连接
 };
-
-using MessageCodec = std::function<CodecResult(Buffer*, std::string&)>;
 ```
 
-**为什么是三态而不是 `bool`**：`bool` 只能表达「成帧 / 没成帧」，**没法区分「数据不够，等等再来」和「流坏了，别等了」**——而这两者的处理完全相反，前者必须原样保留 Buffer，后者必须关连接。把「要不要关连接」的判断权交给 codec，是因为**只有 codec 懂协议**：网络库不该知道「多长的帧算非法」。
-
-**任何协议都能实现这个签名**——HTTP、Redis、WebSocket 都可以。所以这不是「为 mprpc 硬编码」，而是「提供了一个可插拔的扩展点」。
-
-**面试官想听什么**
-
-- 能说清「为什么要把拆帧下沉到网络层」（因为 muduo 和 mprpc 是一起设计的，RPC 是唯一上层协议）
-- 知道**不设置 codec 时行为完全不变**——这是「不破坏通用性」的证据
-
-**可能追问**
-
-- Q3.2.1 那这个 codec 在哪个线程执行？
+**为什么是三态而不是 `bool`**：`bool` 只能表达「成帧 / 没成帧」，**没法区分「数据不够」和「流坏了」**——而这两者的处理完全相反，前者必须原样保留 Buffer，后者必须关连接。
 
 #### Q3.2.1 codec 在哪个线程执行？业务处理又在哪个线程？
 
-**答**：**拆帧在 IO 线程，业务处理在 work 线程。这是刻意的分层。**
-
-**完整链路**：
-
-```text
-TcpServer::setMessageCodec(RpcMessageCodec)              // rpcprovider.cc:284
-  └─ TcpServer::handleNewConnection()                    // TcpServer.cpp:85
-       if (messageCodec_) conn->setMessageCodec(messageCodec_);   // TcpServer.cpp:100
-  └─ Connection::handleRead()                            // Connection.cpp:96-135   ← IO 线程
-       CodecResult result = messageCodec_(&inputBuffer_, message);
-  └─ TcpServer::handleMessage()                          // TcpServer.cpp:148
-       if (workThreadPool_) {
-           auto msg = std::make_shared<std::string>(std::move(message));   // ← move 到堆上
-           workThreadPool_->addTask([this, conn, msg]() { onMessageCallback_(conn, *msg); });
-       } else { onMessageCallback_(conn, message); }      // ← 无 work 池则同步执行
-  └─ RpcProvider::OnMessage()                            // work 线程，真正执行业务分发
-```
-
-**为什么这么分**：
+**拆帧在 IO 线程，业务处理在 work 线程。**
 
 **IO 线程只做「拆帧」**——这是纯内存操作（移动 Buffer 指针 + 构造 `std::string`），快且不会阻塞。
 
@@ -384,46 +316,20 @@ TcpServer::setMessageCodec(RpcMessageCodec)              // rpcprovider.cc:284
 
 **如果业务在 IO 线程跑会怎样**：一个慢的 RPC handler 会**阻塞这个 subLoop 上所有连接的收发**。而且 `video_platform` 的 `SchedulerService::ScheduleJob` 会调 `ffprobe` 探测视频时长（最长 15 秒）——那 15 秒里，同一 loop 上的连接全部卡死。
 
-**work 线程数量可配**（`rpcprovider.cc:197-201`）：
-
-```cpp
-if (workThreads > 0)
-{
-    // 业务 protobuf service 放到 work pool 执行，避免慢业务阻塞 IO 线程。
-    server.enableWorkPool(workThreads, wevix_muduo::PoolMode::MODE_FIXED);
-}
-```
-
-`rpcserverwork_threads` 默认 2，范围 0~256，**0 表示禁用 work pool**（退化成全在 IO 线程跑）。
-
-**这里有个我实测过的拐点**：默认 2 个 work 线程在 100 并发下会饱和（P99 28ms），调到 16 之后 P99 降到 **2.9ms**。因为 work 线程数不够时，请求在 `ThreadPool` 队列里排队，延迟全部堆在队列上。
-
-**⚠️ 但 work 线程数也是把双刃剑**：`ScheduleJob` 里有 `ffprobe`（最长 15 秒），**2 个并发就能占满默认的 2 个 work 线程**，整个 Scheduler 就瘫痪了。这个风险在业务层是靠「给 `Probe` 加 15 秒超时」来兜底的。
-
-**面试官想听什么**
-
-- 能说清「拆帧在 IO 线程、业务在 work 线程」的分工
-- 知道 `std::move(message)` + `shared_ptr` 是**跨线程传递数据的正确姿势**（避免拷贝 + 保证生命周期）
-- 能说出 work 线程数不足的**实际症状**（P99 因排队而升高）
-
 ---
 
 ## 四、客户端：MprpcChannel
 
 ### Q4.1 `MprpcChannel::CallMethod` 的完整流程是什么？
 
-**答（30 秒口述版）**
-
-按步骤编号（`mprpcchannel.cc:799-1048`）：
+按步骤编号（`mprpcchannel.cc:760-981`）：
 
 | 步 | 做什么 |
 |---|---|
-| 0 | 从 `method` 取 service 名和方法名 |
-| 0.5 | 起一个 **RAII 计时守卫**（覆盖所有 return 路径） |
-| 0.6 | 生成 `requestId`；读取超时配置 |
-| 1 | `request->SerializeToString(&args_str)` + 两次 64MB 校验 |
-| 2 | 组 `RpcHeader`（service/method/request_id/deadline_ms），序列化 |
-| 3 | 拼 payload：`[header_size] + RpcHeader + args`，再套外层帧 |
+| 0 | 从 `method` 取 service 名和方法名；生成 `requestId`；读取超时配置 |
+| 1 | `request->SerializeToString(&args_str)`（args 不单独校验长度，见下） |
+| 2 | 组 `RpcHeader`（service/method/request_id/deadline_ms），序列化 + 64MB 校验 |
+| 3 | 拼 payload：`[header_size] + RpcHeader + args`，**总长** 64MB 校验，再套外层帧 |
 | 4 | **服务发现**（direct 直连分支 / ZK 三级缓存分支） |
 | 5 | 从连接池取连接 → `SendRequestAndReadResponse` |
 | 5.1 | 连接级失败 → **清池 + 重试一次** |
@@ -433,59 +339,13 @@ if (workThreads > 0)
 | 9 | 检查 `error_code` |
 | 10 | `response->ParseFromString(...)` → 成功则 `done->Run()` |
 
-**第 3 步的拼装代码**（面试要求能背）：
+#### Q4.1.1 客户端是同步还是异步的？为什么？（逻辑不是很清晰）
 
-```cpp
-// 帧格式：[total_len(4B, network order)] + [header_size(4B, network order) + RpcHeader + args]
-std::string request_payload;
-request_payload.reserve(sizeof(uint32_t) + rpc_header_str.size() + args_str.size());
-mprpc::AppendNetworkUint32(&request_payload, header_size);
-request_payload += rpc_header_str;
-request_payload += args_str;
-// ... 64MB 校验
-// 外层 total_len 由 BuildRpcFrame 写入，服务端 Connection 的 codec 用它做粘包/拆包。
-std::string send_rpc_str = mprpc::BuildRpcFrame(request_payload);
-```
+调用mprpcchannel端为客户端，他会利用连接池获取连接，直接调用connect
 
-**面试官想听什么**
+**答**：**当前是同步阻塞的，而且实现方式没走 Reactor。**
 
-- 能按顺序说出「先序列化参数、再组 header、再拼 payload、最后套帧」这个**自底向上的组装过程**
-- 知道 `request_id` 校验（第 8 步）是**必做的**，不是可选的
-
-**可能追问**
-
-- Q4.1.1 客户端是同步还是异步的？
-
-#### Q4.1.1 客户端是同步还是异步的？为什么？
-
-**答**：**当前是同步阻塞的，而且实现方式很特别——根本没走 Reactor。**
-
-`MprpcChannel` 用的是**裸 socket**：`socket()` / `connect()` / `send()` / `recv()`，配上 `SO_SNDTIMEO` / `SO_RCVTIMEO` 做超时（`mprpcchannel.cc:525-619`）：
-
-```cpp
-// 非阻塞 connect 的真实错误需要从 SO_ERROR 读取
-int ConnectToEndpoint(...)
-{
-    int fd = ::socket(AF_INET, SOCK_STREAM, 0);
-    // 设置非阻塞
-    int flags = ::fcntl(fd, F_GETFL, 0);
-    ::fcntl(fd, F_SETFL, flags | O_NONBLOCK);
-
-    int ret = ::connect(fd, ...);
-    if (ret < 0 && errno == EINPROGRESS)
-    {
-        struct pollfd pfd{fd, POLLOUT, 0};
-        int pr = ::poll(&pfd, 1, timeoutMs);      // ← 可超时的握手
-        if (pr == 0) { savedErrno = ETIMEDOUT; ... }
-        int err = 0; socklen_t len = sizeof(err);
-        ::getsockopt(fd, SOL_SOCKET, SO_ERROR, &err, &len);   // ← 取真实错误
-        ...
-    }
-    // 恢复阻塞 + 设置收发超时
-    ::fcntl(fd, F_SETFL, flags);
-    SetSocketTimeout(fd, timeoutMs, savedErrno);
-}
-```
+`MprpcChannel` 用的是**裸 socket**：`socket()` / `connect()` / `send()` / `recv()`，配上 `SO_SNDTIMEO` / `SO_RCVTIMEO` 做超时（`mprpcchannel.cc:494-588`）：
 
 **这个实现方式值得解释，因为它是刻意的**：
 
@@ -499,34 +359,9 @@ stub.ScheduleJob(&controller, &request, &response, nullptr);
 
 `done` 传 `nullptr` 意味着**调用方要等返回**。既然语义是同步的，就没必要引入「发起 connect → 注册 EPOLLOUT → 等待 → 回调里继续」这一整套异步状态机。
 
-**② 非阻塞 connect 是为了「可控的超时」**。直接用阻塞 `connect` 的话，超时由**内核决定**——Linux 默认的 TCP 连接超时是 **75 秒**（`tcp_syn_retries=6` 的指数退避）。对 RPC 来说这完全不可接受。
+**② 非阻塞不是为了并发，非阻塞 connect 是为了「可控的超时」**。直接用阻塞 `connect` 的话，超时由**内核决定**——Linux 默认的 TCP 连接超时是 **75 秒**。
 
 所以我用「非阻塞 connect + `poll(POLLOUT, timeoutMs)`」，**超时时间完全由我控制**。`poll` 返回后还要 `getsockopt(SO_ERROR)` 取真实错误——**这是非阻塞 connect 的标准流程**，因为 `connect` 返回 `EINPROGRESS` 时不知道成功还是失败，必须查 `SO_ERROR`。
-
-**③ 收发超时交给内核**：
-
-```cpp
-static bool SetSocketTimeout(int fd, int64_t timeoutMs, int& savedErrno)
-{
-    struct timeval tv;
-    tv.tv_sec = timeoutMs / 1000;
-    tv.tv_usec = (timeoutMs % 1000) * 1000;
-    ::setsockopt(fd, SOL_SOCKET, SO_SNDTIMEO, &tv, sizeof(tv));
-    ::setsockopt(fd, SOL_SOCKET, SO_RCVTIMEO, &tv, sizeof(tv));
-    ...
-}
-```
-
-用 `SO_RCVTIMEO` 的**好处**是「等响应的时候不需要我自己做超时轮询」——`recv` 到时间没数据就返回 `EAGAIN`，我把它映射成 `RPC_TIMEOUT`：
-
-```cpp
-static int IoErrorCode(int savedErrno, int defaultCode)
-{
-    if (savedErrno == ETIMEDOUT || savedErrno == EAGAIN || savedErrno == EWOULDBLOCK)
-        return mprpc::RPC_TIMEOUT;
-    return defaultCode;
-}
-```
 
 **这个设计的不对称性**：服务端是纯 Reactor（`TcpServer` + epoll），客户端却是裸 socket 同步阻塞。**两边完全不对称**。
 
@@ -535,44 +370,15 @@ static int IoErrorCode(int savedErrno, int defaultCode)
 - 裸 socket 的代码路径短、容易推理、不需要处理回调重入；
 - 每次调用都在调用方自己的线程里阻塞，**不需要跨线程唤醒**。
 
-**代价我也清楚**：
-- **`PooledConnection::mutex` 覆盖整次 send+recv**，所以单个 endpoint 的**并发 RPC 上限 = 连接池大小**（默认 8）。第 9 个并发调用者会在锁上排队。
-- 没有真正的异步客户端。虽然 protobuf 的 `done` 回调机制支持异步，但框架没实现（`done` 总是同步调用的）。
-
 ---
 
 ## 五、服务端：RpcProvider
 
-### Q5.1 `NotifyService` 做了什么？为什么存裸指针？
+### Q5.1 ` ` 做了什么？为什么存裸指针？
 
 **答**：**用自己建的两层 map 索引「service 名 → ServiceInfo」，`ServiceInfo` 里再索引「method 名 → MethodDescriptor*」。**
 
-```cpp
-struct ServiceInfo {
-    google::protobuf::Service *m_service;
-    std::unordered_map<std::string, const google::protobuf::MethodDescriptor*> m_methodMap;
-};
-std::unordered_map<std::string, ServiceInfo> m_serviceMap;
-```
-
-（`rpcprovider.h:32-38`）。注册逻辑（`rpcprovider.cc:123-146`）：
-
-```cpp
-void RpcProvider::NotifyService(google::protobuf::Service* service)
-{
-    const ServiceDescriptor* pserviceDesc = service->GetDescriptor();
-    std::string service_name = pserviceDesc->name();
-    ServiceInfo service_info;
-    service_info.m_service = service;
-    int method_count = pserviceDesc->method_count();
-    for (int i = 0; i < method_count; ++i)
-    {
-        const MethodDescriptor* pmethodDesc = pserviceDesc->method(i);
-        service_info.m_methodMap[pmethodDesc->name()] = pmethodDesc;
-    }
-    m_serviceMap[service_name] = std::move(service_info);
-}
-```
+（`rpcprovider.h:32-38`）。注册逻辑（`rpcprovider.cc:123-136`）：
 
 **为什么存裸指针**——`rpcprovider.h:17-20` 的注释就是答案：
 
@@ -602,7 +408,7 @@ int main(int argc, char** argv)
 
 **代价是「泄漏风险」**——业务如果写 `new XxxServiceImpl()` 之后就忘了，那是业务的 bug，框架管不了。但这比「框架偷偷接管所有权、导致业务没法用栈对象」要好。
 
-**分发用的是自己建的 map，不是 protobuf 的反射查找**（`rpcprovider.cc:375`）：
+**分发用的是自己建的 map，不是 protobuf 的反射查找**（`rpcprovider.cc:353-363`）：
 
 ```cpp
 // 两次 unordered_map::find
@@ -616,15 +422,6 @@ auto mit = sit->second.m_methodMap.find(method_name);
 
 **⚠️ `m_serviceMap` 是无锁的**。因为约定是「`NotifyService` 必须在 `Run()` 之前全部调完」——也就是**单线程初始化期**，运行期只读。这是个**隐式约定，没有断言保护**。
 
-**面试官想听什么**
-
-- 能说清「OWNERSHIP 归调用方」这个**刻意的设计**，以及它的好处（支持栈对象/全局对象）
-- 知道分发用**自建 map** 而不是 protobuf 反射查找，以及为什么
-
-**可能追问**
-
-- Q5.1.1 如果运行期想动态加服务怎么办？
-
 #### Q5.1.1 如果运行期想动态加服务怎么办？
 
 **答**：**当前的实现做不到，这是个明确的边界。**
@@ -636,7 +433,7 @@ auto mit = sit->second.m_methodMap.find(method_name);
 **② ZK 注册也没做动态**。`Run()` 里注册一次 ZK 节点，之后就不再动了：
 
 ```cpp
-// rpcprovider.cc:234-269
+// rpcprovider.cc:233-267
 std::string service_path = "/mprpc/services/" + sp.first;
 zkCli.Create(service_path.c_str(), nullptr, 0);              // 永久节点
 std::string method_path = MethodRegistryPath(sp.first, mp.first);
@@ -692,7 +489,7 @@ bool RegisterToZk(const std::string& service_name, const std::string& method_nam
 | 6 | `request` 能否 `ParseFromString` | `RPC_REQUEST_PARSE_FAILED` |
 | 7 | response 的 64MB 上限 | `RPC_FRAME_TOO_LARGE` |
 
-（`rpcprovider.cc:297-413`）。
+（`rpcprovider.cc:295-411`）。
 
 **第 1 项内部包含一个内容校验**（`DecodeRequestHeader`，`rpcprovider.cc:63-97`）：
 
@@ -750,7 +547,7 @@ SendRpcError(conn, 0 /* 未知 request_id */, RPC_BAD_REQUEST, errorMsg);
 
 **答**：**它能阻止「排队太久的请求被白算」，但不能中断已经在执行的 handler。**
 
-**位置**（`rpcprovider.cc:328-342`）：
+**位置**（`rpcprovider.cc:326-340`）：
 
 ```cpp
 // deadline_ms == 0 表示客户端未设置（不检查）。
@@ -794,7 +591,7 @@ bool IsCanceled() const override { return false; }
 void NotifyOnCancel(Closure* /* callback */) override {}
 ```
 
-注释写着「目前未实现具体的功能」。`service->CallMethod(method, nullptr, ...)` 的 **controller 参数传的是 `nullptr`**（`rpcprovider.cc:412`）——**Provider 侧根本没把 controller 传给业务**，所以业务层也没有办法感知取消。
+注释写着「目前未实现具体的功能」。`service->CallMethod(method, nullptr, ...)` 的 **controller 参数传的是 `nullptr`**（`rpcprovider.cc:410`）——**Provider 侧根本没把 controller 传给业务**，所以业务层也没有办法感知取消。
 
 **业务层是怎么补偿的**：`video_platform` 自己在**业务语义层面**实现了取消——`CancelShard` RPC + `should_cancel` 回调 + kill 子进程。**这是业务层的能力，不是框架层的**。
 
@@ -825,7 +622,7 @@ void NotifyOnCancel(Closure* /* callback */) override {}
 
 **用一个上下文结构打包「连接 + response + request_id」，把所有权通过 `release()` 移交，然后在 `SendRpcResponse` 开头用 `unique_ptr` 接住。**
 
-**第一步：构造上下文**（`rpcprovider.cc:392-408`）：
+**第一步：构造上下文**（`rpcprovider.cc:389-406`）：
 
 ```cpp
 // 绑定回调函数（Closure）
@@ -839,7 +636,7 @@ google::protobuf::Closure *done =
 service->CallMethod(method, nullptr, request.get(), rawResponse, done);
 ```
 
-`RpcResponseContext`（`rpcprovider.cc:116-121`）：
+`RpcResponseContext`（`rpcprovider.cc:107-112`）：
 
 ```cpp
 struct RpcResponseContext
@@ -970,8 +767,6 @@ void MyServiceImpl::AsyncMethod(RpcController* ctrl, const Request* req,
 
 ---
 
----
-
 ## 七、连接池
 
 ### Q7.1 连接池是怎么设计的？
@@ -980,7 +775,7 @@ void MyServiceImpl::AsyncMethod(RpcController* ctrl, const Request* req,
 
 **按 endpoint（`ip:port`）分片，每个 endpoint 一个 `vector<shared_ptr<PooledConnection>>`，每连接一把 mutex。**
 
-**数据结构**（`mprpcchannel.cc:473-521`）：
+**数据结构**（`mprpcchannel.cc:442-490`）：
 
 ```cpp
 struct PooledConnection
@@ -1014,7 +809,7 @@ static std::string EndpointKey(const std::string& ip, uint16_t port)
 
 **分片的意义**：某个对端出故障（连接全断）时，**只影响这个 endpoint 的连接池**，不会波及其他服务。如果不分片（全局一个大池子），一个坏服务可能把整个池子拖死。
 
-**② 借用逻辑——懒建 + 轮询**（`mprpcchannel.cc:632-650`）：
+**② 借用逻辑——懒建 + 轮询**（`mprpcchannel.cc:601-619`）：
 
 ```cpp
 std::shared_ptr<PooledConnection> GetPooledConnection(const std::string& ip, uint16_t port)
@@ -1041,7 +836,7 @@ std::shared_ptr<PooledConnection> GetPooledConnection(const std::string& ip, uin
 
 **为什么懒建**：**让「取连接」和「用连接」分离**。因为 `CallMethod` 里可能有多个候选 endpoint，如果取的时候就连，可能建了一堆用不上的连接。**建连成本只在真正要发数据时才付出**。
 
-**③ 最大连接数可配**（`mprpcchannel.cc:463-471`）：
+**③ 最大连接数可配**（`mprpcchannel.cc:432-440`）：
 
 ```cpp
 static size_t MaxConnectionsPerEndpoint()
@@ -1068,7 +863,7 @@ static size_t MaxConnectionsPerEndpoint()
 
 **答**：**等于连接池大小，默认 8。**
 
-**推导过程**：`SendRequestAndReadResponse` 的第一行就是**锁住整条连接**（`mprpcchannel.cc:725`）：
+**推导过程**：`SendRequestAndReadResponse` 的第一行就是**锁住整条连接**（`mprpcchannel.cc:694`）：
 
 ```cpp
 bool SendRequestAndReadResponse(std::shared_ptr<PooledConnection> conn, ...)
@@ -1150,7 +945,7 @@ bool PooledConnection::EnsureConnected(int64_t timeoutMs, int& savedErrno)
 
 **所以死连接是靠「发数据时失败」发现的**——`SendAll` 或 `RecvAll` 返回错误。
 
-**发现失败后的处理是「整片清池」**（`mprpcchannel.cc:959-985`）：
+**发现失败后的处理是「整片清池」**（`mprpcchannel.cc:892-918`）：
 
 ```cpp
 // 连接级失败：清掉该 endpoint 的整个连接池再重试一次。
@@ -1162,7 +957,7 @@ if (use_direct_) { ... }
 else
 {
     InvalidateHostData(method_path);      // ← 同时失效服务发现缓存
-    std::string retry_host = PickEndpoint(QueryEndpointList(method_path, legacy_method_path));
+    std::string retry_host = PickEndpoint(QueryEndpointList(method_path));
     // 用新 endpoint 重建连接，重试一次
 }
 ```
@@ -1299,7 +1094,7 @@ if (!shard.attempt_id.empty() && incoming_retry < stored_retry)
 | **发送** | `SO_SNDTIMEO` | `SetSocketTimeout` |
 | **接收** | `SO_RCVTIMEO` | `SetSocketTimeout` |
 
-**① 建连超时用的是「非阻塞 connect + poll」**（`mprpcchannel.cc:525-619`）：
+**① 建连超时用的是「非阻塞 connect + poll」**（`mprpcchannel.cc:494-588`）：
 
 ```cpp
 int fd = ::socket(AF_INET, SOCK_STREAM, 0);
@@ -1327,7 +1122,7 @@ SetSocketTimeout(fd, timeoutMs, savedErrno);
 
 **为什么要 `getsockopt(SO_ERROR)`**：`connect` 返回 `EINPROGRESS` 时**不知道成功还是失败**（握手还没完成）。`poll` 返回可写之后，必须查 `SO_ERROR` 才知道结果。这是非阻塞 connect 的标准流程，注释里也写了：`非阻塞 connect 的真实错误需要从 SO_ERROR 读取`。
 
-**② 收发超时交给内核**（`mprpcchannel.cc:97-122`）：
+**② 收发超时交给内核**（`mprpcchannel.cc:96-113`）：
 
 ```cpp
 static bool SetSocketTimeout(int fd, int64_t timeoutMs, int& savedErrno)
@@ -1353,7 +1148,7 @@ static int IoErrorCode(int savedErrno, int defaultCode)
 }
 ```
 
-**③ 长连接复用时要「每次刷新超时」**（`mprpcchannel.cc:735-742`）：
+**③ 长连接复用时要「每次刷新超时」**（`mprpcchannel.cc:704-711`）：
 
 ```cpp
 // 长连接复用时，每次调用都按当前 timeoutMs 刷新 socket 选项
@@ -1427,7 +1222,7 @@ if (conn->currentTimeoutMs != timeoutMs) {
 
 **只重试一次，而且两条分支走不同的恢复路径。**
 
-**触发条件**（`mprpcchannel.cc:953-957`）：
+**触发条件**（`mprpcchannel.cc:886-890`）：
 
 ```cpp
 if (!callOk &&
@@ -1439,7 +1234,7 @@ if (!callOk &&
 
 **只有网络层的 4 个错误码会触发重试**（见 Q1.2.1 的分层）。
 
-**两条恢复路径**（`mprpcchannel.cc:959-985`）：
+**两条恢复路径**（`mprpcchannel.cc:892-918`）：
 
 ```cpp
 // 连接级失败：清掉该 endpoint 的整个连接池再重试一次。
@@ -1455,7 +1250,7 @@ else
 {
     // 服务发现模式：失效缓存 + 重新发现 + 用新 endpoint 重试
     InvalidateHostData(method_path);
-    std::string retry_host = PickEndpoint(QueryEndpointList(method_path, legacy_method_path));
+    std::string retry_host = PickEndpoint(QueryEndpointList(method_path));
     // ... ParseHostData 成功后重建连接重试
 }
 ```
@@ -1494,12 +1289,10 @@ else
 
 ### Q9.1 框架初始化是怎么设计的？
 
-**答（30 秒口述版）**
-
 **`MprpcApplication::Init(argc, argv)` 解析命令行和配置文件，失败返回 `bool` 而不是 `exit()`。**
 
 ```cpp
-// mprpcapplication.cc:20-87（大意）
+// mprpcapplication.cc:20-82（大意）
 bool MprpcApplication::Init(int argc, char** argv)
 {
     // getopt 使用全局状态，测试或同进程多次 Init 时需要重置。
@@ -1606,7 +1399,7 @@ std::string& MprpcConfig::Load(const std::string& key)
 
 `std::map::operator[]` 的语义是「**不存在就默认构造并插入**」。所以每次查一个不存在的 key，`m_configMap` 就**多一个空条目**——**内存泄漏 + 污染**。而且 `Load` 返回的是引用，调用方看不出「这个 key 其实不存在」。
 
-**我的修复**（`mprpcconfig.cc:101-111`）——注释里明确记录了这个坑：
+**我的修复**（`mprpcconfig.cc:98-108`）——注释里明确记录了这个坑：
 
 ```cpp
 // return m_configMap[key]; 如果这样写，如果key不存在，他会自己向map里增加内容
