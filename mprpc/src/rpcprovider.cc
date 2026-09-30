@@ -21,12 +21,14 @@ std::string BuildRpcResponseFrame(uint64_t requestId,
                                   const std::string& errorMsg,
                                   const std::string& responseBody)
 {
+    // 把信息填入进返回头
     mprpc::RpcResponseHeader responseHeader;
     responseHeader.set_request_id(requestId);
     responseHeader.set_error_code(errorCode);
     responseHeader.set_error_msg(errorMsg);
     responseHeader.set_response_size(static_cast<uint32_t>(responseBody.size()));
 
+    // 把responseheader反序列化为string类型
     std::string responseHeaderStr;
     if (!responseHeader.SerializeToString(&responseHeaderStr))
     {
@@ -37,13 +39,14 @@ std::string BuildRpcResponseFrame(uint64_t requestId,
     payload.reserve(sizeof(uint32_t) + responseHeaderStr.size() + responseBody.size());
     mprpc::AppendNetworkUint32(&payload, static_cast<uint32_t>(responseHeaderStr.size()));
     payload += responseHeaderStr;
+    // 加[responseBody]
     payload += responseBody;
 
     // 最外层统一套 RPC 帧，交给 Connection::send 后由客户端按 total_len 精确读取。
     return mprpc::BuildRpcFrame(payload);
 }
 
-// 服务端解析请求失败时也必须回包，否则客户端只能等超时，压测会表现为“卡住”。
+// 服务端解析请求失败时也必须回包，否则客户端只能等超时
 void SendRpcError(const wevix_muduo::TcpServer::ConnectionPtr& conn,
                   uint64_t requestId,
                   mprpc::RpcErrorCode errorCode,
@@ -59,7 +62,7 @@ void SendRpcError(const wevix_muduo::TcpServer::ConnectionPtr& conn,
 // 解析请求 payload：
 // [header_size(4B, network order)] + [RpcHeader] + [args]
 // 校验 header_size 边界，避免坏包越界或把半包当完整包处理。
-// args 长度由外层 total_len 和 header_size 唯一确定，协议不额外携带长度字段。
+// args 长度由外层 total_len 和 header_size 唯一确定
 bool DecodeRequestHeader(const std::string& message,
                          mprpc::RpcHeader& rpcHeader,
                          std::string& argsStr,
@@ -115,7 +118,7 @@ void RpcProvider::NotifyService(google::protobuf::Service *service)
 {
     ServiceInfo service_info;
 
-    // 获取服务对象的描述信息
+    // 获取服务对象的描述信息(包括服务名、方法等)
     const google::protobuf::ServiceDescriptor *pserviceDesc = service->GetDescriptor();
     // 获取服务的名字
     std::string service_name = pserviceDesc->name();
@@ -155,8 +158,6 @@ bool RpcProvider::Run()
     }
     uint16_t port = static_cast<uint16_t>(portValue);
 
-    // 阶段 13：服务发现地址（注册到 ZK）——rpcserverip 为 0.0.0.0/空
-    // （Docker 全接口监听）时，探测本机实际 IP，否则消费者连 0.0.0.0 必失败
     std::string advertise_ip = ip;
     if (advertise_ip.empty() || advertise_ip == "0.0.0.0")
     {
@@ -167,13 +168,13 @@ bool RpcProvider::Run()
     }
 
     int ioThreads = config.LoadInt("rpcserverio_threads", 2, 1, 128);
-    // 默认 work pool 保持小规模，WSL/测试环境友好，生产环境按需调大
+    // 默认 work pool 
     int defaultWorkThreads = 2;
     int workThreads = config.LoadInt("rpcserverwork_threads",
                                      defaultWorkThreads, 0, 256);
 
-    // 创建 TcpServer 对象（wevix_muduo 内部自动管理 EventLoop）
-    // 构造函数：(ip, port, threadNum)，IO 线程数可通过 rpcserverio_threads 配置。
+    // 创建 TcpServer 对象
+    // 构造函数：(ip, port, threadNum)
     wevix_muduo::TcpServer server(ip, port, ioThreads);
 
     // 绑定连接回调和消息读写回调的方法
@@ -188,11 +189,6 @@ bool RpcProvider::Run()
     if (workThreads > 0)
     {
         // 业务 protobuf service 放到 work pool 执行，避免慢业务阻塞 IO 线程。
-        // 采用 CACHED 动态扩缩容：业务 handler 多为阻塞型（MySQL/ZK/MQ），
-        // 固定小池在并发下会饱和排队，CACHED 在任务积压时自动扩容。
-        // 线程数上限取 16：本机压测的吞吐甜点（work_threads 从 2 调到 16，
-        // 100 并发下 P99 由 28ms 降到 2.9ms）；且 mysql_pool_size 默认仅 4，
-        // 线程再加多也只是堵在连接池互斥量上，不构成有效并发。
         constexpr int kMaxWorkThreads = 16;
         server.enableWorkPool(workThreads, wevix_muduo::PoolMode::MODE_CACHED,
                               kMaxWorkThreads);
@@ -206,12 +202,6 @@ bool RpcProvider::Run()
         return false;
     }
 
-    // 多实例注册路径：
-    // /mprpc/services/{service}/{method}/instance-0000000001 -> ip:port
-    // 容器冷启动时 ZK 刚就绪（healthcheck ruok 通过但服务器瞬时过载/会话窗口），
-    // 实测 zoo_create 会返回 ZOPERATIONTIMEOUT(-110)；一次失败直接退出会导致
-    // 容器 restart 循环 + compose 依赖健康检查中止。此处退避重试 3 次兜底，
-    // 恢复后随容器 restart 周期收敛（实测冷启动窗口仅数秒）。
     bool rootOk = false;
     for (int attempt = 1; attempt <= 3 && !rootOk; ++attempt)
     {
@@ -271,7 +261,6 @@ bool RpcProvider::Run()
              ip.c_str(), port, ioThreads, workThreads);
 
     // 设置帧编解码器：让 muduo 在 Connection 层自动处理粘包/拆包
-    // OnMessage 回调保证收到完整一帧，无需再手动判断帧边界
     server.setMessageCodec(RpcMessageCodec);
 
     // 启动网络服务（内部启动 mainLoop + subLoops）
@@ -280,13 +269,11 @@ bool RpcProvider::Run()
     return true;
 }
 
-// 新连接建立回调（wevix_muduo 的 connectionCallback 仅在新连接时触发）
 void RpcProvider::OnConnection(const wevix_muduo::TcpServer::ConnectionPtr& conn)
 {
     LOG_DEBUG("New connection from %s:%u", conn->ip().c_str(), conn->port());
 }
 
-// 连接关闭回调（原 muduo 在 OnConnection 里判断 !connected() 来 shutdown，现拆分为独立回调）
 void RpcProvider::OnClose(const wevix_muduo::TcpServer::ConnectionPtr& conn)
 {
     LOG_DEBUG("Connection closed: %s:%u", conn->ip().c_str(), conn->port());
@@ -297,7 +284,6 @@ void RpcProvider::OnMessage(const wevix_muduo::TcpServer::ConnectionPtr& conn,
 {
     // muduo 已通过 RpcMessageCodec 完成帧提取，message 保证是完整一帧
     // 请求 payload 格式：[header_size(4B, network order)] + [RpcHeader] + [args]
-
     mprpc::RpcHeader rpcHeader;
     std::string args_str;
     std::string errorMsg;
@@ -319,9 +305,8 @@ void RpcProvider::OnMessage(const wevix_muduo::TcpServer::ConnectionPtr& conn,
               static_cast<unsigned long long>(requestId),
               service_name.c_str(), method_name.c_str(), args_str.size());
 
-    // 检查请求是否已过期：客户端通过 RpcHeader.deadline_ms 传递绝对截止时间戳（毫秒），
-    // 如果请求在 work pool 排队后已经超过 deadline，直接丢弃并返回 RPC_TIMEOUT，
-    // 避免做无效计算。
+    // 检查请求是否已过期：客户端通过 RpcHeader.deadline_ms 传递绝对截止时间戳（毫秒）
+    // 如果请求在 work pool 排队后已经超过 deadline，直接丢弃并返回 RPC_TIMEOUT
     // deadline_ms == 0 表示客户端未设置（不检查）。
     if (rpcHeader.deadline_ms() > 0)
     {
@@ -339,12 +324,12 @@ void RpcProvider::OnMessage(const wevix_muduo::TcpServer::ConnectionPtr& conn,
         }
     }
 
+    // 服务名或方法名为空属于协议层坏请求，不进入业务分发。
     if (service_name.empty() || method_name.empty())
     {
         std::string err = "empty service or method name";
         LOG_ERROR("bad rpc request_id=%llu: %s",
                   static_cast<unsigned long long>(requestId), err.c_str());
-        // 服务名或方法名为空属于协议层坏请求，不进入业务分发。
         SendRpcError(conn, requestId, mprpc::RPC_BAD_REQUEST, err);
         return;
     }
@@ -355,11 +340,9 @@ void RpcProvider::OnMessage(const wevix_muduo::TcpServer::ConnectionPtr& conn,
     {
         std::string err = "service not found:" + service_name;
         LOG_ERROR("%s", err.c_str());
-        // 这里回包比只打日志更重要，客户端才能立刻失败并拿到明确原因。
         SendRpcError(conn, requestId, mprpc::RPC_SERVICE_NOT_FOUND, err);
         return;
     }
-
     auto mit = it->second.m_methodMap.find(method_name);
     if(mit == it->second.m_methodMap.end())
     {
@@ -369,6 +352,7 @@ void RpcProvider::OnMessage(const wevix_muduo::TcpServer::ConnectionPtr& conn,
         return;
     }
 
+    // 拿到对应的服务和方法
     google::protobuf::Service *service = it->second.m_service;
     const google::protobuf::MethodDescriptor *method = mit->second;
 
@@ -381,7 +365,7 @@ void RpcProvider::OnMessage(const wevix_muduo::TcpServer::ConnectionPtr& conn,
     {
         std::string err = "parse request args failed, args_size=" + std::to_string(args_str.size());
         LOG_ERROR("%s", err.c_str());
-        // 业务参数反序列化失败，说明请求体不是该方法期望的 protobuf 类型。
+        // 业务参数反序列化失败，说明请求体不是该方法期望的 protobuf 类型
         SendRpcError(conn, requestId, mprpc::RPC_REQUEST_PARSE_FAILED, err);
         return;
     }
@@ -396,8 +380,8 @@ void RpcProvider::OnMessage(const wevix_muduo::TcpServer::ConnectionPtr& conn,
     // 绑定回调函数（Closure）
     // 当业务层处理完业务后调用 done->Run()，实际执行 SendRpcResponse
     // 传递 response 原始指针，由 SendRpcResponse 负责删除
-    // Closure 可能在业务实现里异步执行，所以把响应对象所有权交给 context。
     auto* context = new RpcResponseContext{conn, response.release(), requestId};
+    // 写done回调
     google::protobuf::Closure *done =
         google::protobuf::NewCallback<RpcProvider,
                                       RpcResponseContext*>
@@ -407,6 +391,7 @@ void RpcProvider::OnMessage(const wevix_muduo::TcpServer::ConnectionPtr& conn,
 
     // 在框架上根据远端 RPC 请求，调用当前 RPC 节点上发布的方法
     // request/rawResponse 传递原始指针，CallMethod 返回后 request 自动释放
+    // MprpcChannel::CallMethod里执行
     service->CallMethod(method, nullptr, request.get(), rawResponse, done);
 }
 
@@ -441,11 +426,6 @@ void RpcProvider::SendRpcResponse(RpcResponseContext* context)
 
         // 通过 wevix_muduo 网络库发送
         context->conn->send(send_str);
-        // 不主动调用 conn->shutdown()
-        // 原因：send() 是异步的（可能进入 outputBuffer），shutdown() 是同步的
-        //       若数据未发完就 shutdown，handleWrite 对已关闭 socket 调用 send()
-        //       会触发 EPIPE 错误，且导致数据丢失
-        // 客户端按 response_size 精确读完响应后自行关闭连接，这是安全的主动关闭
     }
     else
     {

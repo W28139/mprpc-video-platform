@@ -122,9 +122,7 @@ ZkClient::ZkClient() : m_zhandle(nullptr)
 {
 }
 
-/**
- * 析构函数：负责释放 Zookeeper 句柄，关闭连接
- */
+// 析构函数：负责释放 Zookeeper 句柄，关闭连接
 ZkClient::~ZkClient()
 {
     if (m_zhandle != nullptr)
@@ -133,9 +131,7 @@ ZkClient::~ZkClient()
     }
 }
 
-/**
- * 启动并连接 Zookeeper 服务器
- */
+// 启动并连接 Zookeeper 服务器
 bool ZkClient::Start()
 {
     if (m_zhandle != nullptr)
@@ -160,10 +156,6 @@ bool ZkClient::Start()
     }
     std::string connstr = host + ":" + port;
 
-    // --- 同步等待连接成功 ---
-    // 因为 zookeeper_init 调用完立刻返回，并不代表连接已经建立。
-    // 信号量必须在 zookeeper_init 前准备好，并通过 context 传入，避免连接事件先于
-    // zoo_set_context 到达导致永久阻塞。
     sem_t sem;
     sem_init(&sem, 0, 0);
 

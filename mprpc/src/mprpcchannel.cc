@@ -855,7 +855,7 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
         }
     }
 
-    // 5. 从 endpoint 连接池取一条连接，发送请求并读取完整响应 payload。
+    // 5. 从 endpoint 连接池取一条连接，发送请求并读取完整响应 payload
     std::shared_ptr<PooledConnection> pooledConn = GetPooledConnection(ip, port);
     std::string recv_str;
     mprpc::RpcErrorCode callErrorCode = mprpc::RPC_SUCCESS;
@@ -870,10 +870,8 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
          callErrorCode == mprpc::RPC_RECV_FAILED))
     {
         // 连接级失败：清掉该 endpoint 的整个连接池再重试一次。
-        // 背景：服务端 EventLoop 会回收空闲连接，客户端池中因此可能积压
-        // 多条「本地 fd 仍有效但对端已关闭」的死连接，逐条轮转失败代价高
-        // （池越大恢复越慢）。清池后重建连接立即恢复。
-        // 注意：RPC_TIMEOUT 也属连接级（对端无响应），原语义保留。
+        // 服务端 EventLoop 会回收空闲连接，客户端池中因此可能积压多条「本地 fd 仍有效但对端已关闭」的死连接
+        // 逐条轮转失败代价高（池越大恢复越慢）。清池后重建连接立即恢复。
         DropEndpointConnections(pooledConn->key);
         if (use_direct_)
         {
@@ -910,6 +908,7 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
         return;
     }
 
+    // 5.1 解析服务端返回的数据
     mprpc::RpcResponseHeader responseHeader;
     std::string responseBody;
     std::string decodeError;
@@ -921,7 +920,7 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
         RunDone(done);
         return;
     }
-
+    // 校验id是否一致
     if (responseHeader.request_id() != requestId)
     {
         // request_id 不一致说明响应不是本次调用的结果，不能交给业务 response 解析。
@@ -933,7 +932,7 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
         RunDone(done);
         return;
     }
-
+    // 检查服务器端是否返回错误
     if (responseHeader.error_code() != mprpc::RPC_SUCCESS)
     {
         // 远端框架已经返回明确失败，例如 service/method 不存在或请求参数解析失败。
