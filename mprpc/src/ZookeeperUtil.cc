@@ -8,16 +8,6 @@
 #include <ctime>
 #include <vector>
 
-// ============================================================================
-// 异步回调上下文（GetData/GetChildren 超时保护，阶段 11 修复）
-// ============================================================================
-// 背景：zoo_get / zoo_get_children 是同步 API，内部阻塞等待 watcher 线程
-// 收到响应。若 ZK 连接处于「会话未建立/断线重连」状态（zookeeper_init 后
-// 连接握手未完成，或重连中），同步调用**无限阻塞**——实测 SchedulingLoop
-// 卡死 7+ 分钟（线程 wchan=futex_wait_queue）。
-// 修复：改用 zoo_aget / zoo_aget_children（异步）+ 信号量 3s 超时等待；
-// 超时后调用方按失败返回，ctx 交由回调线程延迟释放（caller_gone 标记），
-// 杜绝悬垂指针。入口先查 zoo_state：非 CONNECTED 直接失败（快速路径）。
 struct ZooAsyncCtx
 {
     int rc = -1;                        ///< 回调返回码（ZOK=0）

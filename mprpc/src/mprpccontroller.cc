@@ -61,7 +61,7 @@ bool MprpcController::HasTimeout() const
     return m_timeoutMs > 0;
 }
 
-// 目前未实现具体的功能
+// 目前未实现具体的功能(必须继承并实例化，因为是纯虚函数)
 void MprpcController::StartCancel(){}
 bool MprpcController::IsCanceled() const {return false;}
 void MprpcController::NotifyOnCancel(google::protobuf::Closure* callback) {}

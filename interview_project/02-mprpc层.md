@@ -61,15 +61,15 @@ MprpcChannel::CallMethod()
 
 ```text
 ┌─────────────────────────────────────────────┐
-│  业务层：video_platform 的 5 个微服务        │  ← 只写 service 实现
+│  业务层：video_platform 的 5 个微服务          │  ← 只写 service 实现
 ├─────────────────────────────────────────────┤
-│  RPC 语义层：RpcProvider / MprpcChannel      │  ← 分发、序列化、发现、重试
-│              MprpcController（错误码/超时）   │
+│  RPC 语义层：RpcProvider / MprpcChannel       │  ← 分发、序列化、发现、重试
+│              MprpcController（错误码/超时）    │
 ├─────────────────────────────────────────────┤
-│  协议层：mprpccodec.h（帧格式 + 拆帧）        │  ← 粘包/半包、长度合法性校验
+│  协议层：mprpccodec.h（帧格式 + 拆帧）          │  ← 粘包/半包、长度合法性校验
 │          rpcheader.proto（15 个错误码）       │
-├─────────────────────────────────────────────┤
-│  传输层：wevix_muduo（TcpServer/EventLoop/…）│  ← epoll、IO 线程、Buffer
+├────────────────────────────────────────── ──┤
+│  传输层：wevix_muduo（TcpServer/EventLoop/…） │  ← epoll、IO 线程、Buffer
 └─────────────────────────────────────────────┘
 ```
 
@@ -216,7 +216,7 @@ if (timeoutMs > 0)
 }
 ```
 
-传绝对时刻（`now + timeoutMs`）而不是时长，是因为服务端**需要判断「这个请求现在还有没有意义」**——而这个判断必须在同一时间基准上做。如果传时长，服务端还得知道「客户端是什么时候发的」才行。
+传绝对时刻（`now + timeoutMs`）而不是时长，是因为服务端在进行message操作时，会不断**需要判断「这个请求现在还有没有意义」**——而这个判断必须在同一时间基准上做。如果传时长，服务端还得知道「客户端是什么时候发的」才行
 
 ---
 
@@ -376,20 +376,16 @@ stub.ScheduleJob(&controller, &request, &response, nullptr);
 
 ### Q5.1 ` ` 做了什么？为什么存裸指针？
 
-**答**：**用自己建的两层 map 索引「service 名 → ServiceInfo」，`ServiceInfo` 里再索引「method 名 → MethodDescriptor*」。**
+**答**：**用自己建的两层 map 索引「service 名 → ServiceInfo」，`ServiceInfo` 里再索引「method 名 → MethodDescriptor」。**
 
-（`rpcprovider.h:32-38`）。注册逻辑（`rpcprovider.cc:123-136`）：
+**为什么存裸指针**
 
-**为什么存裸指针**——`rpcprovider.h:17-20` 的注释就是答案：
+Provider 仅存储裸指针用于方法分发，不接管对象所有权，不会 delete service。
+调用方必须保证 service 对象在 Provider 生命周期内一直有效。
 
-```cpp
-// 发布 RPC 服务到 Provider。
-// Provider 仅存储裸指针用于方法分发，不接管对象所有权，不会 delete service。
-// 调用方必须保证 service 对象在 Provider 生命周期内一直有效。
-// 典型用法：栈对象或全局对象，不要用 new 后把生命周期管理丢给 Provider。
-```
+**这是刻意的所有权约定**：Provider **不管** service 的生命周期。
 
-**这是刻意的所有权约定**：Provider **不管** service 的生命周期。业务层的实际用法就是 `main()` 里的栈对象：
+业务层的实际用法就是 `main()` 里的栈对象：
 
 ```cpp
 int main(int argc, char** argv)
@@ -402,6 +398,7 @@ int main(int argc, char** argv)
 ```
 
 **为什么不用 `unique_ptr` 接管**：因为框架**不应该替业务决定对象的生命周期**。如果 Provider 接管所有权，那业务就没法：
+
 - 用**栈对象**（最常见的用法）；
 - 用**全局/静态对象**；
 - 多个 Provider 共享同一个 service 实例。
@@ -415,10 +412,6 @@ int main(int argc, char** argv)
 auto sit = m_serviceMap.find(service_name);
 auto mit = sit->second.m_methodMap.find(method_name);
 ```
-
-**好处**：
-1. **O(1)** ——protobuf 的 `FindMethodByName` 需要遍历 descriptor；
-2. **服务名可以和解耦**——proto 里写 `package mprpc;`，但注册用的是 `ServiceDescriptor::name()`，两者不绑定。
 
 **⚠️ `m_serviceMap` 是无锁的**。因为约定是「`NotifyService` 必须在 `Run()` 之前全部调完」——也就是**单线程初始化期**，运行期只读。这是个**隐式约定，没有断言保护**。
 
@@ -464,18 +457,9 @@ bool RegisterToZk(const std::string& service_name, const std::string& method_nam
 
 **为什么现在不做**：**没有需求**。`video_platform` 的 5 个服务都是**启动时注册、运行期不变**的——`NotifyService` 调一次、`Run()` 阻塞，之后服务集合是固定的。
 
-**但我认为这是个合理的扩展方向**，因为「热更新服务实现」在某些场景下是有价值的（比如灰度发布新版本 handler）。**如果要做，`shared_mutex` 是正确选择**——读（`OnMessage` 分发）远多于写（`NotifyService`）。
-
-**面试官想听什么**
-
-- 承认做不到，并**给出具体的技术方案**（`shared_mutex` + ZK 节点管理）
-- 说清**为什么现在不做**（没有需求），而不是「没想到」
-
 ---
 
 ### Q5.2 服务端收到请求后做了哪些检查？
-
-**答（30 秒口述版）**
 
 **七项检查，而且——任何一步失败都会回一个错误响应，绝不让客户端干等超时。**
 
@@ -489,80 +473,13 @@ bool RegisterToZk(const std::string& service_name, const std::string& method_nam
 | 6 | `request` 能否 `ParseFromString` | `RPC_REQUEST_PARSE_FAILED` |
 | 7 | response 的 64MB 上限 | `RPC_FRAME_TOO_LARGE` |
 
-（`rpcprovider.cc:295-411`）。
-
-**第 1 项内部包含一个内容校验**（`DecodeRequestHeader`，`rpcprovider.cc:63-97`）：
-
-```cpp
-// 校验 header_size 合法性；args 长度由 total_len 和 header_size 唯一推出，无需再校验
-if (headerSize == 0 || message.size() - 4 < headerSize)  → 失败
-```
-
-**「坏包也回包」这个原则**（`rpcprovider.cc:46-57` 的注释）：
-
-```cpp
-// 服务端任何解析失败都回错误帧，客户端不会干等超时
-```
-
-**为什么这条原则很重要**——如果服务端解析失败就静默丢弃：
-
-```text
-客户端：发出请求 → 等待……
-服务端：解析失败，丢弃，打条日志
-客户端：等到 SO_RCVTIMEO（5 秒）超时 → 报 RPC_TIMEOUT
-```
-
-客户端拿到的是 **`RPC_TIMEOUT`**——**归因完全错误**！明明是「服务端收到了但请求格式不对」，客户端却以为是「超时」。运维会去查网络、查负载，而真正的问题（协议不匹配/版本不一致）被掩盖了。
-
-**回错误帧之后**：
-
-```text
-客户端：收到响应 → request_id 不匹配（服务端解析失败时填 0）→ RPC_INVALID_RESPONSE
-       或者 request_id 匹配但 error_code != 0 → 透传远端错误码
-```
-
-至少客户端能**立刻**失败并拿到明确的原因（`RPC_BAD_REQUEST`），而不是等 5 秒超时。
-
-**⚠️ 这里有个细节值得注意**：服务端解析失败时 `request_id` 填 **0**（因为拿不到）：
-
-```cpp
-SendRpcError(conn, 0 /* 未知 request_id */, RPC_BAD_REQUEST, errorMsg);
-```
-
-而客户端的校验是「`request_id` 必须和我发的一致」，所以会得到 `RPC_INVALID_RESPONSE` 而不是 `RPC_BAD_REQUEST`。**错误码在客户端看起来会有点绕**——它能看到 `error_msg` 里的具体原因，但 `error_code` 是 `RPC_INVALID_RESPONSE`。
-
-**这是个可以改进的点**：客户端可以识别「`request_id == 0` + 有 `error_msg`」这种情况，直接透传服务端的错误码，而不是报 `RPC_INVALID_RESPONSE`。
-
-**面试官想听什么**
-
-- 能说出「**坏包也回包**」这个原则，以及**不做的话会导致错误归因**（超时掩盖真实原因）
-- 知道 `header_size` 的边界校验是**帧内部自洽**的防线，和外层 `total_len` 是两个层次
-- 能主动指出 `request_id = 0` 带来的错误码绕路问题
-
-**可能追问**
-
-- Q5.2.1 deadline 检查为什么放在 work 线程里？
+（`rpcprovider.cc:295-411`）
 
 #### Q5.2.1 deadline 检查为什么放在 work 线程里？它能阻止什么、不能阻止什么？
 
 **答**：**它能阻止「排队太久的请求被白算」，但不能中断已经在执行的 handler。**
 
 **位置**（`rpcprovider.cc:326-340`）：
-
-```cpp
-// deadline_ms == 0 表示客户端未设置（不检查）。
-if (rpcHeader.deadline_ms() > 0)
-{
-    uint64_t nowMs = ...system_clock...;
-    if (nowMs > rpcHeader.deadline_ms())
-    {
-        LOG_DEBUG("RPC request expired: request_id=%ld, deadline=%lu, now=%lu", ...);
-        SendRpcError(conn, requestId, mprpc::RPC_TIMEOUT,
-                    "request deadline exceeded before processing");
-        return;
-    }
-}
-```
 
 **关键在于它在哪个位置执行**：`OnMessage` 是 `TcpServer::handleMessage` 投进 work 池之后的回调，**也就是说 `OnMessage` 本身就跑在 work 线程里**。
 
@@ -593,67 +510,21 @@ void NotifyOnCancel(Closure* /* callback */) override {}
 
 注释写着「目前未实现具体的功能」。`service->CallMethod(method, nullptr, ...)` 的 **controller 参数传的是 `nullptr`**（`rpcprovider.cc:410`）——**Provider 侧根本没把 controller 传给业务**，所以业务层也没有办法感知取消。
 
-**业务层是怎么补偿的**：`video_platform` 自己在**业务语义层面**实现了取消——`CancelShard` RPC + `should_cancel` 回调 + kill 子进程。**这是业务层的能力，不是框架层的**。
-
-**所以完整的图景是**：
-
-| 能力 | 层级 | 实现 |
-|---|---|---|
-| 过期请求不白算 | 框架层 | deadline 检查（队列出口） |
-| 中断正在执行的 handler | **框架层缺失** | 需要取消机制（未实现） |
-| 中断正在执行的子进程 | 业务层 | `CancelShard` + `should_cancel` + `kill` |
-
-**还有一个值得说的细节**：deadline 比较用的是 `system_clock`（绝对墙钟时间），所以**机器之间的时钟漂移会直接影响判定**。如果客户端比服务端快 5 秒、超时设 5 秒，那所有请求到了服务端都会被判过期。
-
-**严谨的做法**是用「相对于服务端收到请求时的时间差」——但这样就需要在协议里额外传「发送时刻」，而且同样依赖时钟同步。**绝对时间戳是业界普遍做法**（gRPC 的 deadline 也是绝对时间），前提是集群做时钟同步。
-
-**面试官想听什么**
-
-- 能精确说出 deadline 检查的**位置语义**（work 线程、队列出口）
-- 能**区分**「不会白算」和「不会中断」——这是两个不同的保证
-- 知道取消机制**在框架层是缺失的**，业务层是自己实现的
-- 知道时钟漂移的影响
-
 ---
 
 ### Q5.3 `SendRpcResponse` 是怎么管理 response 对象生命周期的？
-
-**答（30 秒口述版）**
 
 **用一个上下文结构打包「连接 + response + request_id」，把所有权通过 `release()` 移交，然后在 `SendRpcResponse` 开头用 `unique_ptr` 接住。**
 
 **第一步：构造上下文**（`rpcprovider.cc:389-406`）：
 
 ```cpp
-// 绑定回调函数（Closure）
-// 当业务层处理完业务后调用 done->Run()，实际执行 SendRpcResponse
-// 传递 response 原始指针，由 SendRpcResponse 负责删除
-// Closure 可能在业务实现里异步执行，所以把响应对象所有权交给 context。
 auto* context = new RpcResponseContext{conn, response.release(), requestId};
 google::protobuf::Closure *done =
     google::protobuf::NewCallback<RpcProvider, RpcResponseContext*>(
         this, &RpcProvider::SendRpcResponse, context);
 service->CallMethod(method, nullptr, request.get(), rawResponse, done);
 ```
-
-`RpcResponseContext`（`rpcprovider.cc:107-112`）：
-
-```cpp
-struct RpcResponseContext
-{
-    wevix_muduo::Connection::ConnectionPtr conn;
-    google::protobuf::Message* response;
-    uint64_t requestId;
-};
-```
-
-**为什么用「一个结构」而不是「三个参数」**——`rpcprovider.h:27-28` 的注释：
-
-```cpp
-// protobuf::NewCallback 当前版本最多方便绑定两个参数
-```
-
-`NewCallback` 的模板参数展开有限制，打包成结构体是最省事的做法。
 
 **第二步：接住所有权**（`rpcprovider.cc:415-420`）：
 
@@ -685,17 +556,9 @@ service->CallMethod(method, nullptr, request.get(), rawResponse, done);
 - `request` 只在「分发期间」需要 → 局部 `unique_ptr` 够；
 - `response` 要活到「业务处理完」→ 必须移交所有权。
 
-**面试官想听什么**
-
-- 能说清「`release()` 移交 + `unique_ptr` 接住」这个**所有权交接模式**
-- 知道「两个 `unique_ptr` 声明在最顶上」是为了**覆盖所有 return 路径**——RAII 的释放时机由作用域决定，不依赖每个调用点的纪律
-- 知道 `request` 和 `response` 生命周期管理的**不对称性**及原因
-
-**可能追问**
-
-- Q5.3.1 `done` 回调如果没被调用会怎样？
-
 #### Q5.3.1 `done` 回调如果没被调用会怎样？
+
+done 是框架交给业务层的"回执按钮"：业务填完 response 后按下它（done->Run()），等于告诉框架"响应已备好，请发送并回收资源"。**所以 done->Run() = 发送响应 + 资源回收两件事打包成一个动作。**
 
 **答**：**请求会永久悬挂，客户端一直等到超时——而且服务端的 `context` 和 `response` 会内存泄漏。**
 
@@ -709,61 +572,144 @@ service->CallMethod(method, nullptr, request.get(), rawResponse, done);
 客户端：等到 SO_RCVTIMEO（默认 5 秒）→ RPC_TIMEOUT
 ```
 
-**这里有个必须知道的分工**（`rpcprovider.h:44-49` 的注释写得很清楚）：
+---
+
+### Q5.4 为什么目前不是异步？如何改成异步？
+
+**先分清概念**：同步 = 发起后原地等结果，等到才走下一步；异步 = 发起后立即返回，结果好了再由回调/事件通知。判断本项目到底是哪种，只有一条标准：**`done` 有没有在业务返回之后、别的时刻才被调用。**
+
+**为什么现在是同步**——不是「done 后直接 return」，恰恰相反，是**所有事都在 return 之前就做完了**：
 
 ```cpp
-//   - 同步方法：protobuf 生成的默认 CallMethod 在返回前自动调用 done->Run()，
-//     框架无需额外处理，响应在 CallMethod 返回时已发出。
-//   - 异步方法：业务覆写 CallMethod 后，必须在异步操作完成时手动调用
-//     done->Run()。漏调会导致请求永久悬挂，客户端一直等到超时。
+// 服务端所有 handler 的通用形态（job_service.cpp 等，全仓库 53 处一致）
+void JobServiceImpl::SubmitJob(...) {
+    ...
+    done->Run();     // ① 发送响应 + 回收资源，此刻同步完成（job_service.cpp:173）
+}                    // ② 然后才 return —— 按按钮发生在 return 之前
 ```
 
-**关键区别**：
+- **服务端**：53 处 `done->Run()` 全部在 handler 返回前调用，`SendRpcResponse` 里的 `conn->send()` 也是同步发送，整条链路没有一刻「让出」CPU。
+- **客户端**：`MprpcChannel::CallMethod` 阻塞在 `RecvAll` 循环里直到响应回来才 return（`mprpcchannel.cc:138`），调用线程全程被占。
 
-| 实现方式 | 谁调 `done->Run()` | 会不会漏 |
-|---|---|---|
-| **同步方法**（不覆写 `CallMethod`） | protobuf 生成的默认实现**自动调用** | **不会漏** |
-| **异步方法**（覆写 `CallMethod`） | **业务代码自己调** | **可能漏** |
+所以 `done` 现在等价于一个「立即执行的发送钩子」——**延迟执行的能力在，但没有任何人使用它**。
 
-**为什么同步方法不会漏**：protobuf 生成的 service 基类的默认 `CallMethod` 长这样（示意）：
+**如何改成异步**：
+
+1. **handler 不按按钮**：拿到 `done` 后存起来先返回，业务线程立刻空出来处理下一个请求；
+2. **完成后补按**：耗时操作（下游 RPC / DB / FFmpeg）在别的线程结束后，那时才调 `done->Run()`，框架此时才发送响应；
+3. **框架配合改生命周期**：`request` 必须移进 `RpcResponseContext`（现在它是栈上 `unique_ptr`，`rpcprovider.cc:360`，函数返回即释放，真异步会 UAF），`conn` 裸指针也要改成保活引用。
+
+一句话本质：**把「等待」从线程转移到回调和状态上**。同步是拿线程换简单（每在途请求占 1 线程 + 1 连接），异步是拿复杂度换规模（单线程管万级在途请求）。
+
+**本项目要不要做？不要**：瓶颈在 FFmpeg 子进程（CPU 密集、外部进程解耦），RPC 全是毫秒级控制面调用；业务层的异步（`SubmitJob` 立即返回 job_id → 轮询 / MQ 事件驱动）已经覆盖了真正需要异步的场景。
+
+---
+
+## 六、服务注册发现：ZooKeeper
+
+### Q6.1 ZK 的节点结构是怎么设计的？
+
+**永久节点做容器、临时顺序节点做实例**
+
+```text
+/mprpc/services                      ← 永久节点
+  └── UserServiceRpc                 ← 永久节点（service_name）
+      └── Login                      ← 永久节点（method_name）== methodPath
+          ├── instance-0000000000    ← 临时顺序节点, data = "192.168.1.5:9001"
+          └── instance-0000000001    ← 临时顺序节点, data = "192.168.1.5:9002"
+```
+
+路径规则（客户端 `mprpcchannel.cc:194-198`，服务端另有一份拷贝 `rpcprovider.cc:102`）：
 
 ```cpp
-void Service::CallMethod(const MethodDescriptor* method, RpcController* controller,
-                         const Message* request, Message* response, Closure* done)
+std::string MethodRegistryPath(const std::string& svc, const std::string& m)
 {
-    // 默认实现：调业务实现的虚函数，然后自动 Run
-    CallMethod(method, controller, request, response, done);
-    if (done) done->Run();      // ← 自动调用
+    return "/mprpc/services/" + svc + "/" + m;
 }
 ```
 
-而业务实现的是 `Service` 的**业务虚函数**（比如 `void ScheduleJob(RpcController*, const ScheduleJobRequest*, ScheduleJobResponse*, Closure*)`），它不需要碰 `done`。
-
-**`video_platform` 的 5 个服务全部是同步实现**——所以这条风险在实践中没有触发。
-
-**如果真的要写异步方法**，正确的模式是：
+注册（`rpcprovider.cc:223-256`）：
 
 ```cpp
-void MyServiceImpl::AsyncMethod(RpcController* ctrl, const Request* req,
-                                 Response* resp, Closure* done)
-{
-    // 保存 done，发起异步操作
-    thread_pool.Submit([this, req_copy, resp, done]() {
-        // ... 异步处理 ...
-        resp->set_result(...);
-        if (done) done->Run();      // ← 必须记得
-    });
-}
+zkCli.Create("/mprpc", nullptr, 0);                 // state=0 → 永久
+zkCli.Create("/mprpc/services", nullptr, 0);        // 永久
+zkCli.Create(service_path.c_str(), nullptr, 0);     // /mprpc/services/{服务名}    永久
+zkCli.Create(method_path.c_str(), nullptr, 0);      // /mprpc/services/{服务名}/{方法名}  永久
+
+sprintf(method_path_data, "%s:%d", advertise_ip.c_str(), port);
+// ← 实例节点：临时 + 顺序，value = "ip:port"
+zkCli.Create((method_path + "/instance-").c_str(), method_path_data, strlen(method_path_data),
+             ZOO_EPHEMERAL | ZOO_SEQUENCE, &actualPath);
 ```
 
-**问题在于**：`request` 是框架的局部 `unique_ptr`，`CallMethod` 返回时就析构了——**异步场景下 `req` 会悬垂**！所以异步实现必须**拷贝 request**。这正是审计报告里指出的「**服务端 `request` 对象生命周期与异步 done 不兼容**」问题。
+**三个设计决定**：
 
-**所以当前框架对异步的支持是「不完整」的**——`done` 机制在，但 `request` 的生命周期管理没跟上。要用异步必须自己拷贝 request。
+| 决定 | 理由 |
+|---|---|
+| 永久做容器、临时做实例 | Provider 崩溃没机会清理，ZK 会话超时（30s）自动删临时节点——客户端不需要额外健康检查 |
+| `ZOO_SEQUENCE` 顺序节点 | ① 多实例命名不冲突；② 客户端 `GetChildren` 后 `std::sort`（`mprpcchannel.cc:264-265`）再轮询，**所有客户端轮询顺序一致**，避免负载不均 |
+| value 存 `ip:port` | 客户端拿到 children 名后还要 `GetData` 取实际地址 |
 
-**面试官想听什么**
+进程被强杀时，任何清理代码都没机会执行
 
-- 知道「同步自动调 / 异步手动调」的分工，以及**漏调的后果**（悬挂 + 泄漏）
-- 能指出**异步场景下 `request` 生命周期不兼容**这个更深的问题
+后果是：死掉的实例注册永远留在 ZK 里（假如用的是永久节点），客户端会一直发现并连接这个死地址，连一次失败一次，没有任何自愈机制，只能人工上 ZK 删节点。
+
+临时节点怎么绕开这个问题？
+
+后台线程持续给 ZK 发心跳维持 session；
+
+会话超时时间在本项目是 30s，进程一死，心跳停止。ZK 服务端等 30s 判定会话过期，然后由 ZK 自己删除该会话创建的所有临时节点
+
+### Q6.2 服务发现的三级缓存是怎么设计的？
+
+**本地缓存（30s TTL）→ Redis 集中缓存（多进程共享）→ ZooKeeper。**
+
+```text
+MprpcChannel::CallMethod
+  └─ GetHostData(method_path)                         ← mprpcchannel.cc:318-367
+       ├─ ① 本地 ServiceCache（unordered_map + 30s TTL）  ← 热路径零网络
+       ├─ ② Redis HGET mprpc:endpoints {method_path}      ← 多进程共享
+       └─ ③ ZooKeeper GetChildren + GetData               ← 兜底，并双写回前两级
+```
+
+**数据结构**（`mprpcchannel.cc:180-192`）：
+
+```cpp
+constexpr char kEndpointsHashKey[] = "mprpc:endpoints";
+constexpr int64_t kEndpointCacheTtlSec = 30;   // 本地与 Redis 统一 TTL：实例变更最多 30s 生效
+
+struct EndpointCacheEntry
+{
+    std::vector<std::string> endpoints;
+    size_t nextIndex = 0;       // 轮询游标
+    int64_t fetchedAtMs = 0;    // 本地缓存写入时间，超 TTL 视为过期
+};
+```
+
+**三个要点**：
+
+**① 本地缓存「命中即零网络」**——热路径上（每次 RPC）只做一次哈希查找 + 一次时间比较。
+
+**② Redis 是「多进程共享的发现结果」**——每个消费者进程各有一份本地缓存，没有 Redis 时 N 个进程要拉 N 次 ZK；有了它，同一份数据只拉一次写进 `mprpc:endpoints`，所有进程共享。ZK 拉取后**双写**（`mprpcchannel.cc:276-297`）：先 `HSET + EXPIRE 30s` 写 Redis（**不持本地缓存锁**——网络操作 2s 超时，持锁会卡死发现热路径），再写本地缓存。
+
+**③ 失效是「主动 + 被动」双轨**：
+
+- **主动**（连接级失败触发，`mprpcchannel.cc:371-383`）：`InvalidateHostData` 清本地 map + `HDEL mprpc:endpoints {field}`。**HDEL 清的是 Redis 共享字段 → 所有进程的缓存同时失效**，不会出现「A 失效了、B 还在用旧地址」的时间差；
+- **被动**：30s TTL 自然过期，是**自愈兜底**——即使 Redis 完全挂掉（HDEL 失败只打 DEBUG），各进程本地缓存 30 秒后也会自己过期重拉 ZK。
+
+#### Q6.2.1 为什么不用 ZK 的 Watcher 做实时推送？
+
+**答**：**因为 Watcher 是「一次性」的，维护成本远高于 TTL 拉模型。**
+
+代码里发现路径的 watcher 参数全是 0（`ZookeeperUtil.cc:317`）：
+
+```cpp
+zoo_aget(m_zhandle, path, 0, GetDataCb, ctx);   // watcher=0：不设置监听
+```
+
+要用 Watcher 必须处理四个麻烦：① **一次性**——触发后必须重新注册，漏一次就永久失去通知；② **触发风暴**——1000 个客户端 watch 同一节点，一个实例下线同时触发 1000 个回调 + 1000 次重拉，ZK 二次承压；③ **回调在 ZK 的 watcher 线程执行**——访问框架缓存要跨线程投递（`runInLoop` 那一套），引入线程安全问题；④ **会话过期后所有 watcher 失效**，要全部重注册。
+
+**「30 秒生效」对业务可接受**：新 worker 上线最多 30s 后被调度，相对一次转码几十秒可忽略；实例下线感知更宽松——**即使拿到已下线地址，连接失败会立刻触发「失效缓存 + 重新发现 + 重试一次」，实际感知远小于 30s**。用「30s 内可能拿旧地址」换「实现简单 + ZK 压力平稳 + 自动恢复」。
 
 ---
 
@@ -771,7 +717,7 @@ void MyServiceImpl::AsyncMethod(RpcController* ctrl, const Request* req,
 
 ### Q7.1 连接池是怎么设计的？
 
-**答（30 秒口述版）**
+每个服务节点都有对应的连接池，统一通过ipport映射存放在pool的哈希表里
 
 **按 endpoint（`ip:port`）分片，每个 endpoint 一个 `vector<shared_ptr<PooledConnection>>`，每连接一把 mutex。**
 
@@ -849,16 +795,6 @@ static size_t MaxConnectionsPerEndpoint()
 
 默认 8，范围 1~128。
 
-**面试官想听什么**
-
-- 能说清**按 endpoint 分片**的意义（故障隔离）
-- 知道「取连接」和「建连接」是**分离**的（懒建）
-- 知道 `PooledConnection::mutex` 覆盖整次 send+recv，以及它带来的**并发上限**
-
-**可能追问**
-
-- Q7.1.1 那单个服务的并发 RPC 上限是多少？
-
 #### Q7.1.1 单个服务的并发 RPC 上限是多少？
 
 **答**：**等于连接池大小，默认 8。**
@@ -889,44 +825,9 @@ bool SendRequestAndReadResponse(std::shared_ptr<PooledConnection> conn, ...)
 
 **第 9 个并发调用者会怎样**：`GetPooledConnection` 会轮询返回某条连接，然后它在 `conn->mutex` 上**阻塞排队**，直到前一个请求完成。
 
-**这个设计是「同步模型」的必然结果**：
-
-| 方案 | 并发能力 | 复杂度 |
-|---|---|---|
-| **每连接互斥（当前）** | = 池大小 | **低**——天然无响应错配 |
-| 连接内多路复用（HTTP/2 式） | 无上限 | 高——需要 stream_id 映射、乱序响应处理 |
-| 每请求一条连接 | 无上限 | 中——但建连开销大 |
-
-**「每连接一把锁」的最大好处是：永远不会出现响应错配。** 因为一条连接上同时只有一个请求在途，收到的响应**必然**是它的。
-
-**如果要做多路复用**，就必须维护「`request_id` → 等待中的调用者」的映射表，允许响应乱序到达——这正是 gRPC over HTTP/2 做的事，复杂度高一个量级。
-
-**这个上限的实际影响**：`video_platform` 的场景里，单个消费者对单个 provider 的并发通常不大（Scheduler 调 Worker 是逐个的），所以 8 够用。**但如果要压测单个服务的极限 QPS**，8 就是天花板。
-
-**实测数据佐证**（【记录】开发日志）：
-
-| 模式 | QPS | 说明 |
-|---|---|---|
-| `--direct --keepalive -c 100 -m 1000` | **84.7 万** | 长连接复用 |
-| `--direct -c 500 -m 20`（短连） | 6.2 万 | 每次新建连接 |
-
-长连接能到 84.7 万，说明**在连接数足够时（100 并发 = 100 条连接 > 8）**，瓶颈不在池大小上——因为池会建到 8 条然后轮询。等等，这里有意思：100 并发但池只有 8 条连接，为什么还能到 84.7 万？
-
-因为**每个请求的耗时很短**（P50 56 微秒），所以 8 条连接每秒能处理 `8 / 56µs ≈ 14 万` QPS 每条……不对，是 `8 条 / 56µs = 14.3 万`——嗯，84.7 万 / 8 条连接 = 每条连接 10.6 万 QPS，也就是每个请求约 9.4 微秒。这和 P50 56 微秒对不上。
-
-**这说明压测时实际的 endpoint 数不止 1 个**，或者连接池的行为和我描述的略有出入。**这个数字的解读我需要谨慎**——我只能说「长连接模式下实测 84.7 万 QPS」，具体连接池怎么分布的我没有深究。
-
-**面试官想听什么**
-
-- 能从「`mutex` 覆盖整次往返」推导出「并发上限 = 池大小」
-- 能对比三种并发模型（每连接互斥 / 多路复用 / 每请求连接）的**复杂度和能力**
-- 知道「每连接互斥」的核心价值是**天然无响应错配**
-
 ---
 
 ### Q7.2 连接池的死连接问题是怎么处理的？
-
-**答（30 秒口述版）**
 
 **不做探活检测，而是「失败时清掉整个 endpoint 的池」——因为逐条检测的代价更高。**
 
@@ -947,24 +848,9 @@ bool PooledConnection::EnsureConnected(int64_t timeoutMs, int& savedErrno)
 
 **发现失败后的处理是「整片清池」**（`mprpcchannel.cc:892-918`）：
 
-```cpp
-// 连接级失败：清掉该 endpoint 的整个连接池再重试一次。
-// 背景：服务端 EventLoop 会回收空闲连接，客户端池中因此可能积压
-// 多条「本地 fd 仍有效但对端已关闭」的死连接，逐条轮转失败代价高
-// （池越大恢复越慢）。清池后重建连接立即恢复。
-DropEndpointConnections(pooledConn->key);
-if (use_direct_) { ... }
-else
-{
-    InvalidateHostData(method_path);      // ← 同时失效服务发现缓存
-    std::string retry_host = PickEndpoint(QueryEndpointList(method_path));
-    // 用新 endpoint 重建连接，重试一次
-}
-```
-
 **为什么是「清池」而不是「只关这一条」**：
 
-假设池里有 8 条连接，其中 5 条是死的。如果只关当前这条：
+假设池里有 8 条连接，其中 7 条是死的。如果只关当前这条：
 
 ```text
 请求1 → 连接1 → 失败 → 关连接1 → 重试 → 拿到连接2 → 失败 → 关连接2 → ...
@@ -978,113 +864,13 @@ else
 请求1 → 连接1 → 失败 → 清空整个池 → 重试 → 拿到全新连接 → 成功
 ```
 
-**一次失败就恢复**。代价是「把可能还活着的连接也关掉了」——但那 3 条活连接重建的成本，远低于「逐条试错」的成本。
-
-**这个设计的洞察是**：**死连接是「批量出现」的**，因为服务端回收空闲连接是**周期性的、批量性的**（一次扫描把超时的都关掉）。所以「池里有一部分是死的」比「池里只有一条是死的」更常见。
-
-**同时失效服务发现缓存**：连接失败可能意味着「这个 endpoint 已经下线了」，所以顺带 `InvalidateHostData` 清掉发现缓存（本地 + Redis），下次重新从 ZK 拉。
-
-**⚠️ 但这里有个我注意到的问题**：重试的触发条件里**包含 `RPC_TIMEOUT`**：
-
-```cpp
-if (!callOk &&
-    (callErrorCode == mprpc::RPC_CONNECT_FAILED ||
-     callErrorCode == mprpc::RPC_TIMEOUT ||        // ← 超时也会重试
-     ...))
-```
-
-**`RPC_TIMEOUT` 的语义是模糊的**：
-- 可能是「连接建不上」（连接级失败，重试合理）；
-- 也可能是「**请求已经发出去了、服务端可能已经执行了，只是响应没回来**」（重试会导致**重复执行**）。
-
-**这就是 RPC 框架的 at-least-once 语义**——框架层不保证幂等（它做不到，因为无法区分「未执行」和「已执行未响应」）。**幂等必须由业务层保证**，`video_platform` 是用 `attempt_id` 做的。
-
-**面试官想听什么**
-
-- 能说清「清池而不是逐条关」的**理由**（死连接是批量出现的）
-- 知道**不做探活**是个取舍（探活也有成本，而且 `getsockopt` 探不出来半开的连接）
-- 能**主动指出** `RPC_TIMEOUT` 也进重试、意味着 **at-least-once 语义**
-
-**可能追问**
-
-- Q7.2.1 那重试导致重复执行怎么办？
-
-#### Q7.2.1 那重试导致重复执行怎么办？
-
-**答**：**框架层不解决，交给业务层用「幂等键」解决。这是分层的正确做法。**
-
-**为什么框架层解决不了**：考虑超时场景：
-
-```text
-客户端：[t0] 发送请求 ────────────────► [t5] 5 秒超时，报 RPC_TIMEOUT
-                                     │
-服务端：        [t1] 收到请求 → 开始处理 → [t10] 处理完，回响应
-                                     ↑
-                          客户端在 t5 就放弃了，但它不知道
-                          服务端到底「没收到」还是「收到了正在处理」
-```
-
-**客户端面临的是「不确定状态」**——它无法区分：
-
-- 情况 A：请求在网络上丢了 → 重试是**安全**的；
-- 情况 B：服务端收到了、正在处理，只是慢 → 重试会**导致重复执行**。
-
-**要区分这两种情况，需要「两阶段提交」或「事务 ID 查询」**——那会让协议复杂很多，而且需要服务端配合维护状态。
-
-**所以 RPC 框架的通用语义是 at-least-once（至少一次）**，这不是我的框架的缺陷，而是**分布式系统的本质限制**。
-
-**`video_platform` 是怎么做到「恰好一次生效」的**——**用 `attempt_id` 做幂等键**：
-
-```cpp
-// Scheduler 分配时生成（scheduler_service.cpp:997）
-fresh.attempt_id = fresh.shard_id + "_attempt_" + std::to_string(fresh.retry_count);
-// 形如 "job_xxx_shard_0_attempt_2"
-
-// ResultCollector 收到结果时校验
-int stored_retry   = parseRetryFromAttempt(shard.attempt_id);
-int incoming_retry = parseRetryFromAttempt(attempt_id);
-if (!shard.attempt_id.empty() && incoming_retry < stored_retry)
-{
-    LOG_INFO("...: rejecting stale result for shard %s", ...);
-    response->set_accepted(false);
-    return;      // ← 旧 attempt 的结果直接丢弃
-}
-```
-
-**`attempt_id` 本质上是个「执行代次（generation）」**：
-- 每次重试，`retry_count` 递增，`attempt_id` 变化；
-- 服务端（RC）记录「当前接受的代次」；
-- **旧的代次上报结果 → 拒绝**（因为已经有更新的代次在执行了）；
-- **同一代次重复上报 → 幂等接受**（不会重复推进状态）。
-
-**三层防重**（proto 注释里写明了设计意图）：
-
-| RPC | 参数 | 防什么 |
-|---|---|---|
-| `RescheduleShard` | `attempt_id`（`scheduler.proto:42`） | 「重复 FAILED 上报触发的二次 RescheduleShard 会被拒绝，防止 retry_count 双倍消耗」 |
-| `CancelShard` | `attempt_id`（`worker.proto:96`） | 「非空时仅取消『当前正执行该 attempt』的 shard」——防止误杀新执行 |
-| `ReportShardResult` | 结果里的 `attempt_id` | 「只接受当前 attempt 的结果」 |
-
-**所以完整的分层是**：
-
-| 层 | 保证 | 手段 |
-|---|---|---|
-| RPC 框架 | **at-least-once**（可能重复） | 重试 |
-| 业务层 | **恰好一次生效** | `attempt_id` 幂等键 + 状态 CAS |
-
-**面试官想听什么**
-
-- 能说清「超时后客户端处于**不确定状态**」——这是 at-least-once 的**根本原因**
-- 知道这不是框架缺陷，而是**分布式系统的本质限制**
-- 能说出业务层是怎么补的（`attempt_id` 作为**执行代次**）
+**一次失败就恢复**。代价是「把可能还活着的连接也关掉了」——但那 几2 条活连接重建的成本，远低于「逐条试错」的成本。
 
 ---
 
 ## 八、超时、重试与 deadline
 
 ### Q8.1 超时是怎么实现的？
-
-**答（30 秒口述版）**
 
 **分三个环节，每个环节用不同的机制。**
 
@@ -1157,68 +943,7 @@ if (!SetSocketTimeout(conn->fd, timeoutMs, savedErrno)) { ... }
 
 **因为 `SO_RCVTIMEO` 是 socket 级别的属性**，会被后续的 `setsockopt` 覆盖。不同请求可能配了不同的超时（比如 `SetTimeoutMs(3000)` 和默认 5000），所以每次调用都得重设。
 
-**面试官想听什么**
-
-- 能说清「为什么建连要非阻塞」——**因为内核默认 75 秒超时不可接受**
-- 知道 `SO_ERROR` 是必须查的（非阻塞 connect 的标准流程）
-- 知道长连接要**每次刷新超时**，因为 `SO_RCVTIMEO` 是 socket 属性
-
-**可能追问**
-
-- Q8.1.1 这些 `setsockopt` 调用不会有性能问题吗？
-
-#### Q8.1.1 每次调用都做 `setsockopt`，不会有性能问题吗？
-
-**答**：**有，这是我项目里一个明确的可优化点。**
-
-**开销分析**：每次 `CallMethod` 的发送前，会调用 `SetSocketTimeout`，里面是**两次 `setsockopt`**（`SO_SNDTIMEO` + `SO_RCVTIMEO`）。加上非阻塞 connect 时的两次 `fcntl`（`F_GETFL` + `F_SETFL`），**每次 RPC 有 4 次左右的额外系统调用**。
-
-系统调用在 Linux 上是**几百纳秒到 1 微秒**量级（取决于是否命中 vDSO、是否有 Spectre/Meltdown 缓解）。而我的 RPC P50 是 **56 微秒**（【记录】长连接压测）。
-
-**4 次 `setsockopt` 大约占 P50 的 3~8%**——所以**不是主要瓶颈，但确实是可以省掉的**。
-
-**为什么现在没省**：因为「不同请求可能配不同的超时」——最简单的正确做法就是每次都设。**要优化的话，有两种方案**：
-
-**方案一：缓存「上次设置的值」，只在变化时才调**：
-
-```cpp
-struct PooledConnection {
-    ...
-    int64_t currentTimeoutMs = -1;      // 记录当前 socket 上的超时值
-};
-
-// 只在变化时设置
-if (conn->currentTimeoutMs != timeoutMs) {
-    SetSocketTimeout(conn->fd, timeoutMs, savedErrno);
-    conn->currentTimeoutMs = timeoutMs;
-}
-```
-
-**但这样有个问题**：如果连接被重建（`fd` 变了），缓存就失效了。所以 `Close()` 和 `ConnectToEndpoint` 里都要重置 `currentTimeoutMs = -1`。
-
-**方案二：干脆用固定超时**。如果业务上所有调用都用同一个超时（比如统一 5 秒），那只需要在 `ConnectToEndpoint` 里设一次——**后续完全不用设**。
-
-**但 `video_platform` 里的超时是多样的**：
-- `Scheduler` 调 `Worker.QueryShard`：`SetTimeoutMs(3000)`
-- `Scheduler` 调 `Worker.AssignShard`：5 秒
-- `JobClient` 调 `JobService`：`SetTimeoutMs(5000)`
-- `Scheduler` 调 `WorkerManager.ListWorkers`：`SetTimeoutMs(3000)`
-
-所以方案二不适用。
-
-**我倾向于方案一**——它保留了灵活性，同时消除了「值没变还重复设置」的浪费。预估收益 **P50 降 3~8%、QPS 提升 5~10%**（这是审计报告里的估算，不是我实测的）。
-
-**面试官想听什么**
-
-- 能**量化**这个开销（4 次 syscall vs P50 56 微秒）
-- 给出**具体的优化方案**，并指出各自的适用条件
-- 说清「为什么现在没做」（超时值多样 + 需要处理连接重建）
-
----
-
 ### Q8.2 重试是怎么做的？
-
-**答（30 秒口述版）**
 
 **只重试一次，而且两条分支走不同的恢复路径。**
 
@@ -1270,151 +995,8 @@ else
 
 **这是个重要的场景**：`Scheduler` 要把 shard 分配给**指定的** Worker（`AssignShard` 是定向调用），不能走服务发现（那会随机选一个 Worker，可能不是它想分配的那个）。所以需要「绕过 ZK、直连指定地址」的能力。
 
-**为什么只重试一次**（`zookeeper缓存系统.md` 的设计说明）：
+**为什么只重试一次**：
 
 > 避免在 ZK 故障或全集群宕机时进入死循环
 
 如果无限重试：ZK 完全挂了 → 每次调用都重试 → 线程全部卡在重试循环里 → **雪崩**。重试一次是「给瞬时抖动一次机会」，但不是「无限等待」。
-
-**面试官想听什么**
-
-- 能说清「只有网络层错误进重试白名单」
-- 能说清 **direct 模式和 ZK 模式的重试路径不同**（因为可选的 endpoint 集合不同）
-- 知道 `direct` 模式的存在理由是「定向调用」（`AssignShard` 必须发给指定的 Worker）
-- 知道「只重试一次」是为了**避免雪崩**
-
----
-
-## 九、配置与初始化
-
-### Q9.1 框架初始化是怎么设计的？
-
-**`MprpcApplication::Init(argc, argv)` 解析命令行和配置文件，失败返回 `bool` 而不是 `exit()`。**
-
-```cpp
-// mprpcapplication.cc:20-82（大意）
-bool MprpcApplication::Init(int argc, char** argv)
-{
-    // getopt 使用全局状态，测试或同进程多次 Init 时需要重置。
-    optind = 1;
-    m_initialized = false;
-
-    if (argc < 2) { ShowArgsHelp(); return false; }
-
-    while ((c = getopt(argc, argv, "i:")) != -1)
-    {
-        case 'i': config_file = optarg; break;
-        case '?': case ':': ShowArgsHelp(); return false;
-    }
-
-    if (!m_config.LoadConfigFile(config_file.c_str())) return false;
-
-    // 必填项校验（fail-fast）
-    if (!m_config.LoadRequired("zookeeperip", value, error)) { LOG_ERROR(...); return false; }
-    if (m_config.LoadInt("zookeeperport", -1, 1, 65535) == -1) { LOG_ERROR(...); return false; }
-
-    m_initialized = true;
-    return true;
-}
-```
-
-**关键设计：返回 `bool` 而不是 `exit()`**。
-
-这是**从教训里改出来的**。最初的版本在初始化失败时直接 `exit(EXIT_FAILURE)`——问题是：
-
-1. **框架替业务做了决策**。业务可能想「ZK 连不上就降级运行」（虽然 `mprpc` 目前不支持，但框架不该阻断这个可能）；
-2. **排查困难**。多服务启动脚本里，一个服务静默退出，脚本看到的是「进程没了」但不知道为什么；
-3. **不好测试**。单元测试里没法测「初始化失败」的路径（一测进程就退出了）。
-
-改成返回 `bool` 之后，**业务层自己决定怎么办**：
-
-```cpp
-if (!MprpcApplication::Init(argc, argv)) { return EXIT_FAILURE; }
-```
-
-（`video_platform` 的 5 个服务都是这个模式——**决定「失败就退出」的是业务，不是框架**。）
-
-**同样的改动也应用到了 `RpcProvider::Run()`**。
-
-**配置校验的两个层次**：
-
-```cpp
-// LoadRequired：必填，空了就失败
-bool MprpcConfig::LoadRequired(const std::string& key, std::string& value, std::string& error);
-
-// LoadInt：带范围校验，非法就返回默认值（不 fail-fast）
-int MprpcConfig::LoadInt(const std::string& key, int default_value, int min, int max);
-```
-
-**注意 `LoadInt` 的行为**：非法时**打 WARN 并返回默认值**，不 fail-fast：
-
-```cpp
-LOG_WARN("config key %s invalid (%s), use default=%d", ...);
-```
-
-**为什么两种行为不同**：
-- `zookeeperip` **必填**——没有它根本不知道连哪，必须失败；
-- `rpcserverwork_threads` **有默认值**——配置错了用默认值就好，没必要让服务起不来。
-
-**面试官想听什么**
-
-- 知道「框架返回 `bool` 而不是 `exit()`」这个**设计原则**（框架不替业务做决策），以及它的三个好处
-- 能区分 `LoadRequired` 和 `LoadInt` 的**不同失败语义**（fail-fast vs 用默认值）
-
-**可能追问**
-
-- Q9.1.1 配置文件解析有什么坑？
-
-#### Q9.1.1 配置文件解析有什么坑？
-
-**答**：**踩过两个坑，都是「过度处理」导致的。**
-
-**坑一：`#` 注释不能无条件截断。**
-
-朴素写法是 `value.find('#')`，然后截掉后面所有内容。**但这样会破坏合法值**：
-
-```ini
-some_url = http://example.com/path#fragment       # URL 的 fragment 被截掉了！
-```
-
-**我的修复**是「只有 `#` 前面有空格才视为注释」（`mprpcconfig.cc`）：
-
-```cpp
-// 去掉行内注释（" #" 及之后的内容），如 "8080 # 端口号" → "8080"
-// 仅在 # 前有空格时才视为注释，避免截断 URL fragment 等含 # 的合法值
-size_t comment_pos = value.find(" #");
-```
-
-**这个改动的洞察是**：`#` 在**行首**（整行注释）和**空格后**（行内注释）是注释，但在**中间无空格**时可能是**值的一部分**。
-
-**坑二：`operator[]` 会偷偷插入。**
-
-```cpp
-// 反例
-std::string& MprpcConfig::Load(const std::string& key)
-{
-    return m_configMap[key];      // ← key 不存在时，会插入一个空字符串！
-}
-```
-
-`std::map::operator[]` 的语义是「**不存在就默认构造并插入**」。所以每次查一个不存在的 key，`m_configMap` 就**多一个空条目**——**内存泄漏 + 污染**。而且 `Load` 返回的是引用，调用方看不出「这个 key 其实不存在」。
-
-**我的修复**（`mprpcconfig.cc:98-108`）——注释里明确记录了这个坑：
-
-```cpp
-// return m_configMap[key]; 如果这样写，如果key不存在，他会自己向map里增加内容
-```
-
-改成用 `find`，未命中打 `LOG_WARN("config key not found: %s", ...)`。
-
-**顺带说两个小的**：
-
-**① `LoadConfigFile` 开头 `m_configMap.clear()`** —— 支持重复 Load 覆盖（测试里有用）。
-
-**② 行尾 `\r` 要处理**：Windows 格式的配置文件（CRLF 行尾）会让 value 末尾多一个 `\r`。这会导致端口号解析失败之类的诡异问题。
-
-**面试官想听什么**
-
-- 知道 `operator[]` 会插入这个坑（**C++ 基础功**）
-- 知道 `#` 截断要区分「行内注释」和「值的一部分」
-- 能主动提到 CRLF 的坑

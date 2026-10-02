@@ -114,6 +114,7 @@ struct RpcProvider::RpcResponseContext
     uint64_t requestId;                         // 原样带回客户端，用于请求/响应匹配
 };
 
+// 传入的是裸指针
 void RpcProvider::NotifyService(google::protobuf::Service *service)
 {
     ServiceInfo service_info;
@@ -299,7 +300,6 @@ void RpcProvider::OnMessage(const wevix_muduo::TcpServer::ConnectionPtr& conn,
     uint64_t requestId = rpcHeader.request_id();
     std::string service_name = rpcHeader.service_name();
     std::string method_name = rpcHeader.method_name();
-
     // 打印调试信息
     LOG_DEBUG("RPC request: request_id=%llu, service=%s, method=%s, args_size=%zu",
               static_cast<unsigned long long>(requestId),

@@ -174,18 +174,21 @@ bool EnsureSharedZkClientStarted()
     return started;
 }
 
-// 服务发现缓存常量（阶段 10 第三批：Redis HSET 集中管理）
+// 服务发现缓存常量
 // - Redis 集中缓存键：mprpc:endpoints，field=method_path，value=CSV endpoint 列表
 // - 本地缓存与 Redis 统一 30s TTL：实例变更（新 Provider 注册/下线）最多 30s 生效
 constexpr char kEndpointsHashKey[] = "mprpc:endpoints";
 constexpr int64_t kEndpointCacheTtlSec = 30;
 constexpr int64_t kEndpointCacheTtlMs = kEndpointCacheTtlSec * 1000;
 
+// 服务发现本地缓存的单条记录：ServiceCache() 的 value，key 为 method_path。
+// 一次写入（ZK 拉取或 Redis 命中）后 30s 内热路径不再访问 Redis/ZK，
+// 期间按 nextIndex 轮询分发到各实例。读写均需持有 ServiceCacheMutex()。
 struct EndpointCacheEntry
 {
-    std::vector<std::string> endpoints;
-    size_t nextIndex = 0;
-    int64_t fetchedAtMs = 0;  ///< 本地缓存写入时间，超 TTL 视为过期
+    std::vector<std::string> endpoints;  ///< 该方法的可用实例列表，元素形如 "ip:port"
+    size_t nextIndex = 0;                ///< 轮询游标：每次命中自增，对 size 取模选实例
+    int64_t fetchedAtMs = 0;             ///< 本地缓存写入时间，超 TTL 视为过期
 };
 
 std::string MethodRegistryPath(const std::string& serviceName,
@@ -244,46 +247,46 @@ std::vector<std::string> ParseCsvEndpoints(const std::string& csv)
 }
 
 // ZK 拉取 endpoint 列表，并双写缓存：本进程本地缓存 + Redis 集中缓存
-// （多进程共享，其他进程下次发现直接命中，省一次 ZK 往返）。
-// Redis 写回失败不影响本进程——本地缓存已生效，故障降级由调用方按次判断。
 std::vector<std::string> QueryEndpointList(const std::string& methodPath)
 {
     std::vector<std::string> endpoints;
+    
+    // ZK 客户端首次连接失败（ZK 不可达）：返回空列表，服务发现失败交由调用方处理
     if (!EnsureSharedZkClientStarted())
     {
         return endpoints;
     }
 
+    // 遍历 ZK 上该方法的实例节点，收集全部存活实例地址：
+    //   /mprpc/services/{service}/{method}/instance-XXXXXXXX
+    // 实例节点由 Provider 以 ZOO_EPHEMERAL|ZOO_SEQUENCE 创建，data 即 "ip:port"，
     ZkClient& zk = SharedZkClient();
     std::vector<std::string> children = zk.GetChildren(methodPath.c_str());
-    std::sort(children.begin(), children.end());
+    std::sort(children.begin(), children.end());  // ZK 不保证返回顺序；排序使各进程的实例序列一致
     for (const std::string& child : children)
     {
-        std::string childPath = methodPath + "/" + child;
-        std::string hostData = zk.GetData(childPath.c_str());
+        std::string childPath = methodPath + "/" + child;  // child 仅是节点名，需拼回全路径
+        std::string hostData = zk.GetData(childPath.c_str());  // 节点 data = "ip:port"
         if (!hostData.empty())
         {
             endpoints.push_back(hostData);
         }
     }
 
-    // Redis 集中缓存写回：不持本地缓存锁执行网络操作（2s 超时），
-    // 避免 Redis 卡死阻塞整个服务发现热路径。
+    // Redis 集中缓存写回
     if (!endpoints.empty())
     {
         MprpcRedisClient& redis = MprpcRedisClient::GetInstance();
         if (redis.enabled() &&
             redis.HSet(kEndpointsHashKey, methodPath, JoinEndpoints(endpoints)))
         {
-            // 整个 hash 统一 TTL；EXPIRE 失败只影响共享新鲜度（最多是旧
-            // field 多存活一段时间），由连接失败的 HDEL 失效兜底
             if (!redis.Expire(kEndpointsHashKey, kEndpointCacheTtlSec))
             {
                 LOG_DEBUG("rpc discovery: refresh redis cache TTL failed");
             }
         }
     }
-
+    // 加入本地缓存（热路径）
     std::lock_guard<std::mutex> lock(ServiceCacheMutex());
     if (!endpoints.empty())
     {
@@ -299,6 +302,7 @@ std::vector<std::string> QueryEndpointList(const std::string& methodPath)
     return endpoints;
 }
 
+// 获取取取该方法的服务
 std::string PickEndpoint(const std::vector<std::string>& endpoints)
 {
     if (endpoints.empty())
@@ -309,9 +313,8 @@ std::string PickEndpoint(const std::vector<std::string>& endpoints)
     return endpoints[nextEndpoint.fetch_add(1, std::memory_order_relaxed) % endpoints.size()];
 }
 
-// 优先读本地缓存（带 30s TTL），miss 时查 Redis 集中缓存，仍 miss 再访问 ZK；
-// 缓存命中时按轮询选择 endpoint。Redis 故障/不可用自动直落 ZK 路径，
-// 与改造前的"进程内缓存 + ZK 直读"行为一致
+// 优先读本地缓存（带 30s TTL），miss 时查 Redis 集中缓存，仍 miss 再访问 ZK；缓存命中时按轮询选择 endpoint。
+// Redis 故障/不可用自动直落 ZK 路径
 std::string GetHostData(const std::string& methodPath, bool& fromCache)
 {
     // 1. 本地缓存：热路径零 Redis/ZK 交互，30s TTL 内直接命中
@@ -330,23 +333,24 @@ std::string GetHostData(const std::string& methodPath, bool& fromCache)
     }
 
     // 2. 本地 miss/过期：查 Redis 集中缓存（多进程共享，命中省一次 ZK 往返）。
-    //    这里不持本地缓存锁（HGET 是网络操作），命中后写本地缓存再返回。
     fromCache = false;
     MprpcRedisClient& redis = MprpcRedisClient::GetInstance();
     if (redis.enabled())
     {
         std::string csv;
         bool found = false;
+        // HGet 调用成功且 field 存在才算命中（found 区分"调用失败"与"key 不存在"）
         if (redis.HGet(kEndpointsHashKey, methodPath, csv, found) && found)
         {
+            // Redis 命中：解析 CSV 写回本地缓存，本次直接复用取的实例返回
             std::vector<std::string> endpoints = ParseCsvEndpoints(csv);
             if (!endpoints.empty())
             {
                 std::lock_guard<std::mutex> lock(ServiceCacheMutex());
                 EndpointCacheEntry& entry = ServiceCache()[methodPath];
                 entry.endpoints = endpoints;
-                entry.nextIndex = 0;
-                entry.fetchedAtMs = static_cast<int64_t>(NowMs());
+                entry.nextIndex = 0;                               // 新列表从头轮询
+                entry.fetchedAtMs = static_cast<int64_t>(NowMs()); // 本地 TTL 自此重新计时
                 fromCache = true;
                 std::string endpoint = entry.endpoints[entry.nextIndex % entry.endpoints.size()];
                 ++entry.nextIndex;
@@ -425,8 +429,7 @@ struct PooledConnection
         : key(EndpointKey(endpointIp, endpointPort))
         , ip(std::move(endpointIp))
         , port(endpointPort)
-    {
-    }
+    {}
 
     ~PooledConnection()
     {
@@ -469,7 +472,7 @@ std::mutex& ConnectionPoolMutex()
     return mutex;
 }
 
-// 带超时的 TCP connect。
+// 带超时的 TCP connect
 // 先切成非阻塞 socket，connect 返回 EINPROGRESS 后用 poll 等待可写，再恢复原 flags。
 int ConnectToEndpoint(const std::string& ip, uint16_t port, int64_t timeoutMs, int& savedErrno)
 {
@@ -828,6 +831,7 @@ void MprpcChannel::CallMethod(const google::protobuf::MethodDescriptor* method,
         method_path = MethodRegistryPath(service_name, method_name);
         bool fromCache = false;
         // 把一个逻辑上的"服务名+方法名"解析成一个具体的 "ip:port" 地址字符串
+        // 这里利用zookeeeper的逻辑，本地查询-> redis缓存 -> zookeeper发起请求查询
         std::string host_data = GetHostData(method_path, fromCache);
         LOG_DEBUG("rpc call %s::%s discovered endpoint from %s",
                   service_name.c_str(), method_name.c_str(),
