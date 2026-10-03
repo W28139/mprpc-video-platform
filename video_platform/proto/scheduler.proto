@@ -50,7 +50,7 @@ message RescheduleShardResponse {
 
 // ── NotifyWorkerOffline ──────────────────────────────────────────────────────
 // 由 WorkerManager 在检测到 Worker 心跳超时后调用，
-// 通知 Scheduler 将该 Worker 上的所有 RUNNING/ASSIGNED shard 重新调度。
+// 通知 Scheduler 将该 Worker 上的所有 RUNNING shard 重新调度。
 
 message NotifyWorkerOfflineRequest {
     string worker_id = 1;  // 已离线的 Worker ID
@@ -65,7 +65,7 @@ message NotifyWorkerOfflineResponse {
 
 // ── CancelJobShards ─────────────────────────────────────────────────────────
 // 由 JobService.CancelJob 调用，通知 Scheduler 取消某个 job 的所有 shard。
-// Scheduler 在本地 ShardStore 中查找该 job 的 RUNNING/ASSIGNED shard，
+// Scheduler 在本地 ShardStore 中查找该 job 的所有 shard，
 // 然后直连 Worker 调用 CancelShard RPC（best-effort）。
 // 本 RPC 永远返回 error_code=0 —— 调用方不应将 worker 通知失败视为 CancelJob 失败。
 

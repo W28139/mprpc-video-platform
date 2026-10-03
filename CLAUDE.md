@@ -417,7 +417,7 @@ MySQL 持久化替代内存 Store，详见 `doc/更新业务日志/10. 阶段9�
 **压测发现并修复的 Bug（3 项）**：
 
 1. **（严重）Channel::handleEvent UAF 崩溃**（`wevix_muduo/src/Channel.cpp`）——64KB 大报文触发 SIGSEGV。epoll 同批次 `IN|RDHUP|OUT` 事件时，read 回调内 `handleClose` 同步销毁 Connection/channel_，返回后 `handleEvent` 继续访问已析构的 this。修复：每个回调执行后立即 `return`，禁止再访问 this（ET 模式下 `enableWriting` 的 `EPOLL_CTL_MOD` 保证 EPOLLOUT 重新触发不丢失）。
-2. **已完成任务的 shard 被重复调度**——ResultCollector 任务终态只通知 JobService，Scheduler 不知道任务已完成；Worker 死亡时 `NotifyWorkerOffline` 会把终态任务的残留 ASSIGNED/RUNNING shard 重置为 WAITING 重新分配。修复：① `MarkJobTerminal` 终态后通知 Scheduler（复用 `CancelJobShards`，reason=JOB_TERMINAL）；② `CancelJobShards` 先把本地非终态 shard 标记 CANCELED 再通知 Worker；③ `NotifyWorkerOffline`/超时扫描/分配循环均增加 job 终态（SUCCESS/FAILED/CANCELED）检查。
+2. **已完成任务的 shard 被重复调度**——ResultCollector 任务终态只通知 JobService，Scheduler 不知道任务已完成；Worker 死亡时 `NotifyWorkerOffline` 会把终态任务的残留 RUNNING shard 重置为 WAITING 重新分配。修复：① `MarkJobTerminal` 终态后通知 Scheduler（复用 `CancelJobShards`，reason=JOB_TERMINAL）；② `CancelJobShards` 先把本地非终态 shard 标记 CANCELED 再通知 Worker；③ `NotifyWorkerOffline`/超时扫描/分配循环均增加 job 终态（SUCCESS/FAILED/CANCELED）检查。
 3. **查询接口 retry=N/0 显示不一致**——Scheduler/ResultCollector 的 `UpdateJobStatus` 通知 shard 快照漏填 `max_retry`，JobService 幂等覆盖把 max_retry 清零。修复：两处快照补 `set_max_retry`。
 
 **已记录文档**：`doc/更新业务日志/8. 阶段8代码审查与Bug修复.md`（代码审查部分）；压测与故障测试部分见 `doc/更新业务日志/` 下 2026-08-01 相关日志。

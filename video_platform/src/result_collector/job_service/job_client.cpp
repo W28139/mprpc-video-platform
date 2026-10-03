@@ -49,9 +49,7 @@ static const char* jobStatusStr(int status) {
 static const char* shardStatusStr(int status) {
     switch (status) {
         case 0: return "UNKNOWN";
-        case 1: return "CREATED";
         case 2: return "WAITING";
-        case 3: return "ASSIGNED";
         case 4: return "RUNNING";
         case 5: return "SUCCESS";
         case 6: return "FAILED";

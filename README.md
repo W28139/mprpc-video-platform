@@ -88,7 +88,7 @@ xu
 - **Job/Shard 双状态机 + 条件更新防回退**：Job（PENDING→SCHEDULING→RUNNING→SUCCESS/FAILED）与 Shard（WAITING→RUNNING→SUCCESS，FAILED→RETRYING→WAITING）双机流转；所有状态推进走单条 `UPDATE ... WHERE id=? AND status IN(前置)`，MySQL 行级原子性完成 CAS，旧快照写不进去，枚举值单调递增再兜底
 - **资源感知加权评分调度**：`score = 空闲槽×10 − CPU×0.5 − 内存×0.2`，空闲槽 = max_running − current_running − 轮内已分配；轮内配额防一轮扫描超分配；WAITING shard 按 job 优先级降序 + 同优先级 FIFO，防饥饿
 - **分片切分 + 末片时长自适应**：ffprobe 探测真实时长（失败回退配置值），ceil 分片、末片取剩余；切片+转码一 pass（-ss 前置 input seeking + 重编码帧精确），省一次中间文件 IO；Probe 带 15s 超时 SIGKILL 兜底
-- **四条故障恢复路径收敛到 WAITING**：结果失败重试 / Worker 离线重分配 / 执行超时重扫（ASSIGNED 30s 先 QueryShard 二次确认、RUNNING 5min 强信号）/ Scheduler 崩溃重启恢复——全部重置 WAITING 复用同一套分配逻辑；job 已终态的残留 shard 一律 CANCELED，绝不复活
+- **四条故障恢复路径收敛到 WAITING**：结果失败重试 / Worker 离线重分配 / 执行超时重扫（RUNNING 5min 无更新即判卡死）/ Scheduler 崩溃重启恢复——全部重置 WAITING 复用同一套分配逻辑；job 已终态的残留 shard 一律 CANCELED，绝不复活
 - **心跳 + 原子离线判定**：3s 心跳上报真实 CPU（聚合进程树 utime/stime ticks）/内存/running 数；离线判定是单条条件 SQL `UPDATE ... WHERE status=ONLINE AND last_heartbeat<now-20s`，与心跳更新天然互斥，消除 TOCTOU
 - **MQ 双连接双锁 + Push/Pull 双模调度**：发布/消费严格分连接，消费 poll 移出锁 + atomic 无锁读 connected()，永不被锁卡死；MQ 在线 5s 兜底轮询、故障 2s 快扫、恢复自动切回，实测 Push 调度延迟 33ms
 - **Redis 双层用途 + 降级语义**：worker 负载快照（调度读路径免 RPC 往返，20s 过期过滤）+ shard 分布式锁（SETNX EX 10 + GET 校验再 DEL）；Redis 是读路径加速器不是数据源，故障降级放行由 MySQL CAS 兜底
@@ -102,7 +102,7 @@ xu
 **并发与一致性专题（全部是真实事故驱动的设计）：**
 
 - **ScheduleJob 全局互斥 + 幂等早退**：并发来源是 SubmitJob 内联重试 × PendingScanLoop 后台扫描，两个请求可能同时通过"shard 表为空"的幂等检查 → 各自探测（ffprobe 失败还会回退 fallback 时长算出不同片数）→ 两套分片计划交错落库（主键冲突被静默吞掉 + 调用方不检查返回值是放大器）→ 下游合并/终态全乱。修复：全局互斥锁内跑完"检查→探测→切分→回填"四段；幂等判据 = shard 表已有记录而非 job 记录（只有 shard 存在才能证明切分真的做完了）
-- **UpdateIfStatus 为什么不用版本号**：状态字段本身就是天然的版本号，且 expect 集合比 version 字段更精确（如启动恢复只允许重置 {ASSIGNED, RUNNING}，不允许动已是 WAITING 的）；22 处调用点全部"快照 → 改 → 条件更新"，失败哲学 = 不重试不覆盖、交给兜底循环收敛（这也是所有状态推进点都处于某个循环内的原因）；实测平均 0.166ms
+- **UpdateIfStatus 为什么不用版本号**：状态字段本身就是天然的版本号，且 expect 集合比 version 字段更精确（如启动恢复只允许重置 {RUNNING}，不允许动已是 WAITING 的）；22 处调用点全部"快照 → 改 → 条件更新"，失败哲学 = 不重试不覆盖、交给兜底循环收敛（这也是所有状态推进点都处于某个循环内的原因）；实测平均 0.166ms
 - **三层防线 + 锁是防护不是依赖**：① 状态复核（入口重新 Get，非 WAITING 直接 skip，防过期快照）② SETNX 分布式锁（防同一时刻竞争）③ MySQL 条件更新兜底（Redis 故障时正确性仍成立）。SETNX 失败要区分两种原因：GET 成功 = 锁被占用 → 跳过；GET 失败 = Redis 故障 → 降级放行——不能因为 Redis 挂了让整个调度停摆
 - **取消链路两层哲学**：状态保证是强保证（MySQL CAS：job→CANCELED + 全部非终态 shard→CANCELED，单条原子 UPDATE 无网络依赖）；执行保证是 best-effort（RPC 通知 + SIGTERM→5s→SIGKILL）。最坏情况 = 已启动的转码跑完、产出被丢弃——但取消后任务永远不会再被调度、被重试、被合并产出成品
 - **CancelShard 只置原子标志不直接 kill**：ffmpeg 子进程由执行线程创建并 waitpid 回收，跨线程 kill 与回收有竞态；SIGKILL 写文件中途会留损坏中间产物；标志位是最小同步面。检测点双置：poll 超时（子进程安静时）+ 每行进度输出后（~0.5s 响应）
@@ -113,8 +113,8 @@ xu
 **故障恢复与调度专题：**
 
 - **调度模式演进：Pull → Push → 双模并存**：Pull 2s 轮询的延迟被周期钳制（平均 ~1s）；Push 事件驱动在"任何 shard 变为 WAITING 的路径"发布事件（新建/重试/离线重置/超时重置/启动恢复），实测 33ms；Pull 保留 5s 兜底——因为轮询还承担 Push 替代不了的可靠性职责（超时重扫/启动恢复/卡死检测）；超时重扫改按时间 30s 驱动（interval 随 MQ 状态 2s↔5s 变化，按轮次会漂移成 75s）
-- **超时重扫"先问后判" + progress_watch_ 记账本**：ASSIGNED 超时 ≠ 卡死（正常 Worker 从不向 Scheduler 报进度，慢视频 30s 没动静完全正常）——先直连原 Worker QueryShard 确认，四种结果处置（已不持有 → 等结果；进度前进 → 续期观察窗；停滞 → 连续 2 轮判死；RPC 失败 → 同停滞）。记账本让"无记忆"的 30s 周期重扫能区分"刚停"与"停了 1 分钟"；连续 2 轮才判死不误杀慢任务（转码中途短暂停顿正常）
-- **NotifyWorkerOffline 待重试集合**："下一轮会重试"是错的——Worker 已标 OFFLINE 后扫描和条件更新都是 no-op，通知丢失则 ASSIGNED shard 永久卡死。修复：pending_notify 集合无限重试（at-least-once 送达，失败永不离场）；重试前复查 Worker 是否已复活（否则把存活 Worker 正在执行的 shard 重置 = 双份转码）
+- **超时重扫：RUNNING 5min 无更新即判卡死**：单个 shard 只有 15~20 秒视频，正常转码远用不到 5 分钟——超时本身就是强异常信号，直接判定；处置 = CancelShard 通知原 Worker（best-effort，带 attempt_id 只杀当前代次）+ retry_count++ 重置 WAITING。若阈值压到 30 秒级就必须引入二次确认防误杀慢任务，当前 shard 粒度下不需要
+- **NotifyWorkerOffline 待重试集合**："下一轮会重试"是错的——Worker 已标 OFFLINE 后扫描和条件更新都是 no-op，通知丢失则该 shard 永久卡死。修复：pending_notify 集合无限重试（at-least-once 送达，失败永不离场）；重试前复查 Worker 是否已复活（否则把存活 Worker 正在执行的 shard 重置 = 双份转码）
 - **五类故障 → 恢复机制映射**：执行失败 → 重试（上限 3）；进程退出 → 心跳超时 → 离线重分配；上报超时 → 心跳线程兜底重试；重复上报 → attempt_id 幂等拒绝；Scheduler 崩溃重启 → 启动恢复扫描重置残留 shard。每类故障都有明确的兜底路径，无死角
 - **心跳超时 10s → 20s**：网络抖动被当成执行失败 → 虚假重调度 + 不向旧 Worker 发取消 → 同 shard 双份转码、重试预算被抖动白白消耗。20s ≈ 两个完整心跳周期
 - **Worker 重启后自动恢复注册**：WM 重启丢记录后心跳返回 alive=false → Worker 立即重新 RegisterWorker（幂等 upsert）——解决"WM 晚就绪导致 Worker 永久离线"；注册带指数退避 1s→30s 无限重试
@@ -222,7 +222,7 @@ Client/CLI ──SubmitJob──► JobService ──ScheduleJob──► Schedu
 | TranscodeWorker | 真实 FFmpeg 转码执行，可多实例横向扩容 | 9004+ |
 | ResultCollector | 收集 shard 结果，触发合并，落终态 | 9005 |
 
-任务状态机：`PENDING → SCHEDULING → RUNNING → SUCCESS / FAILED`，任务下挂多个 shard 各自流转（WAITING → ASSIGNED → RUNNING → SUCCESS/FAILED），只有全部 shard 成功任务才成功。JobService 和 ResultCollector 分别是状态机的入口和出口，Worker 不直接改任务状态，避免多写者竞争。
+任务状态机：`PENDING → SCHEDULING → RUNNING → SUCCESS / FAILED`，任务下挂多个 shard 各自流转（WAITING → RUNNING → SUCCESS/FAILED），只有全部 shard 成功任务才成功。JobService 和 ResultCollector 分别是状态机的入口和出口，Worker 不直接改任务状态，避免多写者竞争。
 
 ### 调度策略
 
@@ -246,7 +246,7 @@ Client/CLI ──SubmitJob──► JobService ──ScheduleJob──► Schedu
 
 - **失败重试**：shard 失败自动重试（上限可配），worker 转码中被杀 → 重调度恢复，实测最终 SUCCESS；
 - **Worker 离线重分配**：WorkerManager 检测心跳超时，把该 Worker 上未完成的 shard 重置为 WAITING 重新分配；
-- **终态任务不被重复调度**：任务进入 SUCCESS/FAILED 后，残留的 ASSIGNED/RUNNING shard 不允许再被重置分配——这个问题当时真实出现过：Worker 死亡时离线处理会把已完成任务的残留 shard 重新分配出去，导致任务被重复执行。修复方式是在任务终态时通知 Scheduler 标记取消，同时离线处理、超时扫描、分配循环三处都加终态检查。
+- **终态任务不被重复调度**：任务进入 SUCCESS/FAILED 后，残留的 RUNNING shard 不允许再被重置分配——这个问题当时真实出现过：Worker 死亡时离线处理会把已完成任务的残留 shard 重新分配出去，导致任务被重复执行。修复方式是在任务终态时通知 Scheduler 标记取消，同时离线处理、超时扫描、分配循环三处都加终态检查。
 
 ### 中间件集成
 

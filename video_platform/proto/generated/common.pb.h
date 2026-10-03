@@ -100,7 +100,6 @@ inline bool JobStatus_Parse(
 enum ShardStatus : int {
   SHARD_STATUS_UNKNOWN = 0,
   SHARD_WAITING = 2,
-  SHARD_ASSIGNED = 3,
   SHARD_RUNNING = 4,
   SHARD_SUCCESS = 5,
   SHARD_FAILED = 6,

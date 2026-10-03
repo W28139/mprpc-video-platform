@@ -25,11 +25,11 @@ enum JobStatus {
 //              ↘ FAILED → RETRYING → WAITING
 //                         ↘ (超次)  → FAILED
 // 任意状态 → CANCELED
-// （shard 创建即 WAITING；分配成功即 RUNNING，无独立 ASSIGNED/CREATED 停留）
+// （shard 创建即 WAITING；分配成功即 RUNNING，无中间停留状态）
 enum ShardStatus {
     SHARD_STATUS_UNKNOWN = 0;  // 未知状态（proto 默认值）
+    // 值号 1（历史 SHARD_CREATED）、3（历史 SHARD_ASSIGNED）为已删除枚举的空洞，不重排以保兼容
     SHARD_WAITING        = 2;  // 在待调度队列中等待分配 Worker
-    SHARD_ASSIGNED       = 3;  // 已分配给 Worker（保留：超时重扫的观察窗口）
     SHARD_RUNNING        = 4;  // Worker 正在执行
     SHARD_SUCCESS        = 5;  // 执行成功
     SHARD_FAILED         = 6;  // 执行失败（可重试或已超次）
