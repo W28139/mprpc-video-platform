@@ -238,17 +238,17 @@ const char descriptor_table_protodef_common_2eproto[] PROTOBUF_SECTION_VARIABLE(
   "\005*\214\001\n\tJobStatus\022\026\n\022JOB_STATUS_UNKNOWN\020\000\022"
   "\017\n\013JOB_PENDING\020\001\022\022\n\016JOB_SCHEDULING\020\003\022\017\n\013"
   "JOB_RUNNING\020\004\022\017\n\013JOB_SUCCESS\020\006\022\016\n\nJOB_FA"
-  "ILED\020\007\022\020\n\014JOB_CANCELED\020\010*\232\001\n\013ShardStatus"
+  "ILED\020\007\022\020\n\014JOB_CANCELED\020\010*\206\001\n\013ShardStatus"
   "\022\030\n\024SHARD_STATUS_UNKNOWN\020\000\022\021\n\rSHARD_WAIT"
   "ING\020\002\022\021\n\rSHARD_RUNNING\020\004\022\021\n\rSHARD_SUCCES"
-  "S\020\005\022\020\n\014SHARD_FAILED\020\006\022\022\n\016SHARD_RETRYING\020"
-  "\007\022\022\n\016SHARD_CANCELED\020\010*P\n\014WorkerStatus\022\031\n"
-  "\025WORKER_STATUS_UNKNOWN\020\000\022\021\n\rWORKER_ONLIN"
-  "E\020\001\022\022\n\016WORKER_OFFLINE\020\002b\006proto3"
+  "S\020\005\022\020\n\014SHARD_FAILED\020\006\022\022\n\016SHARD_CANCELED\020"
+  "\010*P\n\014WorkerStatus\022\031\n\025WORKER_STATUS_UNKNO"
+  "WN\020\000\022\021\n\rWORKER_ONLINE\020\001\022\022\n\016WORKER_OFFLIN"
+  "E\020\002b\006proto3"
   ;
 static ::_pbi::once_flag descriptor_table_common_2eproto_once;
 const ::_pbi::DescriptorTable descriptor_table_common_2eproto = {
-    false, false, 1511, descriptor_table_protodef_common_2eproto,
+    false, false, 1491, descriptor_table_protodef_common_2eproto,
     "common.proto",
     &descriptor_table_common_2eproto_once, nullptr, 0, 4,
     schemas, file_default_instances, TableStruct_common_2eproto::offsets,
@@ -292,7 +292,6 @@ bool ShardStatus_IsValid(int value) {
     case 4:
     case 5:
     case 6:
-    case 7:
     case 8:
       return true;
     default:

@@ -103,7 +103,6 @@ enum ShardStatus : int {
   SHARD_RUNNING = 4,
   SHARD_SUCCESS = 5,
   SHARD_FAILED = 6,
-  SHARD_RETRYING = 7,
   SHARD_CANCELED = 8,
   ShardStatus_INT_MIN_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::min(),
   ShardStatus_INT_MAX_SENTINEL_DO_NOT_USE_ = std::numeric_limits<int32_t>::max()

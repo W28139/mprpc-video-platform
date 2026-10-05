@@ -85,7 +85,7 @@ xu
 
 ### 业务层：
 
-- **Job/Shard 双状态机 + 条件更新防回退**：Job（PENDING→SCHEDULING→RUNNING→SUCCESS/FAILED）与 Shard（WAITING→RUNNING→SUCCESS，FAILED→RETRYING→WAITING）双机流转；所有状态推进走单条 `UPDATE ... WHERE id=? AND status IN(前置)`，MySQL 行级原子性完成 CAS，旧快照写不进去，枚举值单调递增再兜底
+- **Job/Shard 双状态机 + 条件更新防回退**：Job（PENDING→SCHEDULING→RUNNING→SUCCESS/FAILED）与 Shard（WAITING→RUNNING→SUCCESS，FAILED→WAITING 重试）双机流转；所有状态推进走单条 `UPDATE ... WHERE id=? AND status IN(前置)`，MySQL 行级原子性完成 CAS，旧快照写不进去，枚举值单调递增再兜底
 - **资源感知加权评分调度**：`score = 空闲槽×10 − CPU×0.5 − 内存×0.2`，空闲槽 = max_running − current_running − 轮内已分配；轮内配额防一轮扫描超分配；WAITING shard 按 job 优先级降序 + 同优先级 FIFO，防饥饿
 - **分片切分 + 末片时长自适应**：ffprobe 探测真实时长（失败回退配置值），ceil 分片、末片取剩余；切片+转码一 pass（-ss 前置 input seeking + 重编码帧精确），省一次中间文件 IO；Probe 带 15s 超时 SIGKILL 兜底
 - **四条故障恢复路径收敛到 WAITING**：结果失败重试 / Worker 离线重分配 / 执行超时重扫（RUNNING 5min 无更新即判卡死）/ Scheduler 崩溃重启恢复——全部重置 WAITING 复用同一套分配逻辑；job 已终态的残留 shard 一律 CANCELED，绝不复活

@@ -108,8 +108,7 @@ public:
         }
 
         // 3. 幂等检查2：忽略同一 attempt 的重复上报,执行重试逻辑
-        if ((shard.status == static_cast<int32_t>(ShardStatus::SHARD_FAILED)
-          || shard.status == static_cast<int32_t>(ShardStatus::SHARD_RETRYING))
+        if (shard.status == static_cast<int32_t>(ShardStatus::SHARD_FAILED)
             && shard.attempt_id == attempt_id)
         {
             LOG_INFO("ResultCollectorService: shard %s already processed for same "
@@ -201,31 +200,30 @@ public:
                 }
             }
 
-            // 调用重试RPC成功，更新shard信息
+            // 受理成功：Scheduler 已在同一 MySQL 行完成 FAILED → WAITING 推进，
+            // 本地无需再写状态（阶段 9 起 RC/Scheduler 共享同一行，重复写会因条件
+            // {FAILED} 不匹配而静默失败）
             if (reschedule_ok)
             {
-                
-                shard.status = static_cast<int32_t>(ShardStatus::SHARD_RETRYING);
-                shard.updated_at = NowMs();
-                ShardStore::GetInstance().UpdateIfStatus(
-                    shard_id, {static_cast<int32_t>(ShardStatus::SHARD_FAILED)}, shard);
+                LOG_INFO("ResultCollectorService: shard %s rescheduled by Scheduler "
+                         "(row already advanced to WAITING)",
+                         shard_id.c_str());
             }
-            // 三次调用都失败了，但是这是网络错误
+            // 三次调用都在网络层失败：Scheduler 可能从未收到请求，保持 FAILED
+            // （此前会置 RETRYING 过渡态——该状态无任何扫描/重置路径，会让 shard
+            // 永久卡死、job 永不终态，见 doc/审查报告/3. 业务层bug排查.md S1；
+            // RETRYING 已随状态机裁剪删除）
             else if (last_was_network)
             {
                 LOG_ERROR("ResultCollectorService: RescheduleShard FAILED after 3 "
-                          "network retries for %s, marking RETRYING",
+                          "network retries for %s, keeping FAILED (no retry scheduled)",
                           shard_id.c_str());
-                shard.status = static_cast<int32_t>(ShardStatus::SHARD_RETRYING);
-                shard.updated_at = NowMs();
-                ShardStore::GetInstance().UpdateIfStatus(
-                    shard_id, {static_cast<int32_t>(ShardStatus::SHARD_FAILED)}, shard);
             }
             // 确定性拒绝：保持 FAILED
-            else 
+            else
             {
                 LOG_WARN("ResultCollectorService: RescheduleShard deterministically "
-                         "rejected for %s (e.g. max retry), keeping FAILED ",
+                         "rejected for %s (e.g. max retry), keeping FAILED",
                          shard_id.c_str());
             }
         }

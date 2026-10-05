@@ -53,7 +53,7 @@ static const char* shardStatusStr(int status) {
         case 4: return "RUNNING";
         case 5: return "SUCCESS";
         case 6: return "FAILED";
-        case 7: return "RETRYING";
+        // 值号 1/3/7 为已删除枚举的空洞（SHARD_CREATED / SHARD_ASSIGNED / SHARD_RETRYING）
         case 8: return "CANCELED";
         default: return "?";
     }

@@ -52,7 +52,53 @@ static bool MarkShardCanceledIfJobTerminal(const std::string& shard_id,
     return true;
 }
 
-        
+// 检查 job 下所有 shard 是否都已进入终态；有"非 SUCCESS"的终态 shard（FAILED/CANCELED）
+// 且没有进行中的 shard 时，标记 JOB_FAILED。
+// FAILED = 业务失败；CANCELED = 卡死超时重试耗尽（系统放弃）——两者都无法产出成品，
+// 任务一样合不出完整视频，故一并计入 any_failed。
+static void CheckAndMarkJobFailed(const std::string& job_id)
+{
+    // job 已终态（尤其 JOB_CANCELED）→ 不覆盖，避免把用户取消改写成 FAILED
+    auto job_opt = JobStore::GetInstance().Get(job_id);
+    if (!job_opt.has_value()) return;
+    if (IsJobTerminal(job_opt->status)) return;
+
+    // 获取该 job 所有切片 shards
+    auto shards = ShardStore::GetInstance().ListByJob(job_id);
+    if (shards.empty()) return;
+
+    bool all_terminal = true;
+    bool any_failed = false;    // FAILED 或 CANCELED（非 SUCCESS 的终态）
+    for (const auto& s : shards)
+    {
+        int st = s.status;
+        int s_success  = static_cast<int32_t>(ShardStatus::SHARD_SUCCESS);
+        int s_failed   = static_cast<int32_t>(ShardStatus::SHARD_FAILED);
+        int s_canceled = static_cast<int32_t>(ShardStatus::SHARD_CANCELED);
+        if (st != s_success && st != s_failed && st != s_canceled)
+        {
+            // 有进行中的shard，因此未进入终态
+            all_terminal = false;
+            break;
+        }
+        if (st == s_failed || st == s_canceled) any_failed = true;
+    }
+
+    if (!all_terminal || !any_failed) return;
+
+    // 所有 shard 都在终态且至少有一个 FAILED/CANCELED → JOB_FAILED （任务失败，
+    // 片是唯一的，坏一片成品永远合不成）
+    auto job = job_opt.value();
+    int from_status = job.status;
+    job.status = static_cast<int32_t>(JobStatus::JOB_FAILED);
+    job.updated_at = NowMs();
+    JobStore::GetInstance().UpdateIfStatus(job_id, {from_status}, job);
+
+    LOG_WARN("SchedulerService: job %s marked JOB_FAILED (all shards terminal, "
+             "has FAILED/CANCELED)", job_id.c_str());
+}
+
+
 // 任何 shard 状态变为 WAITING 的路径都应调用，让 Scheduler 的 MQ 消费线程立即分配
 static void NotifyShardWaiting(const std::string& shard_id)
 {
@@ -330,13 +376,15 @@ public:
             return;
         }
 
-        // 如果该shard已经终止，那就直接return
+        // 终态守卫：SUCCESS / CANCELED 不复活（CANCELED 是 proto 语义明确的终态，
+        // 取消窗口内到达的 FAILED 上报不得把已取消 shard 拉回重跑）。
+        // 注意 FAILED 不在拒绝集合内——RescheduleShard 的职责就是处理
+        // "执行失败 → 重试"，对 FAILED shard 的重复调用由上方 attempt_id 幂等检查拦截。
         {
             int st = shard.status;
             int s_success  = static_cast<int32_t>(ShardStatus::SHARD_SUCCESS);
-            int s_failed   = static_cast<int32_t>(ShardStatus::SHARD_FAILED);
             int s_canceled = static_cast<int32_t>(ShardStatus::SHARD_CANCELED);
-            if (st == s_success || st == s_failed || st == s_canceled)
+            if (st == s_success || st == s_canceled)
             {
                 LOG_WARN("SchedulerService::RescheduleShard shard_id=%s already "
                          "terminal (status=%d), rejecting reschedule",
@@ -388,11 +436,9 @@ public:
 
             // 设置shard状态为出错，然后更新
             shard.status = static_cast<int32_t>(ShardStatus::SHARD_FAILED);
-            shard.updated_at = NowMs();
             ShardStore::GetInstance().UpdateIfStatus(
                 shard_id, {static_cast<int32_t>(ShardStatus::SHARD_WAITING),
-                           static_cast<int32_t>(ShardStatus::SHARD_RUNNING),
-                           static_cast<int32_t>(ShardStatus::SHARD_RETRYING)},
+                           static_cast<int32_t>(ShardStatus::SHARD_RUNNING)},
                 shard);
 
             // 检查该 job 是否需要标记为 JOB_FAILED
@@ -405,24 +451,17 @@ public:
             return;
         }
 
-        // 未超次：增加重试计数，重置为 WAITING
+        // 未超次：增加重试计数，直接重置为 WAITING（单条 CAS，无中间过渡态）
         int from_status = shard.status;   // 快照前置状态（条件更新防覆盖）
         shard.retry_count++;
-        shard.status = static_cast<int32_t>(ShardStatus::SHARD_RETRYING);
-        shard.assigned_worker_id.clear();
+        shard.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
+        // 保留 assigned_worker_id（= 刚失败的 Worker）：TryAssignShard 重试时据此降权，
+        // 优先换节点重试（磁盘满/OOM 等节点本地故障，重试同一节点必然再失败）
         shard.attempt_id.clear();
         shard.updated_at = NowMs();
         ShardStore::GetInstance().UpdateIfStatus(shard_id, {from_status}, shard);
 
-        LOG_INFO("SchedulerService::RescheduleShard shard_id=%s retry=%d/%d → RETRYING",
-                 shard_id.c_str(), shard.retry_count, shard.max_retry);
-
-        // 立即转为 WAITING，让 SchedulingLoop 下一轮扫描时分配
-        shard.status = static_cast<int32_t>(ShardStatus::SHARD_WAITING);
-        ShardStore::GetInstance().UpdateIfStatus(
-            shard_id, {static_cast<int32_t>(ShardStatus::SHARD_RETRYING)}, shard);
-
-        LOG_INFO("SchedulerService::RescheduleShard shard_id=%s → WAITING (retry=%d/%d)",
+        LOG_INFO("SchedulerService::RescheduleShard shard_id=%s retry=%d/%d → WAITING",
                  shard_id.c_str(), shard.retry_count, shard.max_retry);
 
         // 重试的 shard 也发事件立即重分配（不等轮询）
@@ -679,50 +718,6 @@ public:
         done->Run();
     }
 
-private:
-    // 检查 job 下所有 shard 是否都已进入终态，若有 FAILED 且无进行中的 shard，标记 JOB_FAILED
-    void CheckAndMarkJobFailed(const std::string& job_id)
-    {
-        // 获取该 job 所有切片 shards
-        auto shards = ShardStore::GetInstance().ListByJob(job_id);
-        if (shards.empty()) return;
-
-        bool all_terminal = true;
-        bool any_failed = false;
-        for (const auto& s : shards)
-        {
-            int st = s.status;
-            int s_success  = static_cast<int32_t>(ShardStatus::SHARD_SUCCESS);
-            int s_failed   = static_cast<int32_t>(ShardStatus::SHARD_FAILED);
-            int s_canceled = static_cast<int32_t>(ShardStatus::SHARD_CANCELED);
-            if (st != s_success && st != s_failed && st != s_canceled)
-            {
-                // 有进行中的shard，因此未进入终态
-                all_terminal = false;
-                break;
-            }
-            // 存在失败的shard
-            if (st == s_failed) any_failed = true;
-        }
-
-        if (!all_terminal || !any_failed) return;
-
-        // 所有 shard 都在终态且至少有一个 FAILED → JOB_FAILED （任务失败）
-        auto job_opt = JobStore::GetInstance().Get(job_id);
-        if (job_opt.has_value())
-        {
-            // 只要有一个片failed，那就说明job任务失败（因为片是唯一的，失败了任务永远合不成）
-            auto job = job_opt.value();
-            int from_status = job.status;
-            job.status = static_cast<int32_t>(JobStatus::JOB_FAILED);
-            job.updated_at = NowMs();
-            JobStore::GetInstance().UpdateIfStatus(job_id, {from_status}, job);
-        }
-
-        LOG_WARN("SchedulerService: job %s marked JOB_FAILED (all shards terminal, "
-                 "has FAILED)", job_id.c_str());
-    }
-
 };
 
 
@@ -852,12 +847,12 @@ static bool TryAssignShard(const ShardRecord& shard,
     // score = available_slots * 10 - cpu_usage * 0.5 - memory_usage * 0.2
     // 空闲槽位越多、负载越低的 Worker 得分越高
     const WorkerInfo* best_worker = nullptr;
-    double best_score = -999.0;
+    double best_score = -1e9;   // 低于任何降权后的分数，保证唯一可用候选仍能被选中
 
     for (const auto& w : workers.workers())
     {
         // round_assigned 本回合已分配计数（防同一轮对同一 Worker 超额分配；轮询来源按轮共享，MQ 来源每次调用独立）
-        int already = round_assigned[w.worker_id()]; 
+        int already = round_assigned[w.worker_id()];
         int available = w.max_running_shards()
                       - w.current_running_shards()
                       - already;
@@ -866,6 +861,14 @@ static bool TryAssignShard(const ShardRecord& shard,
         double score = available * 10.0
                      - w.cpu_usage() * 0.5
                      - w.memory_usage() * 0.2;
+
+        // 重试时降权上次执行的 Worker：优先换节点重试（节点本地故障如磁盘满/OOM
+        // 重试同一节点必然再失败）；若它是唯一可用候选仍会被选中，不会卡死 shard
+        if (shard.retry_count > 0 && !shard.assigned_worker_id.empty()
+            && w.worker_id() == shard.assigned_worker_id)
+        {
+            score -= 1000.0;
+        }
 
         if (score > best_score)
         {
@@ -1202,6 +1205,9 @@ static void SchedulingLoop(std::atomic<bool>& stop_flag)
                              "and retry exhausted (%d/%d), marked CANCELED",
                              s.shard_id.c_str(), stalled_worker.c_str(),
                              fresh.retry_count, fresh.max_retry);
+                    // 与"执行失败"路径一致：立即结算 job（CANCELED 计入 any_failed），
+                    // 不等 RC 的 TerminalSweepLoop 兜底
+                    CheckAndMarkJobFailed(fresh.job_id);
                     continue;
                 }
 
