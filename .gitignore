@@ -7,3 +7,7 @@ path/temp_out/
 *.mp4
 program_log/
 data/
+
+# 本地简历文件（不入库）
+/简历.*
+/王天宇_*.pdf
