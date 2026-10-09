@@ -20,9 +20,7 @@ constexpr char kChannel = 1;  // AMQP 通道号
 
 // 事件拓扑（与 mq_client.h 注释保持一致）
 constexpr const char* kExchangeJobEvents    = "job.events";
-constexpr const char* kExchangeShardEvents  = "shard.events";
 constexpr const char* kQueueShardWaiting    = "shard.waiting";
-constexpr const char* kQueueResultPending   = "result.pending";
 
 // 检查 RPC 回复是否正常；异常时打 WARN 并返回 false
 bool CheckReply(amqp_connection_state_t conn, const char* what)
@@ -116,7 +114,7 @@ bool MqClient::Init()
     if (ok)
     {
         LOG_INFO("MqClient connected to %s:%d, topology declared "
-                 "(job.events/shard.events)", host_.c_str(), port_);
+                 "(job.events)", host_.c_str(), port_);
         return true;
     }
 
@@ -147,21 +145,12 @@ bool MqClient::ConnectPublish()
                           amqp_cstring_bytes("direct"),
                           0, 1, 0, 0, amqp_empty_table);
     if (!CheckReply(conn, "exchange_declare job.events")) { amqp_destroy_connection(conn); return false; }
-    amqp_exchange_declare(conn, kChannel,
-                          amqp_cstring_bytes(kExchangeShardEvents),
-                          amqp_cstring_bytes("direct"),
-                          0, 1, 0, 0, amqp_empty_table);
-    if (!CheckReply(conn, "exchange_declare shard.events")) { amqp_destroy_connection(conn); return false; }
 
     // 声明队列（durable=1，幂等）
     amqp_queue_declare(conn, kChannel,
                        amqp_cstring_bytes(kQueueShardWaiting),
                        0, 1, 0, 0, amqp_empty_table);
     if (!CheckReply(conn, "queue_declare shard.waiting")) { amqp_destroy_connection(conn); return false; }
-    amqp_queue_declare(conn, kChannel,
-                       amqp_cstring_bytes(kQueueResultPending),
-                       0, 1, 0, 0, amqp_empty_table);
-    if (!CheckReply(conn, "queue_declare result.pending")) { amqp_destroy_connection(conn); return false; }
 
     // 绑定（routing key 与队列同名，direct 精确匹配）
     amqp_queue_bind(conn, kChannel,
@@ -169,11 +158,6 @@ bool MqClient::ConnectPublish()
                     amqp_cstring_bytes(kExchangeJobEvents),
                     amqp_cstring_bytes(kQueueShardWaiting), amqp_empty_table);
     if (!CheckReply(conn, "queue_bind shard.waiting")) { amqp_destroy_connection(conn); return false; }
-    amqp_queue_bind(conn, kChannel,
-                    amqp_cstring_bytes(kQueueResultPending),
-                    amqp_cstring_bytes(kExchangeShardEvents),
-                    amqp_cstring_bytes(kQueueResultPending), amqp_empty_table);
-    if (!CheckReply(conn, "queue_bind result.pending")) { amqp_destroy_connection(conn); return false; }
 
     publish_conn_ = conn;
     return true;
@@ -225,37 +209,6 @@ bool MqClient::PublishShardWaiting(const std::string& shard_id)
                                 kChannel,
                                 amqp_cstring_bytes(kExchangeJobEvents),
                                 amqp_cstring_bytes(kQueueShardWaiting),
-                                0, 0, &props, body);
-        if (rc != AMQP_STATUS_OK) return false;
-    }
-    return true;
-}
-
-bool MqClient::PublishResult(const std::string& serialized_request)
-{
-    std::lock_guard<std::mutex> lock(publish_mutex_);
-    if (!inited_ || !enabled_ || publish_conn_ == nullptr) return false;
-
-    amqp_basic_properties_t props = {};
-    props._flags = AMQP_BASIC_CONTENT_TYPE_FLAG | AMQP_BASIC_DELIVERY_MODE_FLAG;
-    props.content_type  = amqp_cstring_bytes("application/octet-stream");
-    props.delivery_mode = 2;
-
-    amqp_bytes_t body{ serialized_request.size(), (void*)serialized_request.data() };
-    int rc = amqp_basic_publish(static_cast<amqp_connection_state_t>(publish_conn_),
-                                kChannel,
-                                amqp_cstring_bytes(kExchangeShardEvents),
-                                amqp_cstring_bytes(kQueueResultPending),
-                                0, 0, &props, body);
-    if (rc != AMQP_STATUS_OK)
-    {
-        LOG_WARN("MqClient: publish result.pending failed (%s), reconnecting",
-                 amqp_error_string2(rc));
-        if (!ConnectPublish()) return false;
-        rc = amqp_basic_publish(static_cast<amqp_connection_state_t>(publish_conn_),
-                                kChannel,
-                                amqp_cstring_bytes(kExchangeShardEvents),
-                                amqp_cstring_bytes(kQueueResultPending),
                                 0, 0, &props, body);
         if (rc != AMQP_STATUS_OK) return false;
     }

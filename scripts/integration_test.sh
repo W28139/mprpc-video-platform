@@ -69,8 +69,8 @@ fi
 info "Job submitted: $job_id"
 
 # ── 4. 轮询到终态（--watch 每 2s；超时 420s） ──────────────────────────
-# 420s 兜底：RC MQ 消费偶发静默延迟（result.pending 最多 ~5 分钟，见日志记录），
-# shard 结果上报可能晚到，240s 偶发不够（CI 实测 shard_1 卡 RUNNING 超时）
+# 420s：给 CI 环境留余量。原 240s 曾偶发撞超时（当时根因是 RC 的 MQ 消费静默
+# 延迟，该消费路径已随结果通道删除），余量保留以便继续吸收环境抖动。
 info "Watching job $job_id to terminal state (timeout 420s)..."
 watch_out=$(timeout 420 $COMPOSE exec -T job_service sh -c \
     "./bin/job_client -i /app/conf/job_client.conf --query '$job_id' --watch" 2>&1 || true)

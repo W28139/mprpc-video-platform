@@ -15,7 +15,6 @@
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
 #include "video_platform/mysql_pool.h"
-#include "video_platform/mq_client.h"
 #include "video_platform/ffmpeg_executor.h"
 
 using namespace video_platform;
@@ -200,9 +199,7 @@ public:
                 }
             }
 
-            // 受理成功：Scheduler 已在同一 MySQL 行完成 FAILED → WAITING 推进，
-            // 本地无需再写状态（阶段 9 起 RC/Scheduler 共享同一行，重复写会因条件
-            // {FAILED} 不匹配而静默失败）
+            // 受理成功：Scheduler 已在同一 MySQL 行完成 FAILED → WAITING 推进，本地无需再写状态
             if (reschedule_ok)
             {
                 LOG_INFO("ResultCollectorService: shard %s rescheduled by Scheduler "
@@ -210,9 +207,6 @@ public:
                          shard_id.c_str());
             }
             // 三次调用都在网络层失败：Scheduler 可能从未收到请求，保持 FAILED
-            // （此前会置 RETRYING 过渡态——该状态无任何扫描/重置路径，会让 shard
-            // 永久卡死、job 永不终态，见 doc/审查报告/3. 业务层bug排查.md S1；
-            // RETRYING 已随状态机裁剪删除）
             else if (last_was_network)
             {
                 LOG_ERROR("ResultCollectorService: RescheduleShard FAILED after 3 "
@@ -487,59 +481,6 @@ void ResultCollectorServiceImpl::TerminalSweepLoop(std::atomic<bool>& stop_flag)
 }
 
 
-// 消费 Worker 上报的执行结果消息，复用公共聚合逻辑
-static void MqResultConsumeLoop(std::atomic<bool>& stop_flag)
-{
-    auto& mq = MqClient::GetInstance();
-    LOG_INFO("MqResultConsumeLoop thread started (consume result.pending)");
-
-    while (!stop_flag)
-    {
-        // 1. 确保连接可用（MQ 故障时等待重连；期间 Worker 走直连 RPC）
-        if (!mq.connected())
-        {
-            if (!mq.Reconnect())
-            {
-                LOG_WARN("MqResultConsumeLoop: MQ unavailable, retry in 2s "
-                         "(workers fall back to direct RPC)");
-                std::this_thread::sleep_for(std::chrono::seconds(2));
-                continue;
-            }
-            LOG_INFO("MqResultConsumeLoop: MQ reconnected, resume consuming");
-        }
-
-        // 2. 阻塞消费（2s 超时：可感知 stop_flag 与连接状态变化）
-        std::string body;
-        int64_t delivery_tag = 0;
-        if (!mq.ConsumeBlocking("result.pending", body, delivery_tag, 2000))
-        {
-            if (stop_flag) break;
-            continue;
-        }
-
-        // 3. 解析并处理
-        ::ReportShardResultRequest req;
-        ::ReportShardResultResponse resp;
-        if (req.ParseFromString(body))
-        {
-            ResultCollectorServiceImpl::HandleReportShardResult(&req, &resp);
-        }
-        else
-        {
-            LOG_WARN("MqResultConsumeLoop: failed to parse result message "
-                     "(len=%zu), ack & drop", body.size());
-        }
-
-        // 4. 确认消息（失败 → Broker 重投 → 幂等兜底）
-        if (!mq.Ack(delivery_tag))
-        {
-            LOG_WARN("MqResultConsumeLoop: ack failed, broker may redeliver");
-        }
-    }
-
-    LOG_INFO("MqResultConsumeLoop thread stopped");
-}
-
 // ============================================================================
 // main — 服务入口
 // ============================================================================
@@ -568,9 +509,6 @@ int main(int argc, char** argv)
         return EXIT_FAILURE;
     }
 
-    // 阶段 10：MQ 是可降级组件，Init 失败只 WARN 不拒绝启动
-    MqClient::GetInstance().Init();
-
     RpcProvider provider;
     provider.NotifyService(new ResultCollectorServiceImpl());
 
@@ -578,22 +516,18 @@ int main(int argc, char** argv)
     std::atomic<bool> stop_flag{false};
     std::thread sweep_thread(ResultCollectorServiceImpl::TerminalSweepLoop,
                              std::ref(stop_flag));
-    // 阶段 10：MQ 消费线程（result.pending，Push 聚合）
-    std::thread mq_thread(MqResultConsumeLoop, std::ref(stop_flag));
 
     if (!provider.Run())
     {
         LOG_ERROR("ResultCollectorService start failed");
         stop_flag = true;
         if (sweep_thread.joinable()) sweep_thread.join();
-        if (mq_thread.joinable()) mq_thread.join();
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }
 
     stop_flag = true;
     if (sweep_thread.joinable()) sweep_thread.join();
-    if (mq_thread.joinable()) mq_thread.join();
     wevix_muduo::AsyncLogger::GetInstance().stop();
     return 0;
 }

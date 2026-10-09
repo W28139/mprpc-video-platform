@@ -21,7 +21,6 @@
 #include "wevix_muduo/AsyncLogger.h"
 #include "video_platform/common_store.h"
 #include "video_platform/ffmpeg_executor.h"
-#include "video_platform/mq_client.h"
 #include "mprpcutil.h"
 
 using namespace video_platform;
@@ -45,19 +44,6 @@ static std::string ResolveWorkerId()
         return hostname;
     return "unknown_worker";
 }
-
-// 尝试通过 MQ 上报 shard 执行结果。
-static bool TryPublishResultToMq(const ::ReportShardResultRequest& result_req)
-{
-    auto& mq = MqClient::GetInstance();
-    if (!mq.inited() || !mq.enabled()) return false;
-    std::string payload;
-    if (!result_req.SerializeToString(&payload)) return false;
-    if (mq.PublishResult(payload)) return true;
-    LOG_WARN("TryPublishResultToMq: publish failed, fallback to direct RPC");
-    return false;
-}
-
 
 struct RunningShard {
     ShardInfo   info;                      ///< shard 元信息（proto 拷贝）
@@ -84,24 +70,7 @@ struct PendingReport {
     int32_t     shard_index;
 };
 
-/// @brief WorkerService RPC 实现
-///
-/// TranscodeWorker 双重角色：
-/// 1. Provider — 接收 Scheduler 下发的调度命令：
-///    - AssignShard：接收 shard → 校验无重复（同一锁内检查+插入）→ 锁外启动执行线程
-///    - CancelShard：设置 cancelled 标志，执行线程在转码过程中检测并退出
-///    - QueryShard：返回 shard 实时 progress（0-100 或 -1=不存在）
-///
-/// 2. Consumer — 主动调用其他服务（不在本类中，由独立函数实现）：
-///    - RunHeartbeatLoop：启动时 RegisterWorker + 周期 3s Heartbeat
-///
-/// 线程模型（5 类线程同时运行）：
-///   - main 线程：RpcProvider::Run() 阻塞等待连接
-///   - IO 线程池（io_threads 个）：处理 AssignShard / CancelShard / QueryShard
-///   - Work 线程池（work_threads 个）：处理 RPC 业务逻辑
-///   - 执行线程（每个 shard 一个）：ffmpeg 转码执行
-///   - 心跳线程（1 个）：RunHeartbeatLoop
-///   running_shards_ map 由 mutex_ 保护，所有跨线程访问都经过锁。
+
 class WorkerServiceImpl : public WorkerService {
 public:
     /// @brief 获取当前运行中 shard 数量（供心跳线程使用）
@@ -371,7 +340,7 @@ private:
         running_shard->progress = 100;
         int64_t total_elapsed = transcode_elapsed;
 
-        // 构造结果请求（MQ 与 RPC 共用）
+        // 构造结果请求
         ReportShardResultRequest result_req;
         result_req.set_shard_id(shard_id);
         result_req.set_job_id(job_id);
@@ -385,14 +354,7 @@ private:
         result_req.set_shard_index(running_shard->info.shard_index());
 
         bool result_reported = false;
-        //MQ 优先（publish 成功即已投递，RC 消费后走同一聚合逻辑）
-        if (TryPublishResultToMq(result_req))
-        {
-            LOG_INFO("FfmpegExecute: shard=%s %s published to MQ (result.pending)",
-                     shard_id.c_str(), is_success ? "SUCCESS" : "FAILED");
-            result_reported = true;
-        }
-        // MQ行不通，那就RPC重复3次
+        // 直连 RPC 上报，最多重试 3 次
         for (int retry = 0; retry < 3 && !result_reported; ++retry)
         {
             if (retry > 0)
@@ -544,10 +506,6 @@ public:
         return succeeded;
     }
 };
-
-// ============================================================================
-// 系统资源采集（阶段 7：资源感知调度）
-// ============================================================================
 
 // 读取本进程 CPU 时间并计算使用率
 static int CollectCpuUsage()
@@ -879,9 +837,6 @@ int main(int argc, char** argv)
         wevix_muduo::AsyncLogger::GetInstance().stop();
         return EXIT_FAILURE;
     }
-
-    // 阶段 10：MQ 是可降级组件，Init 失败只 WARN（结果上报回退直连 RPC）
-    MqClient::GetInstance().Init();
 
     // ── 读取 Worker 专有配置 ──────────────────────────────────────────
     auto& config = MprpcApplication::GetConfig();

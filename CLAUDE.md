@@ -25,7 +25,7 @@ mprpc-video-platform（即原 muduo_im）是一个基于 Reactor 模式的 Linux
 | 7. 资源感知调度和监控 | ✅ 完成（2026-07-31） |
 | 8. 压测、故障测试和文档整理 | ✅ 代码审查与Bug修复（2026-08-01），压测待进行 |
 | 9. 数据持久化（MySQL） | ✅ 完成（2026-08-03） |
-| 10. 中间件集成（Redis+MQ） | ✅ 完成（2026-08-03，三批全部完成；2026-08-04 复验修复 MqClient 消费锁缺陷；真实 Broker 重启实测待用户 sudo） |
+| 10. 中间件集成（Redis+MQ） | ✅ 完成（2026-08-03，三批全部完成；2026-08-04 复验修复 MqClient 消费锁缺陷；2026-10-09 删除结果通道，MQ 仅保留调度通道；真实 Broker 重启实测待用户 sudo） |
 | 11. 可观测性升级（Prometheus+Grafana） | ~~完成~~ 已删除（2026-09-28 移出项目，详见下文说明） |
 | 12. 客户端 GUI（Qt6 桌面应用） | ~~完成~~ 已删除（2026-08-08 移出项目，详见下文说明） |
 | 13. 容器化与 CI/CD | ✅ 完成（2026-08-04，`docker/` + `docker-compose.yml` + `.github/workflows/ci.yml`；compose 一键启动/集成测试/--scale 全部本机实测通过，CI 绿勾待 push） |
@@ -375,14 +375,26 @@ MySQL 持久化替代内存 Store，详见 `doc/更新业务日志/10. 阶段9�
 
 **第二批（RabbitMQ）核心改动**：
 - 新增 `mq_client.h/.cpp`（rabbitmq-c 封装：**双连接双锁**——发布/消费严格分连接，消费阻塞不卡发布；durable exchange/queue + delivery-mode=2 持久化消息 + 手动 ACK；拓扑声明幂等；失败重连）
-- 事件拓扑：`job.events`→`shard.waiting`（分配通知，消息体=shard_id）+ `shard.events`→`result.pending`（结果数据，消息体=序列化 ReportShardResultRequest）
+- 事件拓扑：`job.events`→`shard.waiting`（分配通知，消息体=shard_id）。~~第二条通道 `shard.events`→`result.pending`（结果上报）~~ 已于 2026-10-09 删除，见下文「阶段 10 结果通道已删除」
 - 发布端在 **Scheduler**（shard 切分在 ScheduleJob，4 个 WAITING 触发点：新建/重试/离线/超时重置）
 - 分配逻辑抽取 `TryAssignShard`（轮询与 MQ 消费线程共用）；MqConsumeLoop 消费即时分配 + 幂等跳过 + 无条件 ACK
 - SchedulingLoop 共存：MQ 在线降频 5s 兜底（超时重扫改按时间 30s），掉线自动恢复 2s 轮询
-- Worker 结果上报 MQ 优先回退直连 RPC；RC 消费 result.pending 复用公共 `HandleReportShardResult`
+- ~~Worker 结果上报 MQ 优先回退直连 RPC；RC 消费 result.pending 复用公共 `HandleReportShardResult`~~（2026-10-09 删除，见下文）
 - 修复 Bug：初版单连接单锁导致 ConsumeBlocking 持锁卡住 ScheduleJob 发布 → RPC 超时（双连接修复）
 
-**验收**：Push 调度延迟实测 33ms（<100ms ✅）；Redis/MQ 正常/故障（端口不可达模拟）/恢复三态全链路 SUCCESS；MQ 故障自动回退 Pull 轮询 + 直连 RPC。真实 Broker 重启测试（消息不丢）待用户 sudo 操作（log11 遗留说明）。
+**验收**：Push 调度延迟实测 33ms（<100ms ✅）；Redis/MQ 正常/故障（端口不可达模拟）/恢复三态全链路 SUCCESS；MQ 故障自动回退 Pull 轮询。真实 Broker 重启测试（消息不丢）待用户 sudo 操作（log11 遗留说明）。
+
+### 阶段 10 结果通道已删除（2026-10-09）
+
+阶段 10 第二批曾包含**第二条**事件通道 `shard.events` → `result.pending`：Worker 转码完成经 MQ 上报结果、ResultCollector 独立线程消费（原设计见 `doc/设计问题/业务/14. 消息队列（RabbitMQ）中间件设计.md` 4.2 节）——**已全部移出项目**。
+
+**删除理由（成本收益核算）**：MQ 相对「直连 RPC 重试 3 次 + 心跳兜底队列」的独占能力只有一条——**发送方可以在结果送达前消失**（消息存在 Broker，不依赖 worker 存活）。而本平台 transcode_worker 是**常驻进程**（心跳线程一直跑），RC 宕机期间 RPC 侧的 `pending_reports_` 队列照样送达，那个窗口走不到 → **收益 ≈ 0**。反过来这条通道的成本是真实的：① 第二个并发入口进 `HandleReportShardResult`（幂等/并发面）② RC 多一个消费线程（曾偶发静默失效——`result.pending` 延迟 ~5 分钟，CI 因此把 `--watch` 超时从 240s 放宽到 420s）③ 多两个 exchange/queue 拓扑声明。**成本真实、收益趋零 → 删。**
+
+**删除内容**：`transcode_worker.cpp`（`TryPublishResultToMq` + MQ-first 分支 + `MqClient::Init()`）、`result_collector.cpp`（`MqResultConsumeLoop` + 线程 + `Init()`）、`mq_client.cpp/.h`（`PublishResult` + `kExchangeShardEvents` + `shard.events`/`result.pending` 拓扑声明）。**`transcode_worker` 与 `result_collector` 两个服务彻底摘除 MQ 依赖**，`MqClient` 现在唯一使用者是 Scheduler（自己发布 `shard.waiting` 自己消费）。
+
+**一并保留的资产**：`MqClient` 及其消费锁修复（阶段 11 节，调度通道仍在用）；`HandleReportShardResult` 抽公共静态方法（现为 RPC 单一入口，结构更清晰）；Worker 侧两级降级链（RPC 重试 3 次 → `pending_reports_` 心跳兜底）；被删通道的完整成本收益分析与 CI flaky 复盘（`doc/设计问题/业务/14` 4.2 节、`interview_project/03-业务层.md` Q9.2.1）——**分析留档，作为"评估后删除"的判断记录**。
+
+**将来需要重新加回的场景**：worker 改为一次性任务（K8s Job 式，跑完即退 / 按需伸缩）、跨机房上报——届时「worker 生命周期与结果送达时机解耦」会从"走不到"变成刚需。
 
 ### 阶段 7（已完成 ✅ 2026-07-31）
 

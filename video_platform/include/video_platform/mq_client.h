@@ -9,20 +9,17 @@
 namespace video_platform {
 
 // ============================================================================
-// MqClient — RabbitMQ 客户端封装（rabbitmq-c / AMQP 0-9-1，阶段 10 第 2 批）
+// MqClient — RabbitMQ 客户端封装（rabbitmq-c / AMQP 0-9-1）
 // ============================================================================
 //
 // 事件驱动调度（Pull→Push）：消除 SchedulingLoop 2s 轮询的调度延迟。
-// 两条事件流：
-//   JobService 切分完成 ──PublishShardWaiting──► "job.events" → "shard.waiting"
-//   Worker 转码完成   ──PublishResult───────► "shard.events" → "result.pending"
+// 唯一事件流：
+//   Scheduler 产生/重置 WAITING shard ──PublishShardWaiting──►
+//                          "job.events" → "shard.waiting"
 //
 // 消息语义：
 // - shard.waiting 消息体 = shard_id 纯文本——**通知通道**，消费方（Scheduler）
 //   收到后重新查 MySQL 取最新数据（MySQL 是唯一数据源，防快照陈旧）
-// - result.pending 消息体 = ReportShardResultRequest 的 protobuf 序列化串——
-//   **结果数据通道**：执行结果（is_success/exit_code/output_path 等）不在
-//   MySQL 中，必须随消息传递，RC 消费后走原聚合逻辑
 //
 // 可靠性（验收标准"MQ 宕机后消息不丢失"）：
 // - exchange/queue 均 durable，消息 delivery-mode=2（持久化）
@@ -30,13 +27,13 @@ namespace video_platform {
 // - 消费失败（连接断开）不 ack，Broker 保留消息
 //
 // 与 RedisClient 同策略：MQ 是可降级组件。
-// - Init() 连接失败只 WARN 不拒绝服务启动，enabled_=false 走原 RPC/Pull 路径
+// - Init() 连接失败只 WARN 不拒绝服务启动，enabled_=false 走原 Pull 轮询路径
 // - 发布失败返回 false，调用方只打 WARN（SchedulingLoop 兜底轮询仍会扫到）
 // - 消费线程通过 ConsumeBlocking 超时感知连接断开，负责重连或触发降级
 //
-// 线程模型：单连接 + mutex（rabbitmq-c 连接非线程安全）。
-// 各服务要么只发布（JobService/Worker 多线程发布），要么只消费（Scheduler/RC
-// 独立线程），本进程内不会同时收发。
+// 线程模型：发布/消费各一条连接 + 各自锁（rabbitmq-c 连接非线程安全）。
+// 当前唯一使用者是 Scheduler——它既发布（shard 变为 WAITING）又消费（分配
+// shard），双连接设计正是为此：消费阻塞不卡发布。
 //
 // 配置项：mq_enable / mq_host / mq_port
 // ============================================================================
@@ -59,10 +56,6 @@ public:
     /// @brief 发布 shard 等待分配事件（消息体 = shard_id）。
     /// @return true=发布成功（写入 Broker）；false=MQ 不可用/失败，调用方降级
     bool PublishShardWaiting(const std::string& shard_id);
-
-    /// @brief 发布 shard 执行结果（消息体 = ReportShardResultRequest 序列化串）。
-    /// @return true=发布成功；false=MQ 不可用/失败
-    bool PublishResult(const std::string& serialized_request);
 
     // ── 消费（阻塞式，供独立消费线程单线程调用） ─────────────────────
 
