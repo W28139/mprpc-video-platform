@@ -992,9 +992,45 @@ static bool TryAssignShard(const ShardRecord& shard,
         fresh.updated_at = NowMs();
 
         // 条件更新：仅当仍是 WAITING 才推进（防并发取消/终态覆盖/重复分配）
-        ShardStore::GetInstance().UpdateIfStatus(
-            fresh.shard_id,
-            {static_cast<int32_t>(ShardStatus::SHARD_WAITING)}, fresh);
+        if (!ShardStore::GetInstance().UpdateIfStatus(
+                fresh.shard_id,
+                {static_cast<int32_t>(ShardStatus::SHARD_WAITING)}, fresh))
+        {
+            // CAS 失败：读-写窗口内 shard 被并发取消/改写，但 Worker 已接受并开始
+            // 执行（RPC 先于 CAS 发出）——此刻 DB 没记 assigned_worker_id，取消流程
+            // 按 assigned_worker_id 过滤会漏掉它，必须补发 CancelShard 回滚，
+            // 避免孤儿执行（其结果还会污染已取消 shard 的状态）。
+            LOG_WARN("%s: shard %s conditional update failed after AssignShard "
+                     "accepted (concurrent cancel/terminal), rolling back CancelShard "
+                     "to worker %s",
+                     caller, fresh.shard_id.c_str(),
+                     best_worker->worker_id().c_str());
+
+            MprpcChannel rollback_channel(best_worker->ip(),
+                                          static_cast<uint16_t>(best_worker->port()));
+            WorkerService_Stub rollback_stub(&rollback_channel);
+            CancelShardRequest rb_req;
+            rb_req.set_shard_id(shard.shard_id);
+            rb_req.set_reason("ASSIGN_RACE");
+            // 代次精确匹配：与 Worker 侧 AssignShard 生成的 attempt_id 同源
+            // （快照的 retry_count），避免误杀该 shard 的新一轮执行
+            rb_req.set_attempt_id(
+                shard.shard_id + "_attempt_" + std::to_string(shard.retry_count));
+            CancelShardResponse rb_resp;
+            MprpcController rb_ctrl;
+            rb_ctrl.SetTimeoutMs(3000);
+            rollback_stub.CancelShard(&rb_ctrl, &rb_req, &rb_resp, nullptr);
+            if (rb_ctrl.Failed() || !rb_resp.canceled())
+            {
+                LOG_WARN("%s: rollback CancelShard for %s to worker %s failed: %s",
+                         caller, shard.shard_id.c_str(),
+                         best_worker->worker_id().c_str(),
+                         rb_ctrl.Failed() ? rb_ctrl.ErrorText().c_str()
+                                          : rb_resp.error_msg().c_str());
+            }
+            release_lock();
+            return false;
+        }
     }
 
     // 分配完成，释放分布式锁

@@ -54,7 +54,7 @@ message CancelJobRequest {
 }
 
 message CancelJobResponse {
-    int32  error_code = 1;  // 0=成功，1=job 不存在
+    int32  error_code = 1;  // 0=成功，1=失败（job 不存在 / 已终态不可取消）
     string error_msg  = 2;  // 失败时的错误描述
 }
 

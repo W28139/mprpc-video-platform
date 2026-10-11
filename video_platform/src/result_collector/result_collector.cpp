@@ -120,6 +120,21 @@ public:
             return;
         }
 
+        // 3. 幂等检查3：已 CANCELED 的不再处理（终态——迟到结果不得把它翻回 SUCCESS/FAILED）
+        // 场景：取消后 Worker 恰好完成、结果在途（取消通知没拦住它）
+        if (shard.status == static_cast<int32_t>(ShardStatus::SHARD_CANCELED))
+        {
+            LOG_INFO("ResultCollectorService: shard %s already CANCELED, ignoring "
+                     "late result (attempt=%s, success=%d)",
+                     shard_id.c_str(), attempt_id.c_str(),
+                     static_cast<int>(request->is_success()));
+            response->set_error_code(0);
+            response->set_error_msg("shard canceled, late result ignored");
+            response->set_accepted(true);
+            response->set_job_done(CheckJobDone(job_id));
+            return;
+        }
+
         // 4. 更新 shard 状态，记录最新的shard
         {
             int from_status = shard.status;

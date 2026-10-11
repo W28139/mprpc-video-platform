@@ -139,13 +139,22 @@ public:
             {
                 // 有的话，获取该 JobRecord 实例 (此时已经被schedule切片逻辑更新过了)
                 auto latest_job = latest_job_opt.value(); 
-                int from_status = latest_job.status;   // 快照前置状态（在修改最新状态前，先把状态保存下来）
                 // 设置job的最新状态为 JOB_SCHEDULING
                 // 更新数据库里该JobStore的信息
                 latest_job.status = static_cast<int32_t>(JobStatus::JOB_SCHEDULING);
                 latest_job.shard_count = shard_count_from_scheduler;
                 latest_job.updated_at = NowMs();
-                JobStore::GetInstance().UpdateIfStatus(job_id, {from_status}, latest_job);
+                // 白名单条件：仍处于提交/调度阶段才写回——防读-写窗口内任务被取消/
+                // 终态覆盖后复活（shard_count 已由 ScheduleJob 持久化，跳过写无副作用）
+                if (!JobStore::GetInstance().UpdateIfStatus(
+                        job_id,
+                        {static_cast<int32_t>(JobStatus::JOB_PENDING),
+                         static_cast<int32_t>(JobStatus::JOB_SCHEDULING)},
+                        latest_job))
+                {
+                    LOG_WARN("JobService::SubmitJob job_id=%s: status changed during "
+                             "ScheduleJob, skip status overwrite", job_id.c_str());
+                }
 
                 // 更新response信息
                 jobInfo->set_status(JobStatus::JOB_SCHEDULING);
@@ -256,10 +265,41 @@ public:
 
         {
             auto job = job_opt.value();
-            int from_status = job.status;
-            job.status = static_cast<int32_t>(JobStatus::JOB_CANCELED);
-            job.updated_at = NowMs();
-            JobStore::GetInstance().UpdateIfStatus(request->job_id(), {from_status}, job);
+            int st = job.status;
+            int32_t j_success  = static_cast<int32_t>(JobStatus::JOB_SUCCESS);
+            int32_t j_failed   = static_cast<int32_t>(JobStatus::JOB_FAILED);
+            int32_t j_canceled = static_cast<int32_t>(JobStatus::JOB_CANCELED);
+
+            // 终态 job 不可再取消：SUCCESS/FAILED 已完成，取消会改写历史且与产物矛盾
+            if (st == j_success || st == j_failed)
+            {
+                LOG_WARN("JobService::CancelJob job_id=%s: job already finished "
+                         "(status=%d), cancel rejected",
+                         request->job_id().c_str(), st);
+                response->set_error_code(1);
+                response->set_error_msg("job already finished, cancel rejected");
+                done->Run();
+                return;
+            }
+
+            // 重复取消（已 CANCELED）：幂等放行，继续向下重试 Worker 取消通知
+            if (st != j_canceled)
+            {
+                job.status = j_canceled;
+                job.updated_at = NowMs();
+                // 白名单条件：只有非终态才能被取消（防读-写窗口内并发完成被覆盖）
+                if (!JobStore::GetInstance().UpdateIfStatus(
+                        request->job_id(),
+                        {static_cast<int32_t>(JobStatus::JOB_PENDING),
+                         static_cast<int32_t>(JobStatus::JOB_SCHEDULING),
+                         static_cast<int32_t>(JobStatus::JOB_RUNNING)},
+                        job))
+                {
+                    LOG_WARN("JobService::CancelJob job_id=%s: status changed during "
+                             "cancel (concurrent finish?), overwrite skipped",
+                             request->job_id().c_str());
+                }
+            }
         }
 
         // 传播取消到所有 shard
