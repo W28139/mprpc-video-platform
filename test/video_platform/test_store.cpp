@@ -1,20 +1,4 @@
-// ============================================================================
-// Store 原子 SQL 功能测试
-// 覆盖三个 MySQL 持久化 Store 的原子方法（条件 SQL 语义）：
-//   JobStore:   Insert / Get / Delete / UpdateIfStatus（命中/不命中/多状态/空）
-//   WorkerStore: UpdateHeartbeat（在线刷新 / OFFLINE 拒绝 / 不存在）、
-//                MarkOfflineIfTimeout（超时/未超时/已 OFFLINE）、
-//                InsertOrUpdate（upsert 新插 vs 覆盖）、ListByStatus
-//   ShardStore:  CountByStatus 增量、ListByJob / ListByWorker、UpdateIfStatus
-//
-// 这些"单条条件 SQL 的正确性"是 e2e 全绿也无法覆盖的（状态机回退保护），
-// 只能通过直连 MySQL 断言。
-//
-// 运行前置：本地 MySQL 运行且存在 video_platform 库（schema 自动建表）。
-// MySQL 不可达 / conf 找不到时打印 SKIP 并退出 0（CI 无 MySQL 时安全跳过）。
-// 数据隔离：key 全部用 GenerateId() 唯一化，用例结束 Delete 清理，
-// CountByStatus 一律用前后增量断言，不污染开发库。
-// ============================================================================
+// Store 原子 SQL 功能测试：覆盖 JobStore / WorkerStore / ShardStore 的条件更新语义
 
 #include "mprpcapplication.h"
 #include "common.pb.h"   // WORKER_ONLINE / WORKER_OFFLINE 等枚举值
@@ -59,9 +43,7 @@ static std::string uid(const std::string& prefix)
     return GenerateId(prefix);
 }
 
-// ============================================================================
 // JobStore 用例
-// ============================================================================
 
 static JobRecord makeJob(const std::string& job_id)
 {
@@ -190,9 +172,7 @@ static void test_job_update_if_status_multi()
     PASS();
 }
 
-// ============================================================================
 // WorkerStore 用例
-// ============================================================================
 
 static WorkerRecord makeWorker(const std::string& worker_id, int32_t status,
                                int64_t last_heartbeat)
@@ -345,9 +325,7 @@ static void test_worker_list_by_status()
     PASS();
 }
 
-// ============================================================================
 // ShardStore 用例
-// ============================================================================
 
 static ShardRecord makeShard(const std::string& shard_id, const std::string& job_id,
                              int32_t index, int32_t status, int64_t start_ms,

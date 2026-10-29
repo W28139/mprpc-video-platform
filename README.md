@@ -134,7 +134,7 @@ Client/CLI ──SubmitJob──► JobService ──ScheduleJob──► Schedu
 
 ## 快速开始
 
-完整步骤见 [快速启动指南.md](快速启动指南.md)，这里给最简路径。
+完整步骤见 [快速启动指南](doc/快速启动指南.md)，这里给最简路径。
 
 **方式一：手工部署**。编译依赖 protobuf、ZooKeeper C 库、hiredis、rabbitmq-c、ffmpeg；运行还需本机启动 ZooKeeper、MySQL、Redis、RabbitMQ：
 

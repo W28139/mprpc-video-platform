@@ -1,25 +1,4 @@
-// ============================================================================
-// mprpc 框架端到端压测工具 (全功能版)
-//
-// 功能：
-//   - 两种 RPC 通道模式：
-//       Direct 模式 (--direct)：跳过 ZooKeeper，直连 host:port，测试纯 RPC 性能
-//       ZK 模式 (默认)：使用标准 MprpcChannel，经 ZooKeeper 发现服务
-//   - 长连接模式 (--keepalive)：复用 TCP 连接，减少握手开销，测 RPC 框架极限
-//   - 命令行参数控制
-//   - 详细统计：QPS、P50/P90/P99/P99.9 延迟、失败率
-//   - 多消息大小对比
-//   - 阶梯式加压
-//   - CSV 文件导出
-//
-// Direct 模式用法：
-//   ./bench_rpc_stress --direct --host 127.0.0.1 --port 8000 -c 100 -m 100
-//   ./bench_rpc_stress --direct --keepalive -c 500 -d 30
-//   ./bench_rpc_stress --direct --step-stress
-//
-// ZK 模式用法：
-//   ./bench_rpc_stress -c 100 -m 100 -i rpc_test.conf
-// ============================================================================
+// mprpc RPC 压测工具：Direct/ZK 双模式、长连接、多尺寸对比、阶梯加压、CSV 导出
 
 #include <iostream>
 #include <vector>
@@ -52,9 +31,7 @@
 
 using Clock = std::chrono::high_resolution_clock;
 
-// ============================================================================
 // 配置参数
-// ============================================================================
 struct StressConfig {
     std::string host        = "127.0.0.1";
     int         port        = 8000;
@@ -69,9 +46,7 @@ struct StressConfig {
     std::string csvFile;                // CSV 输出路径
 };
 
-// ============================================================================
 // 统计结果
-// ============================================================================
 struct StressResult {
     double totalTimeMs  = 0;
     long   successCount = 0;
@@ -87,9 +62,7 @@ struct StressResult {
     double maxLatencyUs = 0;
 };
 
-// ============================================================================
-// 简易命令行参数解析
-// ============================================================================
+// 命令行参数解析
 static void parseArgs(int argc, char* argv[], StressConfig& cfg) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -160,13 +133,7 @@ static void parseArgs(int argc, char* argv[], StressConfig& cfg) {
     }
 }
 
-// ============================================================================
-// DirectRpcChannel: 跳过 ZooKeeper，直连 RPC 服务端
-//
-// 实现与 MprpcChannel::CallMethod 相同的 wire format：
-//   请求帧：[total_len] + [header_size + RpcHeader + args]
-//   响应帧：[total_len] + [response_header_size + RpcResponseHeader + response_data]
-// ============================================================================
+// DirectRpcChannel：跳过 ZK，直连 RPC 服务端，与 MprpcChannel 相同的 wire format
 class DirectRpcChannel {
 public:
     DirectRpcChannel(const std::string& ip, uint16_t port)
@@ -414,9 +381,7 @@ private:
     inline static std::atomic<uint64_t> nextRequestId_{1};
 };
 
-// ============================================================================
 // 单轮压测执行
-// ============================================================================
 static StressResult runStress(const StressConfig& cfg, int overrideConnections = 0) {
     int threadCount = overrideConnections > 0 ? overrideConnections : cfg.connections;
 
@@ -632,9 +597,7 @@ static StressResult runStress(const StressConfig& cfg, int overrideConnections =
     return res;
 }
 
-// ============================================================================
-// 打印结果表格
-// ============================================================================
+// 打印结果
 static void printResult(const StressResult& r, const std::string& label, int threadCount) {
     std::cout << "\n  ┌─────────────────────────────────────────────────────────┐\n";
     std::cout << "  │ " << std::setw(55) << std::left << label << "│\n";
@@ -665,9 +628,7 @@ static void printResult(const StressResult& r, const std::string& label, int thr
     std::cout << "  └─────────────────────────────────────────────────────────┘\n";
 }
 
-// ============================================================================
 // CSV 导出
-// ============================================================================
 static void writeCSV(const std::string& path,
                      const std::vector<std::pair<int, StressResult>>& results) {
     std::ofstream f(path);
@@ -685,9 +646,7 @@ static void writeCSV(const std::string& path,
     std::cout << "\n  CSV 已导出: " << path << "\n";
 }
 
-// ============================================================================
-// 多消息大小对比压测
-// ============================================================================
+// 多消息大小对比
 static void runMultiSize(const StressConfig& cfg) {
     std::vector<int> sizes = {16, 64, 256, 1024, 4096};
 
@@ -722,9 +681,7 @@ static void runMultiSize(const StressConfig& cfg) {
     std::cout << "\n  \033[1;32m多尺寸压测完成\033[0m\n";
 }
 
-// ============================================================================
-// 阶梯加压压测
-// ============================================================================
+// 阶梯加压
 static void runStepStress(const StressConfig& cfg) {
     std::vector<int> steps;
 
@@ -793,9 +750,7 @@ static void runStepStress(const StressConfig& cfg) {
     std::cout << "\n  \033[1;32m阶梯加压完成\033[0m\n";
 }
 
-// ============================================================================
-// 初始化 mprpc 框架（仅在 ZK 模式需要）
-// ============================================================================
+// 初始化 mprpc 框架（ZK 模式需要）
 static bool initMprpcFramework(const StressConfig& cfg) {
     // MprpcApplication::Init 使用 getopt 解析 "-i configfile"
     // 构造 minimal argv 给它

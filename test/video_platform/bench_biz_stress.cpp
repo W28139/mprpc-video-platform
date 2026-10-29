@@ -1,28 +1,4 @@
-// ============================================================================
-// video_platform 业务 RPC 压测工具
-//
-// 基于 test/mprpc/bench_rpc_stress.cpp 的 DirectRpcChannel + 压测框架裁剪：
-//   - 只保留 Direct 直连模式（--direct --keepalive），跳过 ZooKeeper
-//   - 删除：ZK 模式 / 阶梯加压 / 多消息大小对比 / msgSize
-//   - 新增：--method 选择业务 RPC，支持
-//       query_job     JobService.QueryJob        (默认端口 9001)
-//       heartbeat     WorkerManagerService.Heartbeat (默认端口 9003)
-//       list_workers  WorkerManagerService.ListWorkers (默认端口 9003)
-//
-// 统计口径（与 bench_rpc_stress 的区别）：
-//   success = RPC 层成功（帧收发 + request_id 校验 + error_code==RPC_SUCCESS）
-//   biz_fail = RPC 层成功但业务 error_code != 0 —— 单独计数，不混入 RPC 失败。
-//   query_job 默认查询不存在的 job（error_code=1）属预期行为，业务失败率
-//   接近 100% 是正常的，压测看的是 QPS / 延迟（服务端吞吐），不是业务失败率。
-//
-// 副作用控制：heartbeat 用 bench_w_<tid> 前缀 worker_id（不存在 → UPDATE 0 行），
-// 不会刷新真实 Worker 的心跳；query_job / list_workers 为纯读。
-//
-// 用法：
-//   ./bench_biz_stress --direct --keepalive --method query_job -c 50 -m 200
-//   ./bench_biz_stress --direct --keepalive --method heartbeat -p 9003 -c 100 -m 500
-//   ./bench_biz_stress --direct --keepalive --method list_workers -d 30 --csv out.csv
-// ============================================================================
+// 业务 RPC 压测工具：直连模式，支持 query_job / heartbeat / list_workers
 
 #include <iostream>
 #include <vector>
@@ -51,9 +27,7 @@
 
 using Clock = std::chrono::high_resolution_clock;
 
-// ============================================================================
-// 配置参数
-// ============================================================================
+// 配置
 struct StressConfig {
     std::string host        = "127.0.0.1";
     int         port        = 0;          // 0 = 按 --method 选默认端口
@@ -65,9 +39,7 @@ struct StressConfig {
     std::string csvFile;                  // CSV 输出路径
 };
 
-// ============================================================================
-// 统计结果
-// ============================================================================
+// 统计
 struct StressResult {
     double totalTimeMs  = 0;
     long   successCount = 0;     // RPC 层成功
@@ -91,9 +63,7 @@ static int defaultPort(const std::string& method)
     return 9003;                              // WorkerManagerService
 }
 
-// ============================================================================
-// 简易命令行参数解析
-// ============================================================================
+// 命令行解析
 static void parseArgs(int argc, char* argv[], StressConfig& cfg) {
     for (int i = 1; i < argc; ++i) {
         std::string arg = argv[i];
@@ -142,12 +112,7 @@ static void parseArgs(int argc, char* argv[], StressConfig& cfg) {
     }
 }
 
-// ============================================================================
-// DirectRpcChannel: 跳过 ZooKeeper，直连 RPC 服务端
-// 与 MprpcChannel::CallMethod 相同的 wire format（从 bench_rpc_stress 原样复用）：
-//   请求帧：[total_len] + [header_size + RpcHeader + args]
-//   响应帧：[total_len] + [response_header_size + RpcResponseHeader + response_data]
-// ============================================================================
+// DirectRpcChannel：直连 RPC，与 MprpcChannel 相同 wire format
 class DirectRpcChannel {
 public:
     DirectRpcChannel(const std::string& ip, uint16_t port)
@@ -384,9 +349,7 @@ private:
     inline static std::atomic<uint64_t> nextRequestId_{1};
 };
 
-// ============================================================================
-// 业务请求构造 / 响应解析（按 method 分发）
-// ============================================================================
+// 业务请求构造与响应解析
 
 // 构造一次业务请求，返回序列化后的 args（线程内复用）
 static bool buildRequest(const StressConfig& cfg, int tid, std::string& reqData)
@@ -450,9 +413,7 @@ static void methodNames(const std::string& method, std::string& service, std::st
     else                              { service = "WorkerManagerService"; rpc = "ListWorkers"; }
 }
 
-// ============================================================================
-// 单轮压测执行（仅 Direct 模式）
-// ============================================================================
+// 单轮压测
 static StressResult runStress(const StressConfig& cfg) {
     int threadCount = cfg.connections;
 
@@ -571,9 +532,7 @@ static StressResult runStress(const StressConfig& cfg) {
     return res;
 }
 
-// ============================================================================
-// 打印结果表格
-// ============================================================================
+// 打印结果
 static void printResult(const StressResult& r, const std::string& label, int threadCount) {
     std::cout << "\n  ┌─────────────────────────────────────────────────────────┐\n";
     std::cout << "  │ " << std::setw(55) << std::left << label << "│\n";
@@ -605,9 +564,7 @@ static void printResult(const StressResult& r, const std::string& label, int thr
     std::cout << "  └─────────────────────────────────────────────────────────┘\n";
 }
 
-// ============================================================================
 // CSV 导出
-// ============================================================================
 static void writeCSV(const std::string& path, const StressResult& r) {
     std::ofstream f(path);
     f << "Threads,DurationMs,Success,BizFail,Fail,ConnFail,QPS,"

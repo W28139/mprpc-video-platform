@@ -1,16 +1,3 @@
--- ============================================================================
--- 阶段 9：数据持久化 — MySQL 表结构
---
--- 3 张核心表：jobs / shards / workers
--- 对应 common_store.h 中的 JobRecord / ShardRecord / WorkerRecord。
---
--- 使用方法：
---   1. 手动执行（需要 DDL 权限的账号）：
---        mysql -uvideo_platform -p < schema.sql
---   2. 或依赖服务启动时的自动建表（CREATE TABLE IF NOT EXISTS，幂等）。
---      本文件保留作为参考与手动管理入口。
--- ============================================================================
-
 CREATE DATABASE IF NOT EXISTS video_platform
     DEFAULT CHARACTER SET utf8mb4;
 

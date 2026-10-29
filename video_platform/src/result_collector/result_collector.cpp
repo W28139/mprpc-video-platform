@@ -20,8 +20,7 @@
 using namespace video_platform;
 
 
-/// @brief 从 attempt_id 字符串中解析重试次数
-// attempt_id 格式：{shard_id}_attempt_{N}
+/// 从 attempt_id 解析重试次数，格式：{shard_id}_attempt_{N}
 static int parseRetryFromAttempt(const std::string& attempt_id)
 {
     auto pos = attempt_id.rfind('_');
@@ -34,7 +33,7 @@ class ResultCollectorServiceImpl : public ResultCollectorService {
 public:
     static void TerminalSweepLoop(std::atomic<bool>& stop_flag);
 
-    // 由 WorkerServiceImpl::MockExecute() 在 shard 执行完成后调用
+    // Worker 执行完成后上报 shard 结果
     void ReportShardResult(::google::protobuf::RpcController* controller,
                            const ::ReportShardResultRequest* request,
                            ::ReportShardResultResponse* response,
@@ -93,8 +92,7 @@ public:
         }
 
         // 3. 幂等检查1：已 SUCCESS 的不再处理
-        // shard.attempt_id：MySQL 里 shard 记录的 attempt_id
-        // attempt_id：Worker 上报请求里带的 attempt_id（这次结果对应的是第几次执行）
+        // shard.attempt_id = MySQL 中的尝试代次；attempt_id = 本次上报对应的代次
         if (shard.status == static_cast<int32_t>(ShardStatus::SHARD_SUCCESS))
         {
             LOG_INFO("ResultCollectorService: shard %s already SUCCESS (idempotent)",
@@ -106,7 +104,7 @@ public:
             return;
         }
 
-        // 3. 幂等检查2：忽略同一 attempt 的重复上报,执行重试逻辑
+        // 3. 幂等检查2：同 attempt 的重复上报直接忽略
         if (shard.status == static_cast<int32_t>(ShardStatus::SHARD_FAILED)
             && shard.attempt_id == attempt_id)
         {
@@ -120,8 +118,7 @@ public:
             return;
         }
 
-        // 3. 幂等检查3：已 CANCELED 的不再处理（终态——迟到结果不得把它翻回 SUCCESS/FAILED）
-        // 场景：取消后 Worker 恰好完成、结果在途（取消通知没拦住它）
+        // 3. 幂等检查3：已 CANCELED 的不再处理（迟到结果不得翻回 SUCCESS/FAILED）
         if (shard.status == static_cast<int32_t>(ShardStatus::SHARD_CANCELED))
         {
             LOG_INFO("ResultCollectorService: shard %s already CANCELED, ignoring "
@@ -175,8 +172,7 @@ public:
                 rs_req.set_shard_id(shard_id);
                 rs_req.set_job_id(job_id);
                 rs_req.set_reason("WORKER_FAILED");
-                // #3 修复：携带本次失败上报的 attempt_id，
-                // Scheduler 按 attempt 幂等，重复触发不双倍消耗 retry_count
+                // 携带本次上报的 attempt_id，Scheduler 按 attempt 幂等，重复触发不双倍消耗 retry_count
                 rs_req.set_attempt_id(attempt_id);
 
                 RescheduleShardResponse rs_resp;
@@ -193,9 +189,7 @@ public:
                     reschedule_ok = true;
                     break;
                 }
-                // 失败分两类：
-                // 网络/框架层失败（Failed()）——不知道远端是否已处理
-                // 业务层确定性拒绝（!Failed() && !accepted()）——远端明确答复（如 max_retry 耗尽），保持 FAILED
+                // 失败分两类：网络/框架层失败（远端状态未知）与业务层确定性拒绝
                 else if (rs_ctrl.Failed())
                 {
                     last_was_network = true;
@@ -251,13 +245,13 @@ public:
     }
 
 private:
-    //检查 job 下所有 shard 是否都已进入终态,如果是，进入MarkJobTerminal
+    // 检查 job 下所有 shard 是否都终态，是则进入 MarkJobTerminal
     static bool CheckJobDone(const std::string& job_id)
     {
         auto shards = ShardStore::GetInstance().ListByJob(job_id);
         if (shards.empty()) return false;
 
-        // 从 JobStore（MySQL）获取预期的 shard 总数。=
+        // 从 JobStore（MySQL）获取预期的 shard 总数
         int32_t expected_shard_count = 0;
         auto job_opt = JobStore::GetInstance().Get(job_id);
         if (job_opt.has_value())
@@ -431,8 +425,7 @@ private:
     }
 };
 
-// TerminalSweepLoop — 周期终态扫描
-// 兜底轮询所有job,判断是否job任务可能完成
+// TerminalSweepLoop — 周期终态扫描，兜底轮询所有 job 是否已完成
 void ResultCollectorServiceImpl::TerminalSweepLoop(std::atomic<bool>& stop_flag)
 {
     constexpr int64_t kSweepIntervalMs = 15000;  // 每 15 秒扫描一次
@@ -496,9 +489,7 @@ void ResultCollectorServiceImpl::TerminalSweepLoop(std::atomic<bool>& stop_flag)
 }
 
 
-// ============================================================================
 // main — 服务入口
-// ============================================================================
 
 int main(int argc, char** argv)
 {

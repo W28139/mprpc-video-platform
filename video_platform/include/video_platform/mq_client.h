@@ -8,71 +8,37 @@
 
 namespace video_platform {
 
-// ============================================================================
-// MqClient — RabbitMQ 客户端封装（rabbitmq-c / AMQP 0-9-1）
-// ============================================================================
-//
-// 事件驱动调度（Pull→Push）：消除 SchedulingLoop 2s 轮询的调度延迟。
-// 唯一事件流：
-//   Scheduler 产生/重置 WAITING shard ──PublishShardWaiting──►
-//                          "job.events" → "shard.waiting"
-//
-// 消息语义：
-// - shard.waiting 消息体 = shard_id 纯文本——**通知通道**，消费方（Scheduler）
-//   收到后重新查 MySQL 取最新数据（MySQL 是唯一数据源，防快照陈旧）
-//
-// 可靠性（验收标准"MQ 宕机后消息不丢失"）：
-// - exchange/queue 均 durable，消息 delivery-mode=2（持久化）
-// - 消费手动 ACK：处理成功才 ack，失败不 ack 自动重回队列
-// - 消费失败（连接断开）不 ack，Broker 保留消息
-//
-// 与 RedisClient 同策略：MQ 是可降级组件。
-// - Init() 连接失败只 WARN 不拒绝服务启动，enabled_=false 走原 Pull 轮询路径
-// - 发布失败返回 false，调用方只打 WARN（SchedulingLoop 兜底轮询仍会扫到）
-// - 消费线程通过 ConsumeBlocking 超时感知连接断开，负责重连或触发降级
-//
-// 线程模型：发布/消费各一条连接 + 各自锁（rabbitmq-c 连接非线程安全）。
-// 当前唯一使用者是 Scheduler——它既发布（shard 变为 WAITING）又消费（分配
-// shard），双连接设计正是为此：消费阻塞不卡发布。
-//
+// MqClient — RabbitMQ 客户端（rabbitmq-c / AMQP 0-9-1）。
+// 事件驱动调度：Scheduler 发布 shard.waiting → 消费线程即时分配。
+// MQ 是可降级组件：故障时回退 Pull 轮询。
+// 线程模型：发布/消费各一条连接 + 各自锁。
 // 配置项：mq_enable / mq_host / mq_port
-// ============================================================================
 
-/// @brief RabbitMQ 客户端（单例，线程安全）
+/// RabbitMQ 客户端（单例，线程安全）
 class MqClient {
 public:
-    /// @brief 获取全局唯一实例
     static MqClient& GetInstance();
 
-    /// @brief 从配置初始化：连接 + 声明 exchange/queue/binding（幂等）。
-    /// 失败只 WARN，enabled() 为 false，调用方降级走原路径。
+    /// 初始化：连接 + 声明 exchange/queue/binding。失败只 WARN，enabled()=false
     bool Init();
 
     bool inited() const { return inited_; }
     bool enabled() const { return enabled_; }
 
-    // ── 发布（thread-safe） ──────────────────────────────────────────
-
-    /// @brief 发布 shard 等待分配事件（消息体 = shard_id）。
-    /// @return true=发布成功（写入 Broker）；false=MQ 不可用/失败，调用方降级
+    /// 发布 shard 等待分配事件（消息体 = shard_id）
     bool PublishShardWaiting(const std::string& shard_id);
 
-    // ── 消费（阻塞式，供独立消费线程单线程调用） ─────────────────────
-
-    /// @brief 阻塞消费一条消息（最多 timeout_ms）。
-    /// @param[out] body 消息体；delivery_tag 供 Ack() 确认
-    /// @return true=取到消息；false=超时或连接故障（调用方检查 connected()）
+    /// 阻塞消费一条消息（timeout_ms 超时返回 false）
     bool ConsumeBlocking(const std::string& queue, std::string& body,
                          int64_t& delivery_tag, int64_t timeout_ms);
 
-    /// @brief 手动确认消息（处理成功后调用；不确认则 Broker 重回队列）
+    /// 手动确认消息
     bool Ack(int64_t delivery_tag);
 
-    /// @brief 当前 AMQP 连接是否可用（消费线程据此决定降级/重连）
+    /// AMQP 连接是否可用
     bool connected() const;
 
-    /// @brief 重建连接 + 重新声明拓扑（消费线程在 connected()==false 时周期调用；
-    /// MQ 恢复后重连成功，调度自动切回 Push 模式）
+    /// 重建连接（MQ 恢复后调度自动切回 Push）
     bool Reconnect();
 
 private:
@@ -80,32 +46,23 @@ private:
     MqClient(const MqClient&) = delete;
     MqClient& operator=(const MqClient&) = delete;
 
-    /// @brief 建立发布连接并声明 exchange/queue/binding（需持有 publish_mutex_）。
     bool ConnectPublish();
-
-    /// @brief 建立消费连接（登录 + channel，拓扑由发布连接声明；需持有 consume_mutex_）。
     bool ConnectConsume();
 
     std::string host_ = "127.0.0.1";
     int         port_ = 5672;
     bool        enabled_ = false;
     bool        inited_  = false;
-    void*       publish_conn_ = nullptr;   ///< 发布连接（amqp_connection_state_t）
-    void*       consume_conn_ = nullptr;   ///< 消费连接（amqp_connection_state_t）
-    std::set<std::string> consumed_queues_;  ///< 已 basic_consume 的队列（消费连接重建后清空）
+    void*       publish_conn_ = nullptr;
+    void*       consume_conn_ = nullptr;
+    std::set<std::string> consumed_queues_;  // 已 basic_consume 的队列
+
     mutable std::mutex publish_mutex_;
-    // ⚠️ 阶段 11 修复：消费锁用 timed_mutex——amqp_consume_message 在
-    // 连接异常（半开/对端 FIN 后 poll 返回可读但 read 阻塞）时可能无限
-    // 阻塞持锁，导致 SchedulingLoop 的 connected() 永久等锁、调度停摆。
-    // connected()/Ack() 用 try_lock_for(1s) 拿不到锁即降级返回（视为 MQ
-    // 不可用），调度线程转 Pull 轮询，系统保持可用。
-    // ⚠️ 阶段 12 前修复：ConsumeBlocking 的 poll(2s) 已移出锁——消费线程
-    // 紧循环持锁导致 connected() 的 try_lock_for(1s) 永远失败（mq=push
-    // 误判 + consume lock busy WARN 无限刷屏）。锁只保护 conn 内部状态
-    // 的读写（read/销毁/重建），poll 期间无并发写者（消费连接只由消费
-    // 线程销毁）。consume_alive_ 为原子标志，connected() 无锁读取。
+
+    // timed_mutex：connected()/Ack() 用 try_lock_for(1s)，拿不到锁降级（MQ 不可用）
+    // ConsumeBlocking 的 poll 已移出锁，锁只保护 conn 内部状态读写
     mutable std::timed_mutex consume_mutex_;
-    std::atomic<bool> consume_alive_{false};  ///< 消费连接有效性（atomic，connected() 无锁读取）
+    std::atomic<bool> consume_alive_{false};
 };
 
 } // namespace video_platform

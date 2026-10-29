@@ -15,17 +15,11 @@
 
 using namespace video_platform;
 
-// ============================================================================
 // JobService — 接收用户提交任务、查询任务状态、取消任务
-// ============================================================================
 
 class JobServiceImpl : public JobService {
 public:
-    /// @brief 提交视频处理任务
-    
-    // 对外接口，用于提交任务
-    // 内部是把任务交给schedule做切分，把切分好的放入数据库，把结果返回过来，最后返给调用方
-    // job进入pending(已提交，等待系统处理) -> schedule
+    /// 提交视频处理任务：写入 PENDING，交给 Scheduler 切分，再把结果返回调用方。
     void SubmitJob(::google::protobuf::RpcController* controller,
                    const ::SubmitJobRequest* request,
                    ::SubmitJobResponse* response,
@@ -46,8 +40,7 @@ public:
             return;
         }
 
-        // 用 GenerateId 生成唯一 job_id
-        // 把job的信息整合到 =JobRecord里
+        // 用 GenerateId 生成唯一 job_id，并组装 JobRecord
         std::string job_id = GenerateId("job");
         JobRecord job;
         job.job_id             = job_id;
@@ -64,7 +57,7 @@ public:
         job.created_at         = NowMs();
         job.updated_at         = NowMs();
 
-        // 写入MySQL内存存储
+        // 写入 MySQL
         JobStore::GetInstance().Insert(job);
         LOG_INFO("JobService::SubmitJob created job_id=%s", job_id.c_str());
 
@@ -112,8 +105,7 @@ public:
             {
                 LOG_INFO("JobService::SubmitJob job_id=%s: Scheduler accepted (attempt %d)",
                          job_id.c_str(), attempt);
-                // 直接从 ScheduleJobResponse 获取 shard_count（直接数据路径，避免侧信道）
-                // shard 列表不再收集——数据已由 Scheduler 写入 MySQL 共享
+                // 只取 shard_count；shard 列表已由 Scheduler 写入 MySQL 共享，无需收集
                 shard_count_from_scheduler = sched_resp.shard_count();
                 schedule_ok = true;
                 break;
@@ -132,20 +124,16 @@ public:
         // 切片成功后的逻辑
         if (schedule_ok)
         {
-            // latest_job_opt的类型为JobRecord，用于更新状态信息、分片数信息、最新更新时间信息等信息
+            // 读取 ScheduleJob 已更新的最新 JobRecord 并回写状态
             auto latest_job_opt = JobStore::GetInstance().Get(job_id);
-            // 查询数据库里有没有job_id这个任务
             if (latest_job_opt.has_value())
             {
-                // 有的话，获取该 JobRecord 实例 (此时已经被schedule切片逻辑更新过了)
-                auto latest_job = latest_job_opt.value(); 
-                // 设置job的最新状态为 JOB_SCHEDULING
-                // 更新数据库里该JobStore的信息
+                auto latest_job = latest_job_opt.value();
                 latest_job.status = static_cast<int32_t>(JobStatus::JOB_SCHEDULING);
                 latest_job.shard_count = shard_count_from_scheduler;
                 latest_job.updated_at = NowMs();
-                // 白名单条件：仍处于提交/调度阶段才写回——防读-写窗口内任务被取消/
-                // 终态覆盖后复活（shard_count 已由 ScheduleJob 持久化，跳过写无副作用）
+                // 白名单条件：仍处于提交/调度阶段才写回，防读-写窗口内任务被取消/终态覆盖后复活
+                //（shard_count 已由 ScheduleJob 持久化，跳过写无副作用）
                 if (!JobStore::GetInstance().UpdateIfStatus(
                         job_id,
                         {static_cast<int32_t>(JobStatus::JOB_PENDING),
@@ -253,7 +241,7 @@ public:
         LOG_INFO("JobService::CancelJob job_id=%s, reason=%s",
                  request->job_id().c_str(), request->reason().c_str());
 
-        // 找不到该任务，直接取消
+        // 找不到该任务
         auto job_opt = JobStore::GetInstance().Get(request->job_id());
         if (!job_opt.has_value())
         {
@@ -302,9 +290,7 @@ public:
             }
         }
 
-        // 传播取消到所有 shard
-        // 将所有非终态 shard 标记为 CANCELED，使 SchedulingLoop 不再扫描它们。
-        // 对已分配的 shard，best-effort 通知 Worker 取消执行。
+        // 传播取消到所有 shard：非终态标记 CANCELED，已分配的交由 Scheduler best-effort 通知 Worker
         auto shards = ShardStore::GetInstance().ListByJob(request->job_id());
         int canceled_count = 0;
         for (auto& s : shards)
@@ -369,9 +355,7 @@ public:
 };
 
 
-// 本线程定期扫描 PENDING job 并重试 ScheduleJob，确保：
-// 1. Scheduler 重启后，之前 PENDING 的 job 能被重新切分调度
-// 2. SubmitJob 重试耗尽后，job 不会被永久遗忘
+// 周期扫描 PENDING job 并重试 ScheduleJob：覆盖 Scheduler 重启恢复与提交重试耗尽的情况
 static void PendingScanLoop(std::atomic<bool>& stop_flag)
 {
     constexpr int64_t kScanIntervalMs = 10000;  // 每 10 秒扫描一次
@@ -477,9 +461,7 @@ static void PendingScanLoop(std::atomic<bool>& stop_flag)
     LOG_INFO("PendingScanLoop thread stopped");
 }
 
-// ============================================================================
 // main — 服务入口
-// ============================================================================
 
 int main(int argc, char** argv)
 {

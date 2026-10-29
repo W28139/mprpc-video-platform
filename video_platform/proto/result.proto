@@ -4,41 +4,28 @@ package video_platform;
 
 option cc_generic_services = true;
 
-// ============================================================================
 // ResultCollectorService — 结果收集与聚合
-//
-// Worker 在 shard 执行完成后上报最终结果。
-// ResultCollector 负责幂等接收、判断 job 是否全部完成、
-// 触发失败重试和最终聚合。
-// 实时转码进度由 Scheduler 直连 Worker 的 QueryShard 获取，不经过本服务。
-// ============================================================================
-
-// ── ReportShardResult ──────────────────────────────────────────────────────
 
 message ReportShardResultRequest {
-    string shard_id    = 1;   // 已完成的 shard ID
-    string job_id      = 2;   // 所属 job ID
-    string worker_id   = 3;   // 执行该 shard 的 Worker ID
-    string attempt_id  = 4;   // 执行尝试 ID，用于幂等：只接受当前 attempt 的结果
-    bool   is_success  = 5;   // true=执行成功，false=执行失败
-    int32  exit_code   = 6;   // 进程退出码，FFmpeg 成功时为 0，失败时为非 0
-    string error_msg   = 7;   // 失败时的错误描述（ffmpeg stderr 摘要）
-    string output_path     = 8;   // 输出文件路径（成功时必填，用于后续合并）
-    int64  elapsed_ms      = 9;   // 执行总耗时（毫秒），用于统计和调度策略优化
-    int32  shard_index     = 10;  // shard 在 job 中的序号，用于 ResultCollector 构造本地副本
+    string shard_id    = 1;
+    string job_id      = 2;
+    string worker_id   = 3;
+    string attempt_id  = 4;
+    bool   is_success  = 5;
+    int32  exit_code   = 6;
+    string error_msg   = 7;
+    string output_path = 8;
+    int64  elapsed_ms  = 9;
+    int32  shard_index = 10;
 }
 
 message ReportShardResultResponse {
-    int32  error_code = 1;  // 0=成功
-    string error_msg  = 2;  // 错误描述
-    bool   accepted   = 3;  // true=结果被接受（幂等：已 SUCCESS 的再次上报也返回 true）
-    bool   job_done   = 4;  // true=该 shard 是 job 的最后一个未完成 shard，job 可以进入 MERGING
+    int32  error_code = 1;
+    string error_msg  = 2;
+    bool   accepted   = 3;
+    bool   job_done   = 4;
 }
 
-// ── Service ────────────────────────────────────────────────────────────────
-
 service ResultCollectorService {
-    rpc ReportShardResult(ReportShardResultRequest) returns (ReportShardResultResponse);        // 上报最终执行结果
-    // 阶段 9 删除 NotifyJobCanceled：CancelJob 直接写 MySQL 标记 CANCELED，
-    // RC 的 TerminalSweepLoop / CheckJobDone 读取同一份数据，无需通知。
+    rpc ReportShardResult(ReportShardResultRequest) returns (ReportShardResultResponse);
 }

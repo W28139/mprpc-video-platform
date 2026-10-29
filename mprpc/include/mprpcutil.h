@@ -1,20 +1,7 @@
 #pragma once
 
-// ============================================================================
-// mprpc 公共工具（阶段 13：容器化支持）
-// ============================================================================
-//
 // GetLocalIp()：探测本机首个非 loopback IPv4 地址。
-//
-// 背景：Provider 注册到 ZooKeeper 的服务发现地址取自配置 rpcserverip。
-// 本机部署（127.0.0.1）无碍；Docker 部署绑定 0.0.0.0（全接口监听）时，
-// 若把 0.0.0.0 直接注册到 ZK，消费者拿到的 endpoint 是不可路由的
-// 死地址（实测 connect 0.0.0.0:9002 → errno 111）。因此 rpcserverip 为
-// 0.0.0.0/空时，注册与上报一律用本机实际 IP（容器内 = 容器 IP，经
-// compose 网络可达）。
-//
-// @see RpcProvider::Run     ZK 服务注册地址
-// @see RunHeartbeatLoop     TranscodeWorker 注册上报地址
+// Docker 部署 rpcserverip=0.0.0.0 时，注册 ZK 需用本机实际 IP（0.0.0.0 不可路由）。
 
 #include <ifaddrs.h>
 #include <arpa/inet.h>
@@ -24,7 +11,7 @@
 
 namespace mprpc {
 
-/// @brief 探测本机首个非 loopback IPv4 地址；失败返回空串
+/// 探测本机首个非 loopback IPv4 地址；失败返回空串
 inline std::string GetLocalIp()
 {
     struct ifaddrs* ifa = nullptr;
@@ -39,7 +26,7 @@ inline std::string GetLocalIp()
         if (!inet_ntop(AF_INET, &sa->sin_addr, buf, sizeof(buf))) continue;
         std::string ip(buf);
         if (ip == "127.0.0.1" || ip == "0.0.0.0") continue;
-        result = ip;   // 取第一个非 loopback 网卡地址
+        result = ip;
         break;
     }
     freeifaddrs(ifa);

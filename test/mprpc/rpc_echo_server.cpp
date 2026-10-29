@@ -1,17 +1,4 @@
-// ============================================================================
-// RPC Echo 服务端 —— 用于 mprpc 框架端到端压测
-//
-// 收到 EchoRequest，原样返回 payload 到 EchoResponse。
-// 通过 RpcProvider 发布服务，使用 wevix_muduo 网络层 + protobuf 序列化。
-//
-// 启动方式：
-//   ./rpc_echo_server -i rpc_test.conf
-//
-// 注意：
-//   1. 需要 ZooKeeper 已启动（用于服务注册）
-//   2. 配置文件指定 rpcserverip / rpcserverport
-//   3. 服务端 IO 线程数由 mprpc 框架内部决定（当前为 4）
-// ============================================================================
+// RPC Echo 服务端：原样返回 payload，用于压测
 
 #include "rpc_echo.pb.h"
 #include "mprpcapplication.h"
@@ -21,9 +8,7 @@
 #include <csignal>
 #include <string>
 
-// ============================================================================
-// Echo 服务实现
-// ============================================================================
+// Echo 服务实现：原样返回 payload
 class EchoServiceImpl : public rpc_test::EchoService
 {
 public:
@@ -38,10 +23,9 @@ public:
     }
 };
 
-// ============================================================================
 int main(int argc, char* argv[])
 {
-    // 初始化日志：Debug 模式输出终端，Release 模式仅写文件
+    // 初始化日志：Debug 输出终端，Release 仅写文件
 #ifndef NDEBUG
     wevix_muduo::AsyncLogger::GetInstance().init(
         "./program_log", wevix_muduo::LogLevel::DEBUG, true);

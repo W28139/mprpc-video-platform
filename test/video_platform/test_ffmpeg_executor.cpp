@@ -1,12 +1,4 @@
-// ============================================================================
-// FfmpegExecutor 功能测试
-// 覆盖 video_platform::FfmpegExecutor 的核心能力：
-//   CheckAvailable / Probe（正常 + 文件不存在）/ Transcode（全量、参数、
-//   切片、进度回调、取消）/ Merge（两段合并 + 空列表）
-//
-// fixture 用 ffmpeg -f lavfi testsrc 生成 2 秒 320x240 小视频，无需外部资源。
-// ffmpeg/ffprobe 不在 PATH 时打印 SKIP 并退出 0（CI 未装 ffmpeg 时安全跳过）。
-// ============================================================================
+// FfmpegExecutor 功能测试：Probe / Transcode / Merge / 进度回调 / 取消
 
 #include "video_platform/ffmpeg_executor.h"
 
@@ -61,10 +53,7 @@ static bool genFixture()
     return runCmd(cmd);
 }
 
-// ============================================================================
 // 用例
-// ============================================================================
-
 static void test_probe_ok()
 {
     TEST("Probe 正常");
@@ -197,15 +186,11 @@ static void test_merge_empty()
     PASS();
 }
 
-// ============================================================================
-// main
-// ============================================================================
-
 int main()
 {
     std::cout << "=== test_ffmpeg_executor ===" << std::endl;
 
-    // ffmpeg/ffprobe 不可用 → SKIP（退出 0，CI 未装 ffmpeg 时安全跳过）
+    // ffmpeg/ffprobe 不可用 → SKIP
     if (!FfmpegExecutor::CheckAvailable())
     {
         std::cout << "SKIP (ffmpeg/ffprobe not found in PATH)" << std::endl;
