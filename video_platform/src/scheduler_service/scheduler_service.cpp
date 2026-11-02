@@ -23,6 +23,10 @@ using namespace video_platform;
 
 static std::mutex g_schedule_job_mutex;
 
+// 切分时 ffprobe 的超时：必须小于 RPC 默认 5s 超时（mprpcchannel.cc），
+// 否则客户端先超时重试，同一 job 会被反复探测。
+static constexpr int64_t kScheduleProbeTimeoutMs = 2000;
+
 // job 是否已到达终态（SUCCESS/FAILED/CANCELED）
 static bool IsJobTerminal(int32_t job_status)
 {
@@ -111,6 +115,48 @@ static void NotifyShardWaiting(const std::string& shard_id)
     }
 }
 
+// 把已有的 shard 计划填入响应（快速路径与锁内复查共用）。
+static void FillShardPlanResponse(ScheduleJobResponse* response,
+                                  const std::string& job_id,
+                                  const std::vector<ShardRecord>& shards)
+{
+    response->set_error_code(0);
+    response->set_error_msg("");
+    response->set_accepted(true);
+    response->set_job_id(job_id);
+    response->set_shard_count(static_cast<int32_t>(shards.size()));
+    for (const auto& s : shards)
+    {
+        auto* si = response->add_shards();
+        si->set_shard_id(s.shard_id);
+        si->set_job_id(s.job_id);
+        si->set_shard_index(s.shard_index);
+        si->set_start_ms(s.start_ms);
+        si->set_duration_ms(s.duration_ms);
+        si->set_status(static_cast<ShardStatus>(s.status));
+        si->set_retry_count(s.retry_count);
+        si->set_max_retry(s.max_retry);
+        si->set_input_path(s.input_path);
+        si->set_output_path(s.output_path);
+        si->set_target_resolution(s.target_resolution);
+        si->set_target_bitrate(s.target_bitrate);
+        si->set_created_at(s.created_at);
+        si->set_updated_at(s.updated_at);
+    }
+}
+
+// 拒绝本次切分请求（job 已取消/终态，或切分期间被并发取消/终态化）
+static void FillScheduleRejected(ScheduleJobResponse* response,
+                                 const std::string& job_id,
+                                 const char* reason)
+{
+    response->set_error_code(1);
+    response->set_error_msg(reason);
+    response->set_accepted(false);
+    response->set_job_id(job_id);
+    response->set_shard_count(0);
+}
+
 class SchedulerServiceImpl : public SchedulerService {
 public:
     // 对 job 进行切分并启动调度：仅切分和写入，不做 Worker 分配。
@@ -120,9 +166,6 @@ public:
                      ::ScheduleJobResponse* response,
                      ::google::protobuf::Closure* done) override
     {
-        // 必须作为原子单元，防止并发 ScheduleJob 混合分片计划。
-        std::lock_guard<std::mutex> schedule_lock(g_schedule_job_mutex);
-
         const auto& jobInfo = request->job_info();
         const std::string& job_id = jobInfo.job_id();
 
@@ -161,47 +204,25 @@ public:
             LOG_INFO("SchedulerService::ScheduleJob job_id=%s: created local copy from request",
                      job_id.c_str());
         }
-        // 判断该jobstore是否已经切过片(比如之前调用过，只不过失败了需要重试)
-        auto existing_shards = ShardStore::GetInstance().ListByJob(job_id);
-        // 存在的话就直接传回去数据
-        if (!existing_shards.empty())
-        {
-            LOG_INFO("SchedulerService::ScheduleJob job_id=%s: already has %zu shards, "
-                     "returning existing plan (idempotent, fix #14)",
-                     job_id.c_str(), existing_shards.size());
 
-            response->set_error_code(0);
-            response->set_error_msg("");
-            response->set_accepted(true);
-            response->set_shard_count(static_cast<int32_t>(existing_shards.size()));
-            // 把分片信息传回去
-            for (const auto& s : existing_shards)
-            {
-                auto* si = response->add_shards();
-                si->set_shard_id(s.shard_id);
-                si->set_job_id(s.job_id);
-                si->set_shard_index(s.shard_index);
-                si->set_start_ms(s.start_ms);
-                si->set_duration_ms(s.duration_ms);
-                si->set_status(static_cast<ShardStatus>(s.status));
-                si->set_retry_count(s.retry_count);
-                si->set_max_retry(s.max_retry);
-                si->set_input_path(s.input_path);
-                si->set_output_path(s.output_path);
-                si->set_target_resolution(s.target_resolution);
-                si->set_target_bitrate(s.target_bitrate);
-                si->set_created_at(s.created_at);
-                si->set_updated_at(s.updated_at);
-            }
+        // 终态早退：已取消/已完成的 job 绝不再切分（省掉后面的 ffprobe 开销）。
+        // 注意这只是优化，真正的正确性靠下面的条件更新——读-写窗口内仍可能被取消。
+        if (IsJobTerminal(local_job.status))
+        {
+            LOG_WARN("SchedulerService::ScheduleJob job_id=%s: job already terminal "
+                     "(status=%d), reject schedule", job_id.c_str(), local_job.status);
+            FillScheduleRejected(response, job_id, "job canceled or terminal, schedule rejected");
             done->Run();
             return;
         }
+        // 已切分检查放在探测之后、锁内完成
 
         // 确定切分参数
         auto& config = MprpcApplication::GetConfig();   // 拿到 mprpc 框架全局配置对象的引用
         int64_t job_duration_ms = 0;
         {
-            auto video_info = FfmpegExecutor::Probe(local_job.input_path);
+            auto video_info = FfmpegExecutor::Probe(local_job.input_path,
+                                                    kScheduleProbeTimeoutMs);
             
             // 调用Probe方法,探测视频真实时长
             if (video_info.valid && video_info.duration_ms > 0)
@@ -240,10 +261,38 @@ public:
                  job_id.c_str(), shard_count,
                  (long long)job_duration_ms, (long long)shard_duration_ms);
 
-        // 回填真实时长并落库（切分完成后统一置 SCHEDULING）
+        // 切分临界区：只包住"查重 + 落库"。探测已在上方锁外完成，
+        // MQ 发布放在解锁之后，避免外部 I/O 拉长锁持有时间。
+        std::unique_lock<std::mutex> schedule_lock(g_schedule_job_mutex);
+
+        // 锁内复查：探测期间可能有并发调用已完成切分（同 job 幂等）。
+        auto existing_shards = ShardStore::GetInstance().ListByJob(job_id);
+        if (!existing_shards.empty())
+        {
+            LOG_INFO("SchedulerService::ScheduleJob job_id=%s: already has %zu shards, "
+                     "returning existing plan (idempotent, fix #14)",
+                     job_id.c_str(), existing_shards.size());
+            FillShardPlanResponse(response, job_id, existing_shards);
+            done->Run();
+            return;   // unique_lock 析构时释放
+        }
+
+        // 回填真实时长（不改状态）：条件更新，探测期间若任务已被取消/终态化则中止，
+        // 绝不能把 CANCELED 用旧快照写回 PENDING/SCHEDULING。
+        // 期望集取快照值本身：只要状态被任何并发方改过就拒绝，杜绝把 SCHEDULING 降回 PENDING
+        int from_status = local_job.status;
         local_job.duration_sec = job_duration_ms / 1000;
         local_job.updated_at = NowMs();
-        JobStore::GetInstance().Update(job_id, local_job);
+        if (!JobStore::GetInstance().UpdateIfStatus(job_id, {from_status}, local_job))
+        {
+            LOG_WARN("SchedulerService::ScheduleJob job_id=%s: job no longer schedulable "
+                     "after probe (canceled/terminal), abort before shard creation",
+                     job_id.c_str());
+            FillScheduleRejected(response, job_id,
+                                 "job canceled or terminal, schedule aborted");
+            done->Run();
+            return;   // unique_lock 析构时释放
+        }
 
         // 按时间切片创建 ShardRecord
         std::vector<ShardRecord> created_shards;
@@ -291,14 +340,37 @@ public:
                      (long long)(shard.start_ms + shard.duration_ms));
         }
 
-        // 切完片及时更新该job状态，此时进入scheduling(正在为 shard 匹配 Worker)状态
+        // 切完片进入 SCHEDULING：条件更新。失败说明切分期间任务被取消/终态化，
+        // 必须回滚刚创建的 shard 且不发布 MQ，否则残留 WAITING 会被分配执行（任务复活）
         local_job.shard_count = shard_count;
         local_job.status = static_cast<int32_t>(JobStatus::JOB_SCHEDULING);
         local_job.updated_at = NowMs();
-        JobStore::GetInstance().Update(job_id, local_job);
+        if (!JobStore::GetInstance().UpdateIfStatus(job_id, {from_status}, local_job))
+        {
+            LOG_WARN("SchedulerService::ScheduleJob job_id=%s: job canceled/terminal "
+                     "during slicing, rolling back %zu shards (no MQ publish)",
+                     job_id.c_str(), created_shards.size());
+            for (auto& s : created_shards)
+            {
+                s.status = static_cast<int32_t>(ShardStatus::SHARD_CANCELED);
+                s.assigned_worker_id.clear();
+                s.attempt_id.clear();
+                s.updated_at = NowMs();
+                // 刚插入的必然是 WAITING，条件更新避免误改任何并发现场
+                ShardStore::GetInstance().UpdateIfStatus(
+                    s.shard_id,
+                    {static_cast<int32_t>(ShardStatus::SHARD_WAITING)}, s);
+            }
+            FillScheduleRejected(response, job_id,
+                                 "job canceled or terminal during scheduling, shards rolled back");
+            done->Run();
+            return;   // unique_lock 析构时释放
+        }
 
         LOG_INFO("SchedulerService::ScheduleJob job_id=%s: %d shards created, status=SCHEDULING",
                  job_id.c_str(), shard_count);
+
+        schedule_lock.unlock();  // 锁外：MQ 发布是网络 I/O，不占切分锁
 
         // 把每个切片shard，发布到消息队列
         for (const auto& s : created_shards)
@@ -307,31 +379,7 @@ public:
         }
 
         // 把shard切片信息传回去
-        response->set_error_code(0);
-        response->set_error_msg("");
-        response->set_accepted(true);
-        response->set_job_id(job_id);
-        response->set_shard_count(shard_count);  // 直接数据路径，避免侧信道依赖
-
-        // 填回 shard 列表（历史遗留字段）
-        for (const auto& s : created_shards)
-        {
-            auto* si = response->add_shards();
-            si->set_shard_id(s.shard_id);
-            si->set_job_id(s.job_id);
-            si->set_shard_index(s.shard_index);
-            si->set_start_ms(s.start_ms);
-            si->set_duration_ms(s.duration_ms);
-            si->set_status(static_cast<ShardStatus>(s.status));
-            si->set_input_path(s.input_path);
-            si->set_output_path(s.output_path);
-            si->set_retry_count(s.retry_count);
-            si->set_max_retry(s.max_retry);
-            si->set_target_resolution(s.target_resolution);
-            si->set_target_bitrate(s.target_bitrate);
-            si->set_created_at(s.created_at);
-            si->set_updated_at(s.updated_at);
-        }
+        FillShardPlanResponse(response, job_id, created_shards);
         done->Run();
     }
 

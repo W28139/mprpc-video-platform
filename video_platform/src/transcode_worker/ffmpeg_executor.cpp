@@ -390,7 +390,8 @@ int FfmpegExecutor::ParseProgress(const std::string& line, int64_t total_duratio
 // 阶段 8 重构：改用 fork+execvp 直接传 argv（修复 #4 命令注入），
 // 替代原来的 popen + shell 字符串拼接。
 
-VideoInfo FfmpegExecutor::Probe(const std::string& input_path)
+VideoInfo FfmpegExecutor::Probe(const std::string& input_path,
+                                int64_t timeout_ms)
 {
     VideoInfo info;
 
@@ -429,18 +430,22 @@ VideoInfo FfmpegExecutor::Probe(const std::string& input_path)
     // （损坏文件/慢挂载点）会永久阻塞调用方；ScheduleJob 在 work 线程内
     // 同步调 Probe，2 个并发即占满线程池瘫痪平台）。超时后 SIGKILL 兜底，
     // 返回无效 info 由调用方回退 fallback 时长。
+    // 超时由调用方指定：ScheduleJob 传 2s（须小于 RPC 默认 5s 超时），
+    // 其余调用方保持默认 15s。
     constexpr int    kProbePollMs    = 1000;   // poll 单次超时
-    constexpr int64_t kProbeTimeoutMs = 15000;  // ffprobe 探测总上限 15s
+    const int64_t    probe_timeout_ms = (timeout_ms > 0) ? timeout_ms : 15000;
     std::string json;
     char buf[2048];
     bool probe_timed_out = false;
     int64_t elapsed_ms = 0;
     for (;;)
     {
+        int64_t remaining = probe_timeout_ms - elapsed_ms;
+        int slice_ms = static_cast<int>(remaining < kProbePollMs ? remaining : kProbePollMs);
         struct pollfd pfd;
         pfd.fd     = pipefd[0];
         pfd.events = POLLIN;
-        int ret = poll(&pfd, 1, kProbePollMs);
+        int ret = poll(&pfd, 1, slice_ms);
         if (ret < 0)
         {
             if (errno == EINTR) continue;
@@ -448,8 +453,8 @@ VideoInfo FfmpegExecutor::Probe(const std::string& input_path)
         }
         if (ret == 0)
         {
-            elapsed_ms += kProbePollMs;
-            if (elapsed_ms >= kProbeTimeoutMs)
+            elapsed_ms += slice_ms;
+            if (elapsed_ms >= probe_timeout_ms)
             {
                 probe_timed_out = true;
                 break;
@@ -467,7 +472,7 @@ VideoInfo FfmpegExecutor::Probe(const std::string& input_path)
     if (probe_timed_out)
     {
         LOG_WARN("Probe: ffprobe timed out after %lldms, killing pid=%d",
-                 (long long)kProbeTimeoutMs, pid);
+                 (long long)probe_timeout_ms, pid);
         kill(pid, SIGKILL);
         waitpid(pid, &status, 0);
         return info;

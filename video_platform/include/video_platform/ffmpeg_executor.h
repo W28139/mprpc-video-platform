@@ -33,7 +33,9 @@ public:
     static bool CheckAvailable();
 
     /// ffprobe 探测视频元信息（JSON 解析 duration/width/height/codec）
-    static VideoInfo Probe(const std::string& input_path);
+    /// @param timeout_ms 探测总超时，超时后 SIGKILL 并返回无效 info
+    static VideoInfo Probe(const std::string& input_path,
+                           int64_t timeout_ms = 15000);
 
     /// 转码视频（可指定分辨率、码率、时间范围，带进度回调和取消检查）。
     /// -ss 在 -i 之前实现快速 input seeking，切片+转码一 pass。
