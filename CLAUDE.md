@@ -28,7 +28,7 @@ mprpc-video-platform（即原 muduo_im）是一个基于 Reactor 模式的 Linux
 | 10. 中间件集成（Redis+MQ） | ✅ 完成（2026-08-03，三批全部完成；2026-08-04 复验修复 MqClient 消费锁缺陷；2026-10-09 删除结果通道，MQ 仅保留调度通道；真实 Broker 重启实测待用户 sudo） |
 | 11. 可观测性升级（Prometheus+Grafana） | ~~完成~~ 已删除（2026-09-28 移出项目，详见下文说明） |
 | 12. 客户端 GUI（Qt6 桌面应用） | ~~完成~~ 已删除（2026-08-08 移出项目，详见下文说明） |
-| 13. 容器化与 CI/CD | ✅ 完成（2026-08-04，`docker/` + `docker-compose.yml` + `.github/workflows/ci.yml`；compose 一键启动/集成测试/--scale 全部本机实测通过，CI 绿勾待 push） |
+| 13. 容器化与 CI/CD | ✅ 容器化完成（2026-08-04，`docker/` + `docker/docker-compose.yml`；一键启动/集成测试/--scale 本机实测通过）；~~CI~~ 已删除（2026-10-29 移出项目，详见下文说明） |
 
 ## 阶段 6 完成内容
 
@@ -315,16 +315,31 @@ AsyncLogger::init() → MprpcApplication::Init(argc, argv) → RpcProvider.Notif
 
 ## 下一步工作
 
-### 阶段 13（✅ 2026-08-04）
+### 阶段 13 容器化（✅ 2026-08-04；CI 部分已删除）
 
-容器化与 CI/CD，详见 `doc/更新业务日志/15. 阶段13容器化与CI-CD.md`。
+容器化部分详见 `doc/更新业务日志/15. 阶段13容器化与CI-CD.md`（该文中的 CI 章节已过时，见下方删除说明）。
 
 核心改动：
-- **Docker 化**：`docker/Dockerfile`（多阶段：builder 编译全部二进制 + runtime 精简镜像，`-DENABLE_NATIVE_MARCH=OFF` 去掉 march=native 保可移植）；`docker/conf/` ×6 docker 专用配置（`rpcserverip=0.0.0.0` + host 指向 compose 服务名）；`docker-compose.yml` 编排 4 中间件（zookeeper:3.8 + mysql:8.0 + redis:7 + rabbitmq:3.12，healthcheck + `depends_on: condition: service_healthy`）+ 5 平台服务（共享单镜像、command 区分、worker 不映射端口支持 `--scale`）；视频经 `./data/videos`、`./data/output` 挂载
-- **CI**：`.github/workflows/ci.yml` — build（apt 装依赖 + cmake + upload bin/ artifact）→ unit-test（43/43）→ integration（`docker compose up -d --build` + `scripts/integration_test.sh`：testsrc 生成 30s 视频 → exec job_client 管道提交 → `--watch` 到 SUCCESS → 校验 merged 产物，Dockerfile 的唯一真实验证点）→ benchmark（rpc_echo_server + `bench_rpc_stress --direct --keepalive -c 50 -m 200 -s 64`）
+- **Docker 化**：`docker/Dockerfile`（多阶段：builder 编译全部二进制 + runtime 精简镜像，`-DENABLE_NATIVE_MARCH=OFF` 去掉 march=native 保可移植）；`docker/conf/` ×6 docker 专用配置（`rpcserverip=0.0.0.0` + host 指向 compose 服务名）；`docker/docker-compose.yml`（根目录 `docker-compose.yml` 为软链接，命令用法不变）编排 4 中间件（zookeeper:3.8 + mysql:8.0 + redis:7 + rabbitmq:3.12，healthcheck + `depends_on: condition: service_healthy`）+ 5 平台服务（共享单镜像、command 区分、worker 不映射端口支持 `--scale`）；视频经 `./data/videos`、`./data/output` 挂载
+- **CI（已删除，2026-10-29）**：原 `.github/workflows/ci.yml` — build（apt 装依赖 + cmake + upload bin/ artifact）→ unit-test（43/43）→ integration（`docker compose up -d --build` + `scripts/integration_test.sh`：testsrc 生成 30s 视频 → exec job_client 管道提交 → `--watch` 到 SUCCESS → 校验 merged 产物，Dockerfile 的唯一真实验证点）→ benchmark（rpc_echo_server + `bench_rpc_stress --direct --keepalive -c 50 -m 200 -s 64`）。删除说明见下文「阶段 13 CI 已删除」
 - **配套代码改动**：① 根 `CMakeLists.txt` 新增 `ENABLE_NATIVE_MARCH` 选项 ② `transcode_worker.cpp` 新增 `ResolveWorkerId()`（环境变量 WORKER_ID > 配置 > hostname，支持 scale 副本唯一 worker_id；main 启动校验同步改造）（阶段 13 当时的 Qt6 QUIET+if 兼容改动已于 2026-08-08 随 GUI 删除一并移除，CMakeLists 不再有 Qt6 依赖）
 - **实测修复（4 个真实环境缺陷 + 2 个部署问题）**：① Docker/CI 基础镜像 22.04 → 24.04（22.04 的 protobuf 3.12 与提交的 3.21 生成码不兼容）② `ZookeeperUtil.h` include zookeeper.h 前加 `#define THREADED`（noble 3.9.1 同步 API 被宏包裹，本机旧头文件掩盖）③ 新增 `mprpc/include/mprpcutil.h` `GetLocalIp()`——rpcserverip=0.0.0.0 时 ZK 注册/Worker 上报自动换容器实际 IP（否则消费者连 0.0.0.0 必失败）④ worker main 的 `LoadRequired("worker_id")` 漏改导致 docker 启动崩溃循环 ⑤ ZK healthcheck 需显式 `bash -c`（CMD-SHELL 走 dash 不支持 /dev/tcp）⑥ 宿主端口被本机部署占用 → compose 改用替代端口 21810/23306/19001 等（容器内不变）
-- **实测结果**：9 容器一键启动 + 集成测试 PASS（提交→转码→合并→SUCCESS + 产物校验）+ `--scale transcode_worker=3` 唯一 worker_id；**遗留**：CI 绿勾待 push（`git push origin main`）
+- **实测结果**：9 容器一键启动 + 集成测试 PASS（提交→转码→合并→SUCCESS + 产物校验）+ `--scale transcode_worker=3` 唯一 worker_id；~~遗留：CI 绿勾待 push~~（CI 已于 2026-10-29 删除，见下文）
+
+### 阶段 13 CI 已删除（2026-10-29）
+
+GitHub Actions 流水线 `.github/workflows/ci.yml`（181 行，build → unit-test → integration → benchmark 四段）在提交 `7c7c7b3` 中移出项目，`.github/workflows/` 现为空目录。提交说明只写了「删除 GitHub Actions CI（ci.yml）」，未记录删除理由。
+
+**保留的资产**（CI 验证的内容本身仍在，只是失去了 GitHub 侧触发器）：
+- `scripts/integration_test.sh` / `scripts/biz_e2e_test.sh` — 本机可手动跑全链路集成测试
+- `docker/docker-compose.yml`（根目录 `docker-compose.yml` 为软链接）— 9 容器一键启动、`--scale` 扩容
+- `docker/Dockerfile` 多阶段构建
+
+**恢复方式**：`git show 7c7c7b3^:.github/workflows/ci.yml > .github/workflows/ci.yml`
+
+**注意**：该流水线从未在 GitHub 上跑绿（阶段 13/14 的修复仅在本机验证，原遗留项为「CI 绿勾待 push」），因此不存在「已通过的 GitHub Actions 流水线」这一既有事实。简历或文档提到 CI/CD 时，应表述为「Docker 化部署 + 可脚本化的集成测试」，不要声称有跑绿的 GitHub Actions。
+
+**待同步的文档**（仍按 CI 存在撰写）：`doc/更新业务日志/15. 阶段13容器化与CI-CD.md`、`doc/设计问题/业务/16. 容器化与CI-CD设计.md`、`doc/后续更新/1. 阶段14 CI修复记录.md`。
 
 ### 阶段 12 已删除（2026-08-08）
 
